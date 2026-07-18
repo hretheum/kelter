@@ -13,6 +13,8 @@ async fn source_with_ws(dir: &std::path::Path) -> McpToolSource {
         name: "reference-tools".into(),
         command: env!("CARGO_BIN_EXE_tools-server").into(),
         args: vec!["--workspace".into(), dir.to_string_lossy().into_owned()],
+        cwd: None,
+        env: Vec::new(),
     }])
     .await
     .expect("tool server should start and register tools")

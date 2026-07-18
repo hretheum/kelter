@@ -38,11 +38,37 @@ async fn main() -> anyhow::Result<()> {
 
     // Tool substrate: spawn MCP servers (default: the bundled reference
     // tool server, found next to this binary).
-    let servers = if cfg.tools.servers.is_empty() {
-        vec![mcp::ServerSpec::bundled_tools_server(&cfg.tools.workspace)?]
-    } else {
-        cfg.tools.servers.clone()
-    };
+    let mut servers = cfg.tools.servers.clone();
+    if cfg.tools.bundled_tools {
+        servers.insert(
+            0,
+            mcp::ServerSpec::bundled_tools_server(&cfg.tools.workspace)?,
+        );
+    }
+
+    // Extensions: manifest-declared MCP servers, registered at startup with
+    // no recompilation (ADR 0006). Invalid manifests fail loudly.
+    let (extensions, manifest_errors) = mcp::extensions::discover(&cfg.tools.extension_dirs);
+    if let Some(err) = manifest_errors.first() {
+        anyhow::bail!("extension manifest error: {err}");
+    }
+    let workspace_abs = std::fs::canonicalize(&cfg.tools.workspace)
+        .or_else(|_| {
+            std::fs::create_dir_all(&cfg.tools.workspace)
+                .and_then(|_| std::fs::canonicalize(&cfg.tools.workspace))
+        })
+        .context("cannot resolve tools workspace directory")?;
+    for mut ext in extensions {
+        // Runtime contract: extensions see the run workspace via env, so
+        // they resolve relative paths the same way the reference tools do.
+        ext.env.push((
+            "KELTER_WORKSPACE".into(),
+            workspace_abs.to_string_lossy().into_owned(),
+        ));
+        tracing::info!("extension registered: {} ({})", ext.name, ext.command);
+        servers.push(ext);
+    }
+
     let tools = mcp::McpToolSource::connect(servers)
         .await
         .context("failed to start MCP tool servers")?;

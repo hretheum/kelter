@@ -69,6 +69,15 @@ tool JSON Schemas into the action space, and executes validated actions as
 `extract_structure`, `write_report`) ship as a normal MCP server binary
 (`tools-server`) and get no special treatment.
 
+**Extensions (ADR 0006, first slice):** a directory with a
+`kelter-extension.toml` manifest (`provides = ["tools"]` + a start command)
+is discovered from `[tools] extension_dirs` at startup and run as an
+ordinary MCP server — no recompilation. The runtime passes
+`KELTER_WORKSPACE` in the environment; unknown capabilities in a manifest
+fail startup loudly. `GET /api/v1/tools` shows the live action space, so
+registration is observable. The reference example is a Python tool in ~25
+lines (`extensions/wordstats/`).
+
 ### Executors
 
 Long-running coding work is delegated to headless executors with a typed
@@ -93,7 +102,7 @@ stub is gated by config. No silent self-mutation.
 ### API — `crates/api`
 
 The one stable contract every client uses (ADR 0004): HTTP for commands
-(`POST /api/v1/runs`, `GET /api/v1/runs/{id}`), WebSocket for event
+(`POST /api/v1/runs`, `GET /api/v1/runs/{id}`, `GET /api/v1/tools`), WebSocket for event
 streaming (`/api/v1/events`), bearer-token auth, embedded web UI at `/`.
 Designed to sit on localhost or a private network (tailnet); never exposed
 publicly without extra hardening.
@@ -116,7 +125,7 @@ explicitly v2+.
 |---|---|---|
 | `kernel-core` | state machine, validation, events | `Kernel`, `ActionSchema`, `ValidatedAction`, `PolicyOracle`, `ActionSource`, `Latitude` |
 | `policy` | model adapters | `LocalAdapter`, `OpenRouterAdapter`, `PolicyConfig`, `build_oracle`, `gbnf::grammar_for` |
-| `mcp` | tool substrate | `McpToolSource`, `ServerSpec`, `server::ToolServer`, bin `tools-server` |
+| `mcp` | tool substrate | `McpToolSource`, `ServerSpec`, `extensions::discover`, `server::ToolServer`, bin `tools-server` |
 | `memory` | memory providers | `MemoryProvider`, `InMemoryProvider`, `Episode`, `Provenance` |
 | `api` | HTTP+WS contract | `router`, `serve`, `serve_listener` |
 | `daemon` | headless assembly | bin `kelter` |

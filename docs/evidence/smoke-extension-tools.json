@@ -1,0 +1,1 @@
+{"tools":[{"name":"word_stats","description":"Compute word statistics (count, unique, top words) for a text file\n    and save them as JSON in the workspace under save_as."},{"name":"finish","description":"Finish the task and report the final result. Use only after the task's output has actually been produced."}]}

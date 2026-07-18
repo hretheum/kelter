@@ -53,16 +53,24 @@ impl Default for KernelSection {
 pub struct ToolsConfig {
     /// Directory the reference tools operate in.
     pub workspace: String,
-    /// MCP servers to spawn (stdio). Empty = spawn the bundled reference
-    /// tool server found next to the daemon binary.
+    /// Whether to start the bundled reference tool server. Disable to run
+    /// the kernel with only your own servers/extensions.
+    pub bundled_tools: bool,
+    /// Additional MCP servers to spawn (stdio).
     pub servers: Vec<mcp::ServerSpec>,
+    /// Directories scanned for extensions (subdirectories containing a
+    /// `kelter-extension.toml` manifest). Extensions register at startup —
+    /// no recompilation (ADR 0006).
+    pub extension_dirs: Vec<String>,
 }
 
 impl Default for ToolsConfig {
     fn default() -> Self {
         Self {
             workspace: "./work".into(),
+            bundled_tools: true,
             servers: Vec::new(),
+            extension_dirs: vec!["./extensions".into()],
         }
     }
 }

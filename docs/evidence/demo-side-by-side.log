@@ -1,0 +1,21 @@
+[demo] building…
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.26s
+[demo] the one-line swap (this is the whole demo):
+1c1
+< engine = "local:qwen2.5-0.5b-instruct"
+---
+> engine = "openrouter:anthropic/claude-sonnet-5"
+
+[demo] ── local  (engine = "local:qwen2.5-0.5b-instruct")  →  completed in 2s
+   step 0: read_source {"input": "<repo>/examples/sample.md", "save_as": "raw.md"} ok=True
+   step 1: extract_structure {"source": "<repo>/examples/sample.md", "save_as": "structure.json"} ok=True
+   step 2: write_report {"source": "structure.json", "output": "report.md", "format": "markdown"} ok=True
+   output: {"summary": "The task is completed successfully."}
+
+[demo] ── frontier  (engine = "openrouter:anthropic/claude-sonnet-5")  →  completed in 12s
+   step 0: read_source {"input": "<repo>/examples/sample.md", "save_as": "raw.md"} ok=True
+   step 1: extract_structure {"source": "raw.md", "save_as": "structure.json"} ok=True
+   step 2: write_report {"source": "structure.json", "output": "report.md", "format": "markdown"} ok=True
+   output: {"summary": "Read sample.md into raw.md, extracted its structure to structure.json, and generated the markdown report at report.md."}
+
+[demo] same kernel, same tools, same task — the engine is one config line.

@@ -1,0 +1,16 @@
+100755 scripts/smoke-local.sh
+100755 scripts/smoke-openrouter.sh
+[kelter] starting llama-server on :8080 (first run downloads the model, ~0.4 GB)…
+[kelter] model ready.
+[kelter] building Kelter (first build takes a few minutes)…
+[kelter] starting the Kelter daemon on :7466…
+[kelter] submitting the demo task…
+[kelter] first run completed in 53s total. Report: <clone>/.bootstrap/work/report.md
+
+  UI:    http://127.0.0.1:7466/#token=<token>
+  API:   http://127.0.0.1:7466/api/v1  (Authorization: Bearer <token>)
+  stop:  kill $(cat <clone>/.bootstrap/daemon.pid) $(cat <clone>/.bootstrap/llama-server.pid 2>/dev/null)
+
+[kelter] done.
+./scripts/bootstrap.sh --no-open 2>&1  200.34s user 29.44s system 429% cpu 53.505 total
+tail -35  0.00s user 0.00s system 0% cpu 53.505 total

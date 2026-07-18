@@ -5,7 +5,8 @@
 use kernel_core::{ActionSchema, PolicyContext};
 
 /// System instruction describing the contract: pick ONE action from the
-/// offered space and reply as a JSON envelope.
+/// offered space and reply as a JSON envelope. Used by adapters that
+/// constrain the raw completion (e.g. GBNF).
 pub fn system_prompt(schema: &ActionSchema, context: &PolicyContext) -> String {
     let mut out = String::from(
         "You are the decision policy of an agent runtime. At each step you pick exactly one \
@@ -13,6 +14,25 @@ pub fn system_prompt(schema: &ActionSchema, context: &PolicyContext) -> String {
          {\"action\": \"<name>\", \"arguments\": { ... }} — no prose, no markdown.\n\n\
          Action space:\n",
     );
+    push_actions_and_guidance(&mut out, schema, context);
+    out
+}
+
+/// System instruction for adapters using native tool-calling: the action
+/// space arrives as tools, so the model must always answer with exactly one
+/// tool call (finishing via the `finish` tool), never with prose.
+pub fn system_prompt_native(schema: &ActionSchema, context: &PolicyContext) -> String {
+    let mut out = String::from(
+        "You are the decision policy of an agent runtime. At each step respond by calling \
+         EXACTLY ONE of the provided tools — never answer in prose. When the task's output \
+         has been produced, call the `finish` tool with a short summary.\n\n\
+         Available actions:\n",
+    );
+    push_actions_and_guidance(&mut out, schema, context);
+    out
+}
+
+fn push_actions_and_guidance(out: &mut String, schema: &ActionSchema, context: &PolicyContext) {
     for action in &schema.actions {
         out.push_str(&format!(
             "- {}: {}\n  arguments schema: {}\n",
@@ -24,7 +44,6 @@ pub fn system_prompt(schema: &ActionSchema, context: &PolicyContext) -> String {
     if let Some(guidance) = &context.guidance {
         out.push_str(&format!("\nGuidance: {guidance}\n"));
     }
-    out
 }
 
 /// User-side message: the task plus everything that has happened so far.

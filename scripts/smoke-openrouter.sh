@@ -56,7 +56,7 @@ diff <(grep '^engine' "$REPO_ROOT/examples/config-local.toml") \
      <(grep '^engine' "$RUN_DIR/config.toml") || true
 
 log "starting daemon on :${PORT}"
-(cd "$RUN_DIR" && "$REPO_ROOT/target/debug/kelter" --config config.toml \
+(cd "$RUN_DIR" && exec "$REPO_ROOT/target/debug/kelter" --config config.toml \
   > "$RUN_DIR/daemon.log" 2>&1) &
 DAEMON_PID=$!
 trap 'kill "$DAEMON_PID" 2>/dev/null || true' EXIT

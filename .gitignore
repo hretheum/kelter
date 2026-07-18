@@ -3,6 +3,8 @@
 apps/desktop/src-tauri/target
 apps/desktop/src-tauri/gen
 node_modules
+extensions/*/.venv
+/.bootstrap/
 
 # Secrets & local env — never commit keys
 .env
@@ -13,7 +15,8 @@ node_modules
 *.gguf
 models/
 
-# Internal working briefs (input documents, not artifacts of this repo)
+# Internal working briefs / prompt inputs — kept in prompts/, never committed
+/prompts/
 /prompt-*.md
 /*zalozenia*.md
 

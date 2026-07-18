@@ -183,6 +183,14 @@ impl Kernel {
         self.oracle.describe()
     }
 
+    /// The action space currently offered at a fresh decision point
+    /// (tools at the configured latitude + the kernel-owned finish action).
+    pub async fn current_action_schema(&self) -> Result<ActionSchema, ExecutionError> {
+        let mut schema = self.tools.action_schema(self.config.latitude).await?;
+        schema.actions.push(finish_spec());
+        Ok(schema)
+    }
+
     /// Create a run and execute it to completion. Returns the final run.
     /// Callers that want fire-and-forget wrap this in `tokio::spawn`.
     pub async fn run_task(&self, task: String) -> Result<Run, KernelError> {

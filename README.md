@@ -1,14 +1,80 @@
+<!-- provenance: ai_authored | agent: claude-fable-5 | session_date: 2026-07-18
+     human_validated: false | context: Phase 2 launch-grade README draft -->
+
 # Kelter
 
-**Agent orchestration that doesn't fall over when the model can't tool-call.**
+**An agent runtime you deploy — with a deterministic kernel that stays
+reliable when the model doesn't.**
 
-Most agent frameworks make the LLM the runtime: the model's tool calls *are*
-the control flow, so orchestration reliability equals the model's
-tool-calling reliability. Kelter inverts that. A deterministic,
-typed **kernel** owns the control flow — retries, persistence, validation,
-error handling — and the model is a **constrained policy oracle** consulted
-at explicit decision points. The model proposes; the kernel validates and
-executes.
+Most agent stacks are frameworks: you compile your orchestration into an
+app, and the LLM's tool calls *are* the control flow. When the model fumbles
+a call, the workflow dies — so in practice you're locked into the few
+biggest models, and "extending" means recompiling.
+
+Kelter inverts both halves of that deal:
+
+- **The kernel is the runtime; the model is a policy.** A typed, deterministic
+  state machine owns control flow — retries, validation, persistence,
+  journaling. The model only *proposes* the next action from a schema; the
+  kernel validates and executes. Reliability is a property of the system,
+  not of the model's mood.
+- **You extend the runtime, not the source.** Every tool is an MCP server;
+  new capabilities register through a manifest at startup — [~25 lines of
+  Python](extensions/wordstats/server.py), zero Rust, zero recompilation —
+  and still pass the same kernel-side validation as everything else.
+
+## Sixty seconds of proof
+
+**1 · The engine is one line of config.** The same multi-step task — read a
+document, extract its structure, write a report over three MCP tools — runs
+identically on a 0.5 B local model and on a frontier model:
+
+```diff
+ [policy]
+-engine = "local:qwen2.5-0.5b-instruct"
++engine = "openrouter:anthropic/claude-sonnet-5"
+```
+
+```
+── local  (llama.cpp + GBNF)          →  completed in 2s
+── frontier (via OpenRouter)          →  completed in 12s
+   identical step sequence, same kernel, same tools
+```
+
+Reproduce: `scripts/demo-side-by-side.sh`
+
+**2 · Extend it in Python over lunch.** Drop a directory with a manifest and
+an MCP server next to the runtime; restart; the model can use your tool:
+
+```
+$ curl …/api/v1/tools
+{"tools":[…, {"name":"word_stats", …}]}         # no kernel rebuild happened
+```
+
+Reproduce: `scripts/smoke-extension.sh` · guide: [`extensions/`](extensions/README.md)
+
+## Why the weak-model story matters
+
+Small local models are cheap, private and fast — and terrible at free-form
+tool calling. Kelter makes that irrelevant:
+
+1. **Action space, not free text.** Each decision point offers a JSON-Schema
+   action space built from MCP tool schemas plus a kernel-owned `finish`.
+2. **Constrained proposal.** Locally, the space is compiled to a GBNF
+   grammar — the *decoder* cannot emit a malformed call. Remotely, native
+   tool-calling does the same job.
+3. **Kernel validation on top, always.** Every proposal is re-validated
+   in the kernel regardless of adapter; invalid → rejected with feedback →
+   bounded retry. The kernel trusts no adapter and no extension.
+4. **Deterministic anti-stall rules.** Exact repeats are rejected; under
+   constrained latitude, tools that already succeeded leave the action
+   space entirely — a weak model *cannot* loop.
+5. **Everything is journaled.** Runs, steps, rejections and reflection
+   episodes are typed, persisted, and streamed live over WebSocket.
+
+A weak engine degrades decision *quality*; it cannot degrade flow
+*integrity*. That's the graceful-degradation contract, and it's enforced by
+code you can read.
 
 ```
         ┌───────────────────────────────────────────────────────────┐
@@ -19,157 +85,102 @@ executes.
         ┌───────────────┴───────────────────────────────────────────┐
         │                        kernel  (crates/kernel-core)       │
         │   deterministic state machine · schema validation · retry │
-        │   persistence · gated reflection                          │
+        │   persistence · journaling · gated reflection             │
         └──────┬──────────────────────┬─────────────────────┬───────┘
                │ propose(context,     │ MCP (stdio /        │ write / retrieve
                │   action_schema)     │  in-process)        │ / upsert
         ┌──────▼───────┐      ┌───────▼────────┐    ┌───────▼────────┐
         │ policy plane │      │ tool substrate │    │ memory provider│
-        │ (crates/     │      │ (crates/mcp)   │    │ (crates/memory)│
-        │  policy)     │      │ every tool is  │    │ swappable      │
-        │ local: GBNF  │      │ an MCP server  │    │ backends       │
-        │ openrouter:  │      └────────────────┘    └────────────────┘
-        │ tool-calling │
-        └──────────────┘
+        │ local: GBNF  │      │ every tool is  │    │ swappable      │
+        │ openrouter:  │      │ an MCP server; │    │ backends       │
+        │ tool-calling │      │ extensions via │    │                │
+        └──────────────┘      │ manifest       │    └────────────────┘
+                              └────────────────┘
 ```
-
-## Why
-
-- **Model-agnostic.** The same kernel drives a 0.5B local model and a
-  frontier model. Swapping engines is **one line of config**, not a rewrite:
-
-  ```toml
-  [policy]
-  engine = "local:qwen2.5-0.5b-instruct"
-  # engine = "openrouter:anthropic/claude-sonnet-5"
-  ```
-
-- **Graceful degradation.** A weak engine degrades decision *quality*, never
-  flow *reliability*. Locally, the action envelope is enforced by the
-  decoder itself (GBNF constrained decoding in llama.cpp) — a malformed tool
-  call is unrepresentable. Remotely, native tool-calling does the same job.
-  Either way the kernel re-validates every proposal against JSON Schema
-  before anything executes: it trusts no adapter.
-
-- **Testable.** The kernel runs against a scripted mock oracle; policy
-  adapters run against fixture HTTP servers; memory retrieval is a scored,
-  unit-tested component. Orchestration stops being "hope the model
-  complies".
-
-## The demo slice
-
-One real multi-step task runs **identically** on both engines — only the
-config line above changes:
-
-> *Read a document (URL or file) → extract its structure (title, headings,
-> links) → write a markdown report.*
-
-Three MCP tools, real decision points (the model picks each next action and
-its arguments; the kernel narrows and validates), streamed live over
-WebSocket into the UI. The bundled tool server is a normal MCP server —
-swap in any other MCP server the same way.
-
-```
-step 0: read_source      {"input": "examples/sample.md", "save_as": "raw.md"}       ok
-step 1: extract_structure{"source": "raw.md", "save_as": "structure.json"}          ok
-step 2: write_report     {"source": "structure.json", "output": "report.md",
-                          "format": "markdown"}                                     ok
-finish: "report.md written"
-```
-
-Reproduce it: `scripts/smoke-local.sh` (local leg, needs llama.cpp) and
-`scripts/smoke-openrouter.sh` (frontier leg, needs `OPENROUTER_API_KEY`).
-
-## Features
-
-| Area | v1 status |
-|---|---|
-| Deterministic kernel (state machine, retries, persistence) | ✅ trait + in-memory impl |
-| Kernel-side schema validation of every model proposal | ✅ |
-| `local` adapter — llama.cpp + GBNF constrained decoding | ✅ working |
-| `openrouter` adapter — one adapter, many frontier models | ✅ working |
-| Latitude knob (constrained / standard / wide per engine) | ✅ |
-| Tools & plugins = MCP servers (no custom plugin API) | ✅ stdio + in-process |
-| Memory provider interface (`write` / `retrieve` / `upsert`) | ✅ trait + in-memory impl, scored retrieval |
-| Gated, provenance-tagged reflection (self-improvement stub) | ✅ episodic stub |
-| One API contract: HTTP + WebSocket, bearer auth | ✅ |
-| Web UI (PWA-installable, served by the daemon) | ✅ minimal |
-| Desktop shell (standalone-embedded or remote-thin) | ✅ minimal |
-| Container: Dockerfile, compose pod, Quadlet unit | ✅ |
-| Graph/vector memory backends, CRDT sync, distillation | 🔜 interfaces only |
 
 ## Quickstart
 
-### Server / headless daemon
+One command from clone to a first completed agent run (macOS/Linux;
+needs Rust + [llama.cpp](https://github.com/ggml-org/llama.cpp)):
 
 ```sh
-# 1. local model sidecar (the "weak but reliable" engine)
-llama-server -hf Qwen/Qwen2.5-0.5B-Instruct-GGUF:q4_k_m --port 8080 -c 4096
-
-# 2. the kernel daemon
-cp config.example.toml config.toml
-cargo run -p daemon -- --config config.toml
-# ui:  http://127.0.0.1:7466/          (PWA-installable)
-# api: http://127.0.0.1:7466/api/v1    (Authorization: Bearer <token>)
-
-# 3. submit a run
-curl -X POST http://127.0.0.1:7466/api/v1/runs \
-  -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' \
-  -d '{"task": "Read the file ./examples/sample.md and save it as raw.md. Then extract the structure of raw.md into structure.json. Then write a markdown report from structure.json to report.md. Then finish."}'
+scripts/bootstrap.sh
+# → pulls a small model, starts the sidecar + daemon, runs the demo task,
+#   opens the UI. First run ≈ a few minutes (model download + build);
+#   warm runs ≈ under a minute.
 ```
 
-### Container (kernel + model as one pod)
+<details>
+<summary>Manual path / other topologies</summary>
+
+**Headless daemon**
+
+```sh
+llama-server -hf Qwen/Qwen2.5-0.5B-Instruct-GGUF:q4_k_m --port 8080 -c 4096
+cp config.example.toml config.toml
+cargo run -p daemon -- --config config.toml
+# ui:  http://127.0.0.1:7466/   ·   api: /api/v1 (Bearer token)
+```
+
+**Container (kernel + model as one pod)**
 
 ```sh
 cd deploy && docker compose up
-# or, with Podman + systemd: copy deploy/kelter.container to
-# ~/.config/containers/systemd/ (Quadlet)
+# Podman/systemd: copy deploy/kelter.container to ~/.config/containers/systemd/
 ```
 
-### Desktop
+**Desktop**
 
 ```sh
 cd apps/desktop/src-tauri && cargo tauri build
 ```
 
-First run asks: **standalone** (kernel embedded in the app process) or
-**remote** (thin client pointed at your daemon's URL — pairs well with a
-tailnet). Same UI either way.
+First run asks: **standalone** (kernel embedded in-process) or **remote**
+(thin client at your daemon's URL — pairs well with a tailnet).
 
-### Remote / PWA
+**Any browser / PWA**
 
-Open `http://<your-daemon>:7466/` from any browser on the same network or
-tailnet, paste the token, install as a PWA if you like. Clients are
-stateless; the kernel owns all state.
+Open `http://<your-daemon>:7466/`, paste the token, install as a PWA.
+Clients are stateless; the kernel owns all state.
 
-## Where the reliability actually comes from
+</details>
 
-1. **Action space, not free text.** At each decision point the kernel offers
-   a JSON-Schema action space (built from MCP tool schemas + `finish`).
-2. **Constrained proposal.** The local adapter compiles that space to a GBNF
-   grammar — the decoder cannot emit a malformed envelope. The remote
-   adapter uses native tool-calling.
-3. **Kernel validation on top.** Every proposal is re-validated against the
-   schema in the kernel, whatever the adapter claims. Invalid → rejected
-   with feedback → bounded retry.
-4. **Deterministic anti-stall rules.** Exact repeats of earlier steps are
-   rejected; under constrained latitude, already-succeeded tools leave the
-   action space entirely.
-5. **Everything is a step record.** Runs, steps, validation failures and
-   reflection episodes are typed, persisted, and streamed.
+## Features
+
+| Area | Status |
+|---|---|
+| Deterministic kernel: state machine, retries, journaling | ✅ |
+| Kernel-side schema validation of every proposal (typed trust boundary) | ✅ |
+| `local` adapter — llama.cpp + GBNF constrained decoding | ✅ |
+| `openrouter` adapter — one adapter, many frontier models | ✅ |
+| Latitude knob (constrained / standard / wide per engine capability) | ✅ |
+| Tools = MCP servers; **manifest-registered extensions, no recompile** | ✅ first slice |
+| Extension example in ~25 lines of Python (official MCP SDK) | ✅ |
+| Memory provider interface (`write` / `retrieve` / `upsert`), scored retrieval | ✅ in-memory impl |
+| Gated, provenance-tagged reflection (self-improvement stub) | ✅ |
+| One API contract: HTTP + WebSocket, bearer auth | ✅ |
+| Web UI (PWA) · desktop shell (standalone/remote) · container/Quadlet | ✅ |
+| WASM in-process extensions · memory/agents as extensions · marketplace | 🔜 [ADR 0006](docs/adr/0006-governed-microkernel-extension-model.md) |
+| Durable persistence · CRDT sync · learning distillation | 🔜 interfaces shipped |
+
+## Design notes
+
+The architecture and each load-bearing decision are documented:
+[architecture](docs/architecture.md) ·
+[kernel-as-runtime](docs/adr/0001-kernel-as-runtime.md) ·
+[MCP as substrate](docs/adr/0002-mcp-as-tool-substrate.md) ·
+[adapter contract](docs/adr/0003-adapter-contract-constrained-vs-native.md) ·
+[topology-as-config](docs/adr/0004-topology-as-config.md) ·
+[memory provider](docs/adr/0005-memory-provider-interface.md) ·
+[governed extensions](docs/adr/0006-governed-microkernel-extension-model.md)
+
+Status: young project, honest scope — the kernel, both adapters, the demo
+slice and the extension slice all work end-to-end (see
+[docs/BUILD-EVIDENCE.md](docs/BUILD-EVIDENCE.md) for receipts); several
+backends are deliberately in-memory reference implementations behind stable
+traits.
 
 ## License
 
-Dual-licensed under either of
-
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-
-at your option.
-
----
-
-*Status: walking skeleton with a working demo slice. Interfaces are the
-product here; several implementations are deliberately minimal (in-memory
-stores, naive retrieval scoring). See [docs/architecture.md](docs/architecture.md)
-and the ADRs in [docs/adr/](docs/adr/).*
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at
+your option.

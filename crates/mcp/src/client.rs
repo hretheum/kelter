@@ -24,6 +24,15 @@ pub struct ServerSpec {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Working directory for the spawned server (extensions run in their
+    /// own directory).
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// Extra environment for the spawned server. The daemon passes
+    /// `KELTER_WORKSPACE` here so extensions resolve workspace-relative
+    /// paths the same way the reference tools do.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
 }
 
 impl ServerSpec {
@@ -39,6 +48,8 @@ impl ServerSpec {
             name: "reference-tools".into(),
             command: candidate.to_string_lossy().into_owned(),
             args: vec!["--workspace".into(), workspace.to_string()],
+            cwd: None,
+            env: Vec::new(),
         })
     }
 }
@@ -92,6 +103,12 @@ impl McpToolSource {
         for spec in specs {
             let transport = TokioChildProcess::new(Command::new(&spec.command).configure(|cmd| {
                 cmd.args(&spec.args);
+                if let Some(cwd) = &spec.cwd {
+                    cmd.current_dir(cwd);
+                }
+                for (k, v) in &spec.env {
+                    cmd.env(k, v);
+                }
             }))
             .map_err(|e| {
                 ExecutionError::Substrate(format!(
@@ -171,7 +188,13 @@ fn result_to_json(result: CallToolResult) -> Result<serde_json::Value, Execution
                     .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(String::from))
             })
             .collect();
-        serde_json::json!({ "text": texts.join("\n") })
+        let joined = texts.join("\n");
+        // Many servers (e.g. FastMCP returning a plain dict) send JSON as
+        // text content — surface it structured when it parses.
+        match serde_json::from_str::<serde_json::Value>(&joined) {
+            Ok(parsed) if parsed.is_object() || parsed.is_array() => parsed,
+            _ => serde_json::json!({ "text": joined }),
+        }
     };
     if is_error {
         Err(ExecutionError::Tool(value.to_string()))

@@ -98,11 +98,12 @@ impl PolicyOracle for OpenRouterAdapter {
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
-                {"role": "system", "content": prompt::system_prompt(schema, context)},
+                {"role": "system", "content": prompt::system_prompt_native(schema, context)},
                 {"role": "user", "content": prompt::user_prompt(context)},
             ],
             "tools": Self::tools_payload(schema),
             "tool_choice": "auto",
+            "temperature": 0.0,
             "max_tokens": 1024,
         });
 

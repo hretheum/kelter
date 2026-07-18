@@ -18,6 +18,9 @@ reflection = true    # gate for the provenance-tagged reflection stub
 
 [tools]
 workspace = "./work" # reference MCP tools read/write inside this directory
+# Directories scanned for extensions (subdirs with a kelter-extension.toml
+# manifest). Extensions register at startup — no recompilation.
+extension_dirs = ["./extensions"]
 # Additional MCP servers (stdio). Default: the bundled reference tool server.
 # [[tools.servers]]
 # name = "my-tools"

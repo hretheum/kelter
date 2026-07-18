@@ -37,6 +37,7 @@ pub fn router(kernel: Arc<Kernel>, token: String) -> Router {
         .route("/healthz", get(health))
         .route("/api/v1/runs", get(list_runs).post(create_run))
         .route("/api/v1/runs/{id}", get(get_run))
+        .route("/api/v1/tools", get(list_tools))
         .route("/api/v1/events", get(events_ws))
         .fallback(get(static_asset))
         .with_state(state)
@@ -122,6 +123,31 @@ async fn list_runs(State(state): State<ApiState>, headers: HeaderMap) -> Respons
     }
     match state.kernel.store().list().await {
         Ok(runs) => Json(runs).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// The action space as currently offered to the policy — which tools (and
+/// extensions) are live. Useful for demos and for verifying an extension
+/// registered without recompiling anything.
+async fn list_tools(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    if !authorized(&state, &headers) {
+        return unauthorized();
+    }
+    match state.kernel.current_action_schema().await {
+        Ok(schema) => {
+            let tools: Vec<serde_json::Value> = schema
+                .actions
+                .iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "name": a.name,
+                        "description": a.description,
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({ "tools": tools })).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
