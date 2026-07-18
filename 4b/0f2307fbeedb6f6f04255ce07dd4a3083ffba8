@@ -1,0 +1,80 @@
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_9f2d8fc72c80ab 95-96,107-108,110-136,144-155,159-192,194-203
+  s_ebdbabe3e659c2::t_0fdcce42860eeb 156-158
+docs/evidence/durability-resume-before-effect.log
+  s_ebdbabe3e659c2::t_14254cf7c7c1e6 1-7,10-14
+docs/adr/0008-capability-registry.md
+  s_ebdbabe3e659c2::t_79b55766d89803 1-86
+docs/evidence/phase4a-naming-check.log
+  s_ebdbabe3e659c2::t_ffbc71e06f48de 1-10
+docs/evidence/memory-extension-store.json
+  s_ebdbabe3e659c2::t_d31887899f66ad 1-27
+.gitignore
+  s_ebdbabe3e659c2::t_cf13601888a759 7-8
+docs/architecture.md
+  s_ebdbabe3e659c2::t_cf13601888a759 72-85,156
+docs/evidence/phase4a-gates.log
+  s_ebdbabe3e659c2::t_0fdcce42860eeb 1-6
+crates/mcp/src/memory_server.rs
+  s_ebdbabe3e659c2::t_0fdcce42860eeb 67
+  s_ebdbabe3e659c2::t_b7e33ab5eb699d 1-66,68-86
+docs/evidence/memory-extension-daemon.log
+  s_ebdbabe3e659c2::t_d31887899f66ad 1-17
+crates/mcp/src/bin/memory_server.rs
+  s_ebdbabe3e659c2::t_330e8960331077 1-23
+extensions/wordstats/kelter-extension.toml
+  s_ebdbabe3e659c2::t_619794ae2bcad4 10-12
+docs/evidence/durability-resume-after-effect.log
+  s_ebdbabe3e659c2::t_14254cf7c7c1e6 1-7,10-14
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_0fdcce42860eeb 281-355
+crates/mcp/src/memory_client.rs
+  s_ebdbabe3e659c2::t_0fdcce42860eeb 74-77,136,143-144
+  s_ebdbabe3e659c2::t_619794ae2bcad4 79-80,82-86,95-96,100
+  s_ebdbabe3e659c2::t_02272cf501fbd3 1-73,78,81,87-94,97-99,101-135,137-142,145-184
+docs/evidence/memory-extension-badmanifest.log
+  s_ebdbabe3e659c2::t_d31887899f66ad 1-2
+crates/mcp/Cargo.toml
+  s_ebdbabe3e659c2::t_6b4d1470bd9557 16-19,22-24
+crates/mcp/src/extensions.rs
+  s_ebdbabe3e659c2::t_e6b581efd11f08 1-7,9-18,28-63,65,69-70,74,79,84,93-101,108-116,119-120,127-130,134-141,146-148,162-172,179-180,196,201-202,209,212,216-219,221-233,235-281,285-293,298-299
+  s_ebdbabe3e659c2::t_0fdcce42860eeb 142-145
+docs/evidence/durability-restart.log
+  s_ebdbabe3e659c2::t_14254cf7c7c1e6 1-6,9
+crates/mcp/src/lib.rs
+  s_ebdbabe3e659c2::t_6b4d1470bd9557 8-9,14
+crates/mcp/tests/memory_ext_test.rs
+  s_ebdbabe3e659c2::t_7ee8ca68ac12e3 1-80,85-133
+  s_ebdbabe3e659c2::t_0fdcce42860eeb 81-84
+extensions/README.md
+  s_ebdbabe3e659c2::t_cf13601888a759 14-16,18-31,49-52,86-88,96-134
+  s_ebdbabe3e659c2::t_a384f69652f9b9 135
+scripts/smoke-memory-extension.sh
+  s_ebdbabe3e659c2::t_0833c450322682 1-148
+crates/kernel-core/src/engine.rs
+  s_ebdbabe3e659c2::t_cfc9a7596ffac2 289-307
+Cargo.lock
+  s_ebdbabe3e659c2::t_f3e88f437a4d94 1066,1068,1074
+examples/extensions/memstore/run.sh
+  s_ebdbabe3e659c2::t_7023ccc6879451 1-23
+examples/extensions/memstore/kelter-extension.toml
+  s_ebdbabe3e659c2::t_848d7925496fcc 1-11
+examples/extensions/memstore/server.py
+  s_ebdbabe3e659c2::t_1393c6645db633 1-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "4b0f2307fbeedb6f6f04255ce07dd4a3083ffba8",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "unknown"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
