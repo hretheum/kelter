@@ -155,5 +155,5 @@ async fn serves_embedded_ui() {
         .text()
         .await
         .unwrap();
-    assert!(body.contains("<title>agentkernel</title>"));
+    assert!(body.contains("<title>kelter</title>"));
 }

@@ -112,8 +112,8 @@ impl PolicyOracle for OpenRouterAdapter {
             .bearer_auth(&self.api_key)
             // Optional attribution headers; canonical + legacy alias.
             .header("HTTP-Referer", "https://localhost")
-            .header("X-OpenRouter-Title", "agentkernel")
-            .header("X-Title", "agentkernel")
+            .header("X-OpenRouter-Title", "kelter")
+            .header("X-Title", "kelter")
             .json(&body)
             .send()
             .await

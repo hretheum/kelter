@@ -3,7 +3,7 @@
 # policy engine by editing one line in config/config.toml.
 services:
   kernel:
-    image: agentkernel:latest
+    image: kelter:latest
     build:
       context: ..
       dockerfile: Dockerfile

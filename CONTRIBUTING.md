@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in contributing to agentkernel.
+Thanks for your interest in contributing to kelter.
 
 ## Prerequisites
 

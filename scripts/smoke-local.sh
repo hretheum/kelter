@@ -41,7 +41,7 @@ workspace = "${RUN_DIR}/work"
 EOF
 
 log "starting daemon on :${PORT}"
-(cd "$RUN_DIR" && "$REPO_ROOT/target/debug/agentkernel" --config config.toml \
+(cd "$RUN_DIR" && "$REPO_ROOT/target/debug/kelter" --config config.toml \
   > "$RUN_DIR/daemon.log" 2>&1) &
 DAEMON_PID=$!
 trap 'kill "$DAEMON_PID" 2>/dev/null || true' EXIT

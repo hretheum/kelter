@@ -6,7 +6,7 @@ license.workspace = true
 publish = false
 
 [[bin]]
-name = "agentkernel"
+name = "kelter"
 path = "src/main.rs"
 
 [dependencies]

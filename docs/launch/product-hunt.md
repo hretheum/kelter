@@ -1,8 +1,8 @@
 # Product Hunt launch — DRAFT (finalize in Phase 2)
 
-> Status: working draft. Copy, naming and all visuals get a dedicated pass
-> before launch; nothing here ships as-is. Product name is the working
-> placeholder "agentkernel".
+> Status: working draft. Copy and all visuals get a dedicated pass before
+> launch; nothing here ships as-is. Product name: **Kelter** (decided
+> 2026-07-18).
 
 ## Tagline candidates
 
@@ -20,7 +20,7 @@ Working favorite: **1**, with **3** as the gallery hook.
 > model fumbled a tool call, the whole workflow fell over. The model *was*
 > the runtime.
 >
-> agentkernel inverts that. A deterministic Rust kernel owns control flow —
+> Kelter inverts that. A deterministic Rust kernel owns control flow —
 > retries, validation, persistence — and the LLM is a constrained policy
 > oracle. Locally, a GBNF grammar makes malformed tool calls literally
 > unrepresentable at the decoder. Remotely, native tool-calling does the
@@ -57,7 +57,7 @@ No rendered assets in Phase 1.
 
 ## Launch-day checklist (Phase 2)
 
-- [ ] Final name + domain + handle check
+- [x] Name decided: Kelter · [ ] domain + handle check
 - [ ] Record side-by-side GIF (≤30 s, loops cleanly)
 - [ ] README polish pass (badges, quickstart re-verified on a clean machine)
 - [ ] Maker comment final voice pass

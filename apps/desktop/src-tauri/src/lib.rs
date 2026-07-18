@@ -146,7 +146,7 @@ async fn open_ui(app: AppHandle, url: String, token: String) -> Result<(), Strin
         .map_err(|e| format!("invalid url '{target}': {e}"))?;
 
     WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(external))
-        .title("agentkernel")
+        .title("Kelter")
         .inner_size(1100.0, 800.0)
         .build()
         .map_err(|e| e.to_string())?;

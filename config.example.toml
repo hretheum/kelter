@@ -1,4 +1,4 @@
-# agentkernel daemon configuration.
+# kelter daemon configuration.
 # Copy to config.toml and adjust. The policy engine is ONE line:
 # swap it and the same task runs on a different model class.
 

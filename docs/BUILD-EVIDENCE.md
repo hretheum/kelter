@@ -25,7 +25,8 @@ intent. Deviations from it are listed in §3.
 
 | Decision | Rationale |
 |---|---|
-| Placeholder name `agentkernel` (crates keep functional names) | Naming rule: one neutral placeholder used consistently for product/image/unit; final name is a Phase 2 decision. |
+| Placeholder name `agentkernel` (crates keep functional names) | Naming rule: one neutral placeholder used consistently for product/image/unit; final name deferred to the human gate. |
+| Product name **Kelter** (decided by Eryk, 2026-07-18, post-DoD) | Placeholder renamed repo-wide: binary/image/Quadlet unit `kelter`, product prose "Kelter"; crates keep functional names. Evidence logs produced before the rename still say `agentkernel` — they are historical records of the actual runs and were left untouched. |
 | `ValidatedAction` constructible only via `ActionSchema::validate` | Encodes "kernel trusts no adapter" in the type system, not in convention. |
 | Adapter selection as `engine = "<adapter>:<model>"` (single key) | The brief requires the swap to be literally one config line. |
 | Local adapter targets `/v1/chat/completions` + `grammar` extension | Server applies the model's chat template; grammar still constrains the decoder (verified empirically). |

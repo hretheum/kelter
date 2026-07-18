@@ -1,7 +1,7 @@
 {
-  "name": "agentkernel",
-  "short_name": "agentkernel",
-  "description": "Control panel for the agentkernel daemon",
+  "name": "kelter",
+  "short_name": "kelter",
+  "description": "Control panel for the kelter daemon",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#101418",

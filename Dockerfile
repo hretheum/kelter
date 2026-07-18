@@ -11,12 +11,12 @@ FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd -r -m -d /data agentkernel
-COPY --from=builder /src/target/release/agentkernel /usr/local/bin/agentkernel
+    && useradd -r -m -d /data kelter
+COPY --from=builder /src/target/release/kelter /usr/local/bin/kelter
 COPY --from=builder /src/target/release/tools-server /usr/local/bin/tools-server
-USER agentkernel
+USER kelter
 WORKDIR /data
 EXPOSE 7466
 HEALTHCHECK --interval=30s --timeout=3s CMD curl -fsS http://127.0.0.1:7466/healthz || exit 1
-ENTRYPOINT ["agentkernel"]
+ENTRYPOINT ["kelter"]
 CMD ["--config", "/data/config.toml"]

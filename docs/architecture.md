@@ -119,5 +119,5 @@ explicitly v2+.
 | `mcp` | tool substrate | `McpToolSource`, `ServerSpec`, `server::ToolServer`, bin `tools-server` |
 | `memory` | memory providers | `MemoryProvider`, `InMemoryProvider`, `Episode`, `Provenance` |
 | `api` | HTTP+WS contract | `router`, `serve`, `serve_listener` |
-| `daemon` | headless assembly | bin `agentkernel` |
+| `daemon` | headless assembly | bin `kelter` |
 | `apps/desktop` | Tauri shell | commands `start_standalone`, `open_ui` |

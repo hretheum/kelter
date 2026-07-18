@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "agentkernel",
+  "productName": "Kelter",
   "version": "0.1.0",
-  "identifier": "dev.agentkernel.desktop",
+  "identifier": "dev.kelter.desktop",
   "build": {
     "frontendDist": "../dist"
   },
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "launcher",
-        "title": "agentkernel",
+        "title": "Kelter",
         "width": 520,
         "height": 620,
         "resizable": true,

@@ -1,12 +1,10 @@
-# agentkernel
-
-> Working name — final product name lands before launch.
+# Kelter
 
 **Agent orchestration that doesn't fall over when the model can't tool-call.**
 
 Most agent frameworks make the LLM the runtime: the model's tool calls *are*
 the control flow, so orchestration reliability equals the model's
-tool-calling reliability. agentkernel inverts that. A deterministic,
+tool-calling reliability. Kelter inverts that. A deterministic,
 typed **kernel** owns the control flow — retries, persistence, validation,
 error handling — and the model is a **constrained policy oracle** consulted
 at explicit decision points. The model proposes; the kernel validates and
@@ -124,7 +122,7 @@ curl -X POST http://127.0.0.1:7466/api/v1/runs \
 
 ```sh
 cd deploy && docker compose up
-# or, with Podman + systemd: copy deploy/agentkernel.container to
+# or, with Podman + systemd: copy deploy/kelter.container to
 # ~/.config/containers/systemd/ (Quadlet)
 ```
 
