@@ -90,6 +90,15 @@ covered by unit tests. Final smoke: 3 steps + finish, no rejections.
 - **Quadlet unit not machine-validated** — podman is not installed here.
   Validate with `systemd-analyze --user verify` / a podman host before
   relying on it.
+- **`grammar` on `/v1/chat/completions` is an undocumented extension** —
+  llama.cpp docs document the `grammar` field only for `/completion`; on the
+  OpenAI-compatible route the documented constrained path is
+  `response_format: {type: "json_schema", ...}`. This build verified
+  empirically that `grammar` works on `/v1/chat/completions` in b10050, but
+  a future llama.cpp release could drop it; fallback plan: send the schema
+  via `response_format.json_schema` (server compiles it to a grammar
+  internally) or move the adapter to `/completion` with a hand-applied chat
+  template.
 - **Grammar coverage** — `gbnf::grammar_for` covers the schema subset the
   reference tools use (strings, enums, numbers, booleans, nested
   objects/arrays). Exotic JSON Schema (oneOf, patterns, refs) falls back to
