@@ -1,0 +1,51 @@
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 804B done
+#1 DONE 0.0s
+
+#2 [linux/arm64 internal] load metadata for docker.io/library/rust:1.95-bookworm
+#2 DONE 1.6s
+
+#3 [linux/arm64 internal] load metadata for docker.io/library/debian:bookworm-slim
+#3 DONE 1.6s
+
+#4 [linux/amd64 internal] load metadata for docker.io/library/debian:bookworm-slim
+#4 DONE 1.6s
+
+#5 [linux/amd64 internal] load metadata for docker.io/library/rust:1.95-bookworm
+#5 DONE 1.6s
+
+#6 [internal] load .dockerignore
+#6 transferring context:
+  [... full build log truncated: intermediate cargo compile lines ...]
+#2 [linux/arm64 internal] load metadata for docker.io/library/rust:1.95-bookworm
+#3 [linux/arm64 internal] load metadata for docker.io/library/debian:bookworm-slim
+#4 [linux/amd64 internal] load metadata for docker.io/library/debian:bookworm-slim
+#5 [linux/amd64 internal] load metadata for docker.io/library/rust:1.95-bookworm
+#7 [linux/amd64 stage-1 1/5] FROM docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+#8 [linux/arm64 stage-1 1/5] FROM docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+#9 [linux/amd64 builder 1/6] FROM docker.io/library/rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1
+#10 [linux/amd64 builder 2/6] WORKDIR /src
+#11 [linux/arm64 stage-1 2/5] RUN apt-get update     && apt-get install -y --no-install-recommends ca-certificates curl     && rm -rf /var/lib/apt/lists/*     && useradd -r -m -d /data agentkernel
+#12 [linux/arm64 builder 1/6] FROM docker.io/library/rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1
+#13 [linux/arm64 builder 2/6] WORKDIR /src
+#14 [linux/amd64 stage-1 2/5] RUN apt-get update     && apt-get install -y --no-install-recommends ca-certificates curl     && rm -rf /var/lib/apt/lists/*     && useradd -r -m -d /data agentkernel
+#16 [linux/amd64 builder 3/6] COPY Cargo.toml Cargo.lock ./
+#17 [linux/amd64 builder 4/6] COPY crates ./crates
+#18 [linux/amd64 builder 5/6] COPY apps/web-ui ./apps/web-ui
+#19 [linux/arm64 builder 3/6] COPY Cargo.toml Cargo.lock ./
+#20 [linux/arm64 builder 4/6] COPY crates ./crates
+#21 [linux/arm64 builder 5/6] COPY apps/web-ui ./apps/web-ui
+#22 [linux/arm64 builder 6/6] RUN cargo build --release -p daemon -p mcp
+#23 [linux/arm64 stage-1 3/5] COPY --from=builder /src/target/release/agentkernel /usr/local/bin/agentkernel
+#24 [linux/amd64 builder 6/6] RUN cargo build --release -p daemon -p mcp
+#25 [linux/arm64 stage-1 4/5] COPY --from=builder /src/target/release/tools-server /usr/local/bin/tools-server
+#26 [linux/arm64 stage-1 5/5] WORKDIR /data
+#24 [linux/amd64 builder 6/6] RUN cargo build --release -p daemon -p mcp
+#27 [linux/amd64 stage-1 3/5] COPY --from=builder /src/target/release/agentkernel /usr/local/bin/agentkernel
+#28 [linux/amd64 stage-1 4/5] COPY --from=builder /src/target/release/tools-server /usr/local/bin/tools-server
+#29 [linux/amd64 stage-1 5/5] WORKDIR /data
+#30 exporting manifest list sha256:473f254ad5caf338dec0f7c922eb84b1dfd056e4c7571a874effbde624d24455 done
+#30 naming to docker.io/library/agentkernel:ci done
+buildx-exit: 0
