@@ -1,0 +1,89 @@
+examples/wasm-tools/wordcount/Cargo.toml
+  s_ebdbabe3e659c2::t_8f960f2f1d9609 1-18
+examples/wasm-tools/wordcount/src/lib.rs
+  s_ebdbabe3e659c2::t_2ef963ef24611a 1-47
+crates/mcp/src/extensions.rs
+  s_ebdbabe3e659c2::t_71a2bcabff2ca7 135-136,144-150
+  s_ebdbabe3e659c2::t_c7cca60d459000 191-196
+  s_ebdbabe3e659c2::t_0511f0e038976f 397-453
+  s_ebdbabe3e659c2::t_1919ab9c021948 255-264
+  s_ebdbabe3e659c2::t_b4621dff49bbc6 89,108-115,151
+  s_ebdbabe3e659c2::t_b8526a1e460c2b 217-219,221-233
+  s_ebdbabe3e659c2::t_16b7f2fb5e6c99 188-190,220
+  s_ebdbabe3e659c2::t_e7e63a742430b9 75-77,82-88
+  s_ebdbabe3e659c2::t_b913f651e996e9 90,152,265-266,454
+docs/evidence/wasm-registration.log
+  s_ebdbabe3e659c2::t_6fd761b9f58980 1-3
+docs/evidence/wasm-tool-run.json
+  s_ebdbabe3e659c2::t_6fd761b9f58980 1
+scripts/build-wasm-demo.sh
+  s_ebdbabe3e659c2::t_c064275afc24ca 1-26
+docs/architecture.md
+  s_ebdbabe3e659c2::t_815be30001d15a 85,183
+examples/wasm-tools/netpeek/Cargo.toml
+  s_ebdbabe3e659c2::t_0d5d95a11fb9d1 1-20
+examples/wasm-tools/netpeek/src/lib.rs
+  s_ebdbabe3e659c2::t_2fd081afc0a420 1-37
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_a427cf2f9e42b6 166-191
+  s_ebdbabe3e659c2::t_16b7f2fb5e6c99 237-240
+  s_ebdbabe3e659c2::t_b7c8e53f700a73 236,241-242
+  s_ebdbabe3e659c2::t_2fa3174c00d1b2 198-199,223-224,234-235
+  s_ebdbabe3e659c2::t_7c020df8f81765 200-222
+  s_ebdbabe3e659c2::t_e0db6b9b63af5c 111
+extensions/README.md
+  s_ebdbabe3e659c2::t_815be30001d15a 137-186
+crates/daemon/Cargo.toml
+  s_ebdbabe3e659c2::t_45359c4d3a188e 20
+examples/extensions/wordcount-wasm/kelter-extension.toml
+  s_ebdbabe3e659c2::t_7b47462a8ce1de 1-17
+docs/adr/0011-wasm-extension-mechanism.md
+  s_ebdbabe3e659c2::t_36e18305a4cc58 1-86
+Cargo.toml
+  s_ebdbabe3e659c2::t_26b70c7740cf5a 11,14,34
+crates/wasmhost/src/lib.rs
+  s_ebdbabe3e659c2::t_c70c9ef7b76506 100,102-133,138-145,147-149
+  s_ebdbabe3e659c2::t_bbcc3016fe36b3 150-155,157-165,167-172,174-182
+  s_ebdbabe3e659c2::t_5002c1afcc418a 218-226
+  s_ebdbabe3e659c2::t_717f451708f18c 1-77,81-99,101,134,137,146,156,166,173,183-213,227-239,245,250-251,256-352
+  s_ebdbabe3e659c2::t_16b7f2fb5e6c99 78-80,135-136,214-217,246-249,252-255
+  s_ebdbabe3e659c2::t_a68669debbbd3b 240-244
+crates/wasmhost/Cargo.toml
+  s_ebdbabe3e659c2::t_483c9fe6cdd14f 1-13,17-19
+  s_ebdbabe3e659c2::t_b93c751db9f278 14-15
+  s_ebdbabe3e659c2::t_a2b8c46c2f5c35 16
+scripts/smoke-wasm.sh
+  s_ebdbabe3e659c2::t_10c202243e4311 1-187
+docs/evidence/phase5a-naming-check.log
+  s_ebdbabe3e659c2::t_27c8efbd8b6b05 1-13
+docs/evidence/phase5a-gates.log
+  s_ebdbabe3e659c2::t_359a9a0b8ad369 1-6
+docs/evidence/wasm-sandbox-run.json
+  s_ebdbabe3e659c2::t_6fd761b9f58980 1
+.gitignore
+  s_ebdbabe3e659c2::t_a68669debbbd3b 10
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_359a9a0b8ad369 512-584
+Cargo.lock
+  s_ebdbabe3e659c2::t_40d7c2eb6c0002 21-29,53-58,94-99,234-236,295-303,316-324,343-497,540,636-647,704-709,872-883,900-901,913-918,1174-1175,1256-1261,1268-1273,1285-1290,1318-1323,1367-1375,1514-1525,1676-1687,1752-1774,1949-1963,2159,2163-2168,2175-2187,2276-2285,2384-2394,2442-2444,2532-2546,3040-3261
+examples/wasm-tools/netpeek/Cargo.lock
+  s_ebdbabe3e659c2::t_9b5f1e147ead3d 1-7
+examples/wasm-tools/wordcount/Cargo.lock
+  s_ebdbabe3e659c2::t_99935c3ec4ab89 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "ce471d876b38be5c15a9e90a29a066f6cf80ab59",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
