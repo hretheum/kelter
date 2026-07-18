@@ -1,0 +1,108 @@
+docs/architecture.md
+  s_ebdbabe3e659c2::t_34ffdafd86d9f1 79-85,166-167
+docs/evidence/durability-resume-before-effect.log
+  s_ebdbabe3e659c2::t_edad3eefd5100f 1-7,10-14
+examples/extensions/toy-agent/kelter-extension.toml
+  s_ebdbabe3e659c2::t_a02ba434d2ac9a 1-16
+docs/evidence/memory-extension-store.json
+  s_ebdbabe3e659c2::t_e1469ae7966146 4-5,15-16
+examples/a2a-agent/server.py
+  s_ebdbabe3e659c2::t_5043f25f2ec0e1 1-100
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_0e61de4d262c32 108-111,118,123-139,144-167,219-220,223-225,230,232
+  s_ebdbabe3e659c2::t_34ffdafd86d9f1 119-122,140-143,226-229
+  s_ebdbabe3e659c2::t_ee24198b30e9cd 176-195,261
+examples/a2a-agent/agent.log
+  s_ebdbabe3e659c2::t_ec4215ed359b34 1
+extensions/README.md
+  s_ebdbabe3e659c2::t_34ffdafd86d9f1 22-23,137-177
+  s_ebdbabe3e659c2::t_88fdaad989f0c7 178
+examples/a2a-agent/run.sh
+  s_ebdbabe3e659c2::t_9034fa56a625a7 1-22
+crates/mcp/src/extensions.rs
+  s_ebdbabe3e659c2::t_12ae0b3ab041d6 68-74,79-87,108-121,128,146-156,177,184-226,233,301-334,336-350,371-372
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_82e95bcc863561 356-437
+crates/a2a/src/lib.rs
+  s_ebdbabe3e659c2::t_384b7baf5d5ee1 51
+  s_ebdbabe3e659c2::t_4df704fd1d146c 1-50,52-125,130-171,173,176-581
+  s_ebdbabe3e659c2::t_34ffdafd86d9f1 126-129,172,174-175
+docs/evidence/durability-restart.log
+  s_ebdbabe3e659c2::t_edad3eefd5100f 1-6,9
+docs/evidence/a2a-network-refused.log
+  s_ebdbabe3e659c2::t_a3892e1e79e306 2
+  s_ebdbabe3e659c2::t_ec4215ed359b34 1
+.gitignore
+  s_ebdbabe3e659c2::t_34ffdafd86d9f1 9
+docs/evidence/memory-extension-daemon.log
+  s_ebdbabe3e659c2::t_e1469ae7966146 1-8,12,16
+crates/kernel-core/src/engine.rs
+  s_ebdbabe3e659c2::t_34ffdafd86d9f1 768-777,787
+  s_ebdbabe3e659c2::t_a18ea543928e62 23-84,86-87,91-145,189-198,345,750-755,762-767,781-786,788-789,900
+crates/kernel-core/tests/durability_test.rs
+  s_ebdbabe3e659c2::t_34ffdafd86d9f1 16-18
+  s_ebdbabe3e659c2::t_5f7dddc4954e62 106-110
+docs/evidence/phase4b-naming-check.log
+  s_ebdbabe3e659c2::t_82e95bcc863561 1-11
+docs/evidence/memory-extension-badmanifest.log
+  s_ebdbabe3e659c2::t_e1469ae7966146 1-2
+Cargo.toml
+  s_ebdbabe3e659c2::t_e137f41b6463c1 10,32
+scripts/smoke-a2a.sh
+  s_ebdbabe3e659c2::t_d054fc1e1f8659 1-193
+crates/daemon/Cargo.toml
+  s_ebdbabe3e659c2::t_e137f41b6463c1 19
+docs/evidence/a2a-resume-run.json
+  s_ebdbabe3e659c2::t_ec4215ed359b34 1
+scripts/smoke-memory-extension.sh
+  s_ebdbabe3e659c2::t_e1469ae7966146 122,137
+  s_ebdbabe3e659c2::t_e0dcb1789e1e5c 55
+docs/evidence/a2a-durable.log
+  s_ebdbabe3e659c2::t_ec4215ed359b34 1-6
+crates/kernel-core/src/lib.rs
+  s_ebdbabe3e659c2::t_34ffdafd86d9f1 23-25
+crates/a2a/tests/a2a_client_test.rs
+  s_ebdbabe3e659c2::t_8dfd551b5b8d48 29-32,36,41,93-98,133,137,159,161,165,193,197,224,250,254,258
+  s_ebdbabe3e659c2::t_99886284a04daf 1-28,33-35,37-40,42-92,99-132,134-136,138-139,144-158,160,162-164,166-167,172-192,194-196,198-199,204-223,225-233,238-249,251-253,255-257,259-260,265-273
+  s_ebdbabe3e659c2::t_34ffdafd86d9f1 140-143,168-171,200-203,234-237,261-264
+crates/kernel-core/tests/engine_test.rs
+  s_ebdbabe3e659c2::t_34ffdafd86d9f1 11-13
+  s_ebdbabe3e659c2::t_2d60090a482f32 36-40,165
+crates/api/tests/api_test.rs
+  s_ebdbabe3e659c2::t_34ffdafd86d9f1 10-11
+  s_ebdbabe3e659c2::t_1f2634545c6ea7 33-37
+crates/a2a/Cargo.toml
+  s_ebdbabe3e659c2::t_e137f41b6463c1 1-21
+docs/evidence/durability-resume-after-effect.log
+  s_ebdbabe3e659c2::t_edad3eefd5100f 1-7,10-14
+docs/evidence/phase4b-gates.log
+  s_ebdbabe3e659c2::t_ec4215ed359b34 1-6
+docs/adr/0009-governed-durable-a2a.md
+  s_ebdbabe3e659c2::t_9340a0d11f61f5 1-100
+Cargo.lock
+  s_ebdbabe3e659c2::t_5a9ec9abfee57e 5-20,324
+crates/kernel-core/src/journal.rs
+  s_ebdbabe3e659c2::t_911245dadc2c03 53-60,82,94,119-121
+crates/mcp/src/client.rs
+  s_ebdbabe3e659c2::t_f289439fde336c 17-18,234-238
+crates/mcp/tests/mcp_e2e_test.rs
+  s_ebdbabe3e659c2::t_829ecad887e28c 5,7-16,65,76,88,110
+crates/storage/src/lib.rs
+  s_ebdbabe3e659c2::t_4a49f8f01b05af 337
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "dec0d7947d437a7e3330099d974f1c7d39336bfd",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
