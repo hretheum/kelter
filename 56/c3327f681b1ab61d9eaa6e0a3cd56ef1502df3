@@ -1,0 +1,19 @@
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_52a604e3564209 93-101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "56c3327f681b1ab61d9eaa6e0a3cd56ef1502df3",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
