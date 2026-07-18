@@ -18,6 +18,6 @@ find_python() {
 if [ ! -x .venv/bin/python ]; then
   PY=$(find_python) || { echo "wordstats extension needs Python >= 3.10" 1>&2; exit 1; }
   "$PY" -m venv .venv 1>&2 || exit 1
-  .venv/bin/pip install --quiet "mcp>=1.28" 1>&2 || exit 1
+  .venv/bin/pip install --quiet "mcp>=1.28,<2" 1>&2 || exit 1
 fi
 exec .venv/bin/python server.py

@@ -1,8 +1,9 @@
-hermes grep: 0 hits (2026-07-18T15:53:27Z)
+internal-codename grep (case-insensitive) over tracked tree: 0 hits (2026-07-18T15:55:12Z)
 agentkernel occurrences (allowed audit-record files only):
 CLAUDE.md
 docs/BUILD-EVIDENCE.md
 docs/PHASE-1-RESULTS.md
 docs/evidence/desktop-build.log
 docs/evidence/docker-buildx.log
+docs/evidence/phase2-naming-check.log
 docs/evidence/quickstart-daemon.log

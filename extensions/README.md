@@ -42,7 +42,7 @@ command = "./run.sh"        # resolved relative to this directory
 ```
 
 **The server** is a standard MCP stdio server. In Python with the official
-SDK (`pip install "mcp[cli]"`, Python ≥ 3.10):
+SDK (`pip install "mcp>=1.28,<2"`, Python ≥ 3.10):
 
 ```python
 from mcp.server.fastmcp import FastMCP
