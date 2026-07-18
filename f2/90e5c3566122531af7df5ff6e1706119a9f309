@@ -1,0 +1,84 @@
+scripts/smoke-extension.sh
+  s_ebdbabe3e659c2::t_9d3a41bab85b32 45-47
+docs/evidence/trust-loaded-with-consent.log
+  s_ebdbabe3e659c2::t_a884fabe7cd5ba 1-2
+docs/evidence/phase6-naming-check.log
+  s_ebdbabe3e659c2::t_d22d21568623f7 1-5
+docs/evidence/trust-run.json
+  s_ebdbabe3e659c2::t_a884fabe7cd5ba 1
+crates/daemon/src/config.rs
+  s_ebdbabe3e659c2::t_a397cb75e1abec 20-36
+docs/architecture.md
+  s_ebdbabe3e659c2::t_de3580eb0f34ee 86-96
+scripts/bootstrap.sh
+  s_ebdbabe3e659c2::t_9d3a41bab85b32 85-87
+docs/evidence/phase6-gates.log
+  s_ebdbabe3e659c2::t_b66b61910eb743 82-89
+  s_ebdbabe3e659c2::t_2af9006020106d 1-81
+extensions/README.md
+  s_ebdbabe3e659c2::t_747d455be3c046 98-132
+  s_ebdbabe3e659c2::t_3261bd90779a1b 51
+docs/evidence/trust-refuse-no-declaration.log
+  s_ebdbabe3e659c2::t_a884fabe7cd5ba 1-2
+  s_ebdbabe3e659c2::t_208f99cb8f2cff 3
+crates/kernel-core/src/journal.rs
+  s_ebdbabe3e659c2::t_9b16594d84f555 67-69
+  s_ebdbabe3e659c2::t_b66b61910eb743 70
+  s_ebdbabe3e659c2::t_9049d690703365 94-96
+docs/evidence/trust-refuse-no-operator.log
+  s_ebdbabe3e659c2::t_a884fabe7cd5ba 1-2
+  s_ebdbabe3e659c2::t_208f99cb8f2cff 3
+crates/storage/src/lib.rs
+  s_ebdbabe3e659c2::t_abc0b93a2a5420 338
+scripts/smoke-memory-extension.sh
+  s_ebdbabe3e659c2::t_9d3a41bab85b32 52-54
+examples/extensions/memstore/kelter-extension.toml
+  s_ebdbabe3e659c2::t_0ab126f28cd8bf 9-11
+docs/adr/0012-extension-trust-and-sandbox-by-default.md
+  s_ebdbabe3e659c2::t_30f59847dd8945 12
+  s_ebdbabe3e659c2::t_043e70ffdc5dc5 84-109
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_97662519724ea9 354
+  s_ebdbabe3e659c2::t_00ae24e1b3201a 112-113,116,119,122-140,150-151
+  s_ebdbabe3e659c2::t_8509e140518ab6 141-149
+scripts/demo-side-by-side.sh
+  s_ebdbabe3e659c2::t_9d3a41bab85b32 47-49
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_50a358a5a761f8 585-661
+scripts/smoke-trust.sh
+  s_ebdbabe3e659c2::t_69597bdc92db99 1-112,115-182
+  s_ebdbabe3e659c2::t_208f99cb8f2cff 113-114
+extensions/wordstats/kelter-extension.toml
+  s_ebdbabe3e659c2::t_0ab126f28cd8bf 9-11
+crates/mcp/src/extensions.rs
+  s_ebdbabe3e659c2::t_b66b61910eb743 537-539
+  s_ebdbabe3e659c2::t_31294a52fed5e1 465,470,477
+  s_ebdbabe3e659c2::t_1049b1742ac148 246-268
+  s_ebdbabe3e659c2::t_2d9b61898a19fe 527-536,540-600
+  s_ebdbabe3e659c2::t_9809d4ad0492d9 112-118,125-154,209
+  s_ebdbabe3e659c2::t_db35e3e7397046 197,201-208
+  s_ebdbabe3e659c2::t_51a53988235b4a 361,370-405,410
+  s_ebdbabe3e659c2::t_b239d7f55aa110 155,210,601
+crates/kernel-core/src/engine.rs
+  s_ebdbabe3e659c2::t_f752fa7de6fe03 376
+  s_ebdbabe3e659c2::t_b83b6aee1349a9 445-469
+  s_ebdbabe3e659c2::t_193f51ab91ab88 269-271,281
+  s_ebdbabe3e659c2::t_4b678b4cf7eb46 192-197
+  s_ebdbabe3e659c2::t_55b7271896b6bf 470
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "f290e5c3566122531af7df5ff6e1706119a9f309",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
