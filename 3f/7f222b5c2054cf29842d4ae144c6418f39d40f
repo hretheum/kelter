@@ -1,0 +1,121 @@
+extensions/wordstats/server.py
+  s_ebdbabe3e659c2::t_af4c57a57ff24a 1-36
+docs/evidence/smoke-extension-tools.json
+  s_ebdbabe3e659c2::t_8ab4688b9f9511 1
+docs/evidence/demo-frontier-run.json
+  s_ebdbabe3e659c2::t_ccf4293fdeebba 1
+extensions/wordstats/run.sh
+  s_ebdbabe3e659c2::t_01a8e066660a73 1,5,18,21-23
+  s_ebdbabe3e659c2::t_fb85d76db62927 2-4,6-17,19-20
+extensions/README.md
+  s_ebdbabe3e659c2::t_76ecd5fb7334ad 1-100
+docs/evidence/phase2-naming-check.log
+  s_ebdbabe3e659c2::t_ca13508941e536 1-8
+docs/architecture.md
+  s_ebdbabe3e659c2::t_ed2c86e0378628 72-80,105,128
+crates/mcp/src/lib.rs
+  s_ebdbabe3e659c2::t_0f17fc834838b8 7
+docs/evidence/bootstrap-clone.log
+  s_ebdbabe3e659c2::t_f177bd7c8c65bf 1-16
+docs/launch/demo-storyboard.md
+  s_ebdbabe3e659c2::t_d13a37579b5141 1-81
+scripts/demo-side-by-side.sh
+  s_ebdbabe3e659c2::t_863eefad667856 1-51,53-120
+  s_ebdbabe3e659c2::t_7330ec13d9f074 52
+extensions/wordstats/kelter-extension.toml
+  s_ebdbabe3e659c2::t_fe27c01402610b 1-11
+crates/mcp/src/extensions.rs
+  s_ebdbabe3e659c2::t_01dee3e177e6f2 89
+  s_ebdbabe3e659c2::t_7cd82e99ca3770 77-79
+  s_ebdbabe3e659c2::t_466df49605fbbf 1-76,80-88,90-169
+crates/kernel-core/src/engine.rs
+  s_ebdbabe3e659c2::t_c60e7bc409c9d8 186-193
+docs/evidence/phase2-test-full.log
+  s_ebdbabe3e659c2::t_0243bd4c2c636a 1-136
+.gitignore
+  s_ebdbabe3e659c2::t_8335fe8c3d2549 6-7
+  s_ebdbabe3e659c2::t_ed47ea20b3b9e5 18-19
+crates/mcp/Cargo.toml
+  s_ebdbabe3e659c2::t_f85ad47d214f2b 23
+crates/policy/src/prompt.rs
+  s_ebdbabe3e659c2::t_cbca02f40b8ad9 8-9,17-35
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_428770afb4badd 48-51,53-54,68-71
+  s_ebdbabe3e659c2::t_8a504c356dd663 55-67
+  s_ebdbabe3e659c2::t_f9874a623ffe1c 41-47
+  s_ebdbabe3e659c2::t_2c9ce86e00f83c 52
+scripts/bootstrap.sh
+  s_ebdbabe3e659c2::t_5f550c1abb0e67 1-142
+docs/launch/product-hunt.md
+  s_ebdbabe3e659c2::t_73a046359ce71d 1-8,10,12-14,16,18,20-30,37,39-43,45-50,53-54,56-80,84-110
+crates/policy/src/openrouter.rs
+  s_ebdbabe3e659c2::t_5b1f2bc4ccb794 101,106
+docs/evidence/smoke-extension-run.json
+  s_ebdbabe3e659c2::t_8ab4688b9f9511 1
+scripts/smoke-extension.sh
+  s_ebdbabe3e659c2::t_f3b15838d946a8 1-21,29-46,49-52,54-101,119-123,125-127
+  s_ebdbabe3e659c2::t_3eb38bd8aae750 22-28
+  s_ebdbabe3e659c2::t_db3a9a280a50e8 47-48
+  s_ebdbabe3e659c2::t_7330ec13d9f074 53
+  s_ebdbabe3e659c2::t_145960c30be75a 102-118
+  s_ebdbabe3e659c2::t_7e8f91e1fe9c08 124
+docs/evidence/demo-side-by-side.log
+  s_ebdbabe3e659c2::t_dab107bc89d25d 1-21
+crates/daemon/src/config.rs
+  s_ebdbabe3e659c2::t_80efbb791c7477 61-64,73
+  s_ebdbabe3e659c2::t_5a2cc57d31dafe 71
+  s_ebdbabe3e659c2::t_2898b4391ff937 56-59
+crates/mcp/src/client.rs
+  s_ebdbabe3e659c2::t_4327e0320745ee 51
+  s_ebdbabe3e659c2::t_ddc55e26673685 106-108
+  s_ebdbabe3e659c2::t_01dee3e177e6f2 52
+  s_ebdbabe3e659c2::t_66b9f04f92d437 109-111
+  s_ebdbabe3e659c2::t_b85705b50802f1 31-35
+  s_ebdbabe3e659c2::t_9471a6d9bbeffa 191-197
+  s_ebdbabe3e659c2::t_e6fb33eab5cda8 27-30
+scripts/smoke-openrouter.sh
+  s_ebdbabe3e659c2::t_7330ec13d9f074 59
+config.example.toml
+  s_ebdbabe3e659c2::t_97edba0c7e2ab6 21-23
+docs/evidence/demo-local-run.json
+  s_ebdbabe3e659c2::t_ccf4293fdeebba 1
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_682be6c27a9752 70
+  s_ebdbabe3e659c2::t_ca13508941e536 139-204
+  s_ebdbabe3e659c2::t_5b30f4e95e7bc3 1-12,19,35,58,77,94,133
+crates/mcp/tests/mcp_e2e_test.rs
+  s_ebdbabe3e659c2::t_4327e0320745ee 16
+  s_ebdbabe3e659c2::t_01dee3e177e6f2 17
+scripts/smoke-local.sh
+  s_ebdbabe3e659c2::t_7330ec13d9f074 44
+docs/evidence/phase2-gates.log
+  s_ebdbabe3e659c2::t_d8151d687e53a7 1-7
+  s_ebdbabe3e659c2::t_0243bd4c2c636a 8
+README.md
+  s_ebdbabe3e659c2::t_9b1fb52f8e0ba2 1-3,6-44,46-77,88,94-98,101,103-104,106-110,113-114,116,122,125,129,132,138-139,141,143-144,146,148,150-181,183,185-186
+crates/api/src/lib.rs
+  s_ebdbabe3e659c2::t_f812eb1447bd60 130-154
+  s_ebdbabe3e659c2::t_2debc81beb89bf 40
+Cargo.lock
+  s_ebdbabe3e659c2::t_e842742f7b767f 1004
+CLAUDE.md
+  s_ebdbabe3e659c2::t_f0f421f52b649e 1-33
+docs/adr/0006-governed-microkernel-extension-model.md
+  s_ebdbabe3e659c2::t_6e124e8a90aa17 1-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "3f7f222b5c2054cf29842d4ae144c6418f39d40f",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
