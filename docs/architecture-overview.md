@@ -418,7 +418,7 @@ flowchart LR
 
 ---
 
-## 12. Second extension mechanism — WASM (ADR 0011, Phase 5, in progress)
+## 12. Second extension mechanism — WASM (ADR 0011, Phase 5)
 
 MCP subprocesses are one extension mechanism; WASM is the second. A manifest can
 declare `mechanism = "wasm"`, and the registry routes it to an in-process,
@@ -453,6 +453,12 @@ The single invariant under every ADR: nothing the model or an extension
 produces is trusted; the kernel is the only thing that validates, executes,
 journals and attributes.
 
+Untrusted extension code runs sandboxed by default: containment comes from WASM
+(structural) or an OS layer, whereas a broker that merely mediates a capability
+is governance, not containment, and is never called a sandbox. Running an
+unsandboxed subprocess is an explicit, operator-gated, journaled decision
+(ADR 0012).
+
 | Component | Trusted? | Contained by |
 | --- | --- | --- |
 | Policy oracle (model proposal) | No | `ActionSchema::validate` — no other constructor for `ValidatedAction` |
@@ -477,4 +483,5 @@ journals and attributes.
 | 0008 | The capability registry — one manifest, many kernel seams | 7 |
 | 0009 | Governed, durable outbound A2A | 10 |
 | 0010 | Plan mode — validated, durable DAG | 11 |
-| 0011 | WASM — the second extension mechanism *(in progress, Phase 5)* | 12 |
+| 0011 | WASM — the second extension mechanism | 12 |
+| 0012 | Extension trust — containment vs governance, sandbox-by-default *(enforcement planned, Phase 6)* | 13 |

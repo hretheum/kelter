@@ -23,7 +23,12 @@ swappable policy engine, and it stays reliable even on small local models.
   plans / plan mode (4c, ADR 0010). Done.
 - **Phase 5 — WASM as the second extension mechanism.** In-process,
   capability-sandboxed extensions; structurally closes the subprocess network
-  egress left open by 4b (ADR 0011). In progress.
+  egress left open by 4b — for WASM extensions (5A, ADR 0011). Done.
+- **Phase 6 — enforced trust posture (sandbox-by-default).** The registry
+  loads sandboxed by default; running an unsandboxed subprocess needs an
+  explicit opt-in (a manifest flag plus an operator allowance) and is
+  journaled — governance and transparency, not containment (ADR 0012).
+  Planned.
 
 ## Phase 4 — the governed extension platform (delivered)
 
@@ -100,7 +105,7 @@ multi-agent and planning layer — the next moves are a menu, not a fixed
 sequence: each is large enough to be its own phase when chosen, and not all
 will be built. In rough priority.
 
-- **A · WASM as the second extension mechanism** — *now Phase 5, in progress.* In-process,
+- **A · WASM as the second extension mechanism** — *shipped as Phase 5 (ADR 0011).* In-process,
   capability-sandboxed extensions for the hot path (validators, latitude
   policies, learning distillers) — and, structurally, the close of the one
   honest gap Phase 4b left open: a spawned extension's arbitrary network

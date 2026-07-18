@@ -11,7 +11,7 @@ This file orients any Claude/agent working in the repo. Read it first.
   live here, never at the repo root**, so the root does not fill up with loose
   `.md` files. The folder is **gitignored** — briefs are inputs, not artifacts,
   and are never committed. Drop any new brief or prompt here.
-- **`docs/`** — committed project documentation: `architecture.md`, ADRs
+- **`docs/`** — committed project documentation: `architecture.md`, `architecture-overview.md` (diagrammed synthesis), ADRs
   (`docs/adr/`), `BUILD-EVIDENCE.md`, `PHASE-1-RESULTS.md`, launch assets
   (`docs/launch/`), and raw run logs (`docs/evidence/`).
 - **`crates/` · `apps/` · `deploy/`** — code and deployment artifacts.

@@ -178,12 +178,15 @@ Clients are stateless; the kernel owns all state.
 | Latitude knob (constrained / standard / wide per engine capability) | ✅ |
 | Tools = MCP servers; **manifest-registered extensions, no recompile** | ✅ first slice |
 | Extension example in ~25 lines of Python (official MCP SDK) | ✅ |
-| Memory provider interface (`write` / `retrieve` / `upsert`), scored retrieval | ✅ in-memory impl |
+| Memory provider interface (`write` / `retrieve` / `upsert`), BM25 retrieval | ✅ persistent (SQLite) |
 | Gated, provenance-tagged reflection (self-improvement stub) | ✅ |
 | One API contract: HTTP + WebSocket, bearer auth | ✅ |
 | Web UI (PWA) · desktop shell (standalone/remote) · container/Quadlet | ✅ |
-| WASM in-process extensions · memory/agents as extensions · marketplace | 🔜 [ADR 0006](docs/adr/0006-governed-microkernel-extension-model.md) |
-| CRDT sync · learning distillation · WASM extension mechanism | 🔜 interfaces shipped |
+| **WASM in-process, capability-sandboxed extensions** | ✅ [ADR 0011](docs/adr/0011-wasm-extension-mechanism.md) |
+| **Memory & agents as registered extensions** (capability registry) | ✅ [ADR 0008](docs/adr/0008-capability-registry.md) |
+| **Governed durable A2A** — delegate to remote agents, resumable | ✅ [ADR 0009](docs/adr/0009-governed-durable-a2a.md) |
+| **Plan mode** — validated, durable DAG of tool / A2A / review nodes | ✅ [ADR 0010](docs/adr/0010-plan-mode.md) |
+| Sandbox-by-default extension trust · marketplace · CRDT sync | 🔜 [ADR 0012](docs/adr/0012-extension-trust-and-sandbox-by-default.md) |
 
 ## Design notes
 
