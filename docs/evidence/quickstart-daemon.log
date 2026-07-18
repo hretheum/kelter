@@ -1,0 +1,17 @@
+$ cargo run -p daemon -- --config config.toml   # (excerpt: startup output)
+1:[2m2026-07-18T14:20:15.728606Z[0m [32m INFO[0m [2magentkernel[0m[2m:[0m policy engine: local:qwen2.5-0.5b-instruct
+3:[2m2026-07-18T14:20:16.172362Z[0m [32m INFO[0m [2magentkernel[0m[2m:[0m mcp tools online: extract_structure, read_source, write_report
+4:ui:  http://127.0.0.1:7466/
+5:api: http://127.0.0.1:7466/api/v1  (Authorization: Bearer <token>)
+6:[2m2026-07-18T14:20:16.173442Z[0m [32m INFO[0m [2mapi[0m[2m:[0m api listening on http://127.0.0.1:7466
+
+$ curl -s http://127.0.0.1:7466/healthz
+ok
+
+$ curl -X POST /api/v1/runs (see smoke-local-run.json for the full run record)
+{
+  "run_id": "f29708a0-5ffe-47f8-8911-7cc510410452",
+  "status": "completed",
+  "policy": "local:qwen2.5-0.5b-instruct",
+  "steps": 3
+}

@@ -1,0 +1,24 @@
+# Build artifacts
+/target
+apps/desktop/src-tauri/target
+apps/desktop/src-tauri/gen
+node_modules
+
+# Secrets & local env — never commit keys
+.env
+.env.*
+*.key
+
+# Local model files
+*.gguf
+models/
+
+# Internal working briefs (input documents, not artifacts of this repo)
+/prompt-*.md
+/*zalozenia*.md
+
+# OS noise
+.DS_Store
+
+# Raw local evidence logs are kept, but scratch dirs are not
+/tmp/

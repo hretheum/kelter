@@ -1,0 +1,32 @@
+[package]
+name = "mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "tools-server"
+path = "src/bin/tools_server.rs"
+
+[dependencies]
+kernel-core.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+rmcp = { version = "2.2", features = [
+    "server",
+    "client",
+    "macros",
+    "schemars",
+    "transport-io",
+    "transport-child-process",
+    "transport-async-rw",
+] }
+schemars = "1"

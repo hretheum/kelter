@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kernel-core",
+    "crates/policy",
+    "crates/mcp",
+    "crates/memory",
+    "crates/api",
+    "crates/daemon",
+]
+exclude = ["apps/desktop/src-tauri"]
+# The desktop app (apps/desktop/src-tauri) is intentionally excluded from the
+# default workspace so that `cargo build --workspace` does not require the
+# platform webview toolchain. It is built separately via `cargo tauri build`.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = ""
+publish = false
+
+[workspace.dependencies]
+kernel-core = { path = "crates/kernel-core" }
+policy = { path = "crates/policy" }
+mcp = { path = "crates/mcp" }
+memory = { path = "crates/memory" }
+api = { path = "crates/api" }
+
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+async-trait = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+jsonschema = "0.28"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors"] }
+rust-embed = "8"
+uuid = { version = "1", features = ["v4", "serde"] }
+rand = "0.9"
+toml = "0.8"
+anyhow = "1"

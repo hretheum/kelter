@@ -1,0 +1,25 @@
+# agentkernel daemon configuration.
+# Copy to config.toml and adjust. The policy engine is ONE line:
+# swap it and the same task runs on a different model class.
+
+[server]
+bind = "127.0.0.1:7466"
+# token = "set-a-long-random-token"   # omitted → generated and printed at startup
+
+[policy]
+engine = "local:qwen2.5-0.5b-instruct"
+# engine = "openrouter:anthropic/claude-sonnet-5"   # ← the one-line swap (key from OPENROUTER_API_KEY env)
+# base_url = "http://127.0.0.1:8080"  # llama.cpp server (default shown)
+# latitude = "constrained"            # constrained | standard | wide (default derives from adapter)
+
+[kernel]
+max_steps = 12
+reflection = true    # gate for the provenance-tagged reflection stub
+
+[tools]
+workspace = "./work" # reference MCP tools read/write inside this directory
+# Additional MCP servers (stdio). Default: the bundled reference tool server.
+# [[tools.servers]]
+# name = "my-tools"
+# command = "/path/to/mcp-server"
+# args = ["--flag"]

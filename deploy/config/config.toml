@@ -1,0 +1,16 @@
+# Container config: kernel + llama.cpp sidecar in one pod (see compose.yaml).
+
+[server]
+bind = "0.0.0.0:7466"
+
+[policy]
+engine = "local:qwen2.5-0.5b-instruct"
+base_url = "http://model:8080"
+# engine = "openrouter:anthropic/claude-sonnet-5"   # ← one-line swap; key via OPENROUTER_API_KEY
+
+[kernel]
+max_steps = 12
+reflection = true
+
+[tools]
+workspace = "/data/work"

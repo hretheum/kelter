@@ -1,0 +1,17 @@
+# Demo config, frontier leg. The ONLY difference vs config-local.toml is the
+# [policy] engine line — same kernel, same tools, same task.
+# Requires OPENROUTER_API_KEY in the environment (never in this file).
+
+[server]
+bind = "127.0.0.1:7466"
+token = "demo-token-change-me"
+
+[policy]
+engine = "openrouter:anthropic/claude-sonnet-5"
+
+[kernel]
+max_steps = 8
+reflection = true
+
+[tools]
+workspace = "./work"

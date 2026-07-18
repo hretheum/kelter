@@ -1,0 +1,10 @@
+target
+apps/desktop/src-tauri/target
+apps/desktop/src-tauri/gen
+.git
+docs
+*.md
+!apps/web-ui/**
+work
+models
+.env*

@@ -1,0 +1,12 @@
+   Compiling kernel-core v0.1.0 (<repo>/crates/kernel-core)
+   Compiling mcp v0.1.0 (<repo>/crates/mcp)
+   Compiling policy v0.1.0 (<repo>/crates/policy)
+   Compiling api v0.1.0 (<repo>/crates/api)
+   Compiling daemon v0.1.0 (<repo>/crates/daemon)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.10s
+=== cargo test ===
+cargo test: 36 passed (16 suites, 0.66s)
+=== clippy ===
+cargo clippy: No issues found
+=== fmt check ===
+fmt: clean

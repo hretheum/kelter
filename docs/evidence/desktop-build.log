@@ -1,0 +1,13 @@
+=== cargo tauri build (bundle: app) ===
+        Info Looking up installed tauri packages to check mismatched versions...
+   Compiling kernel-core v0.1.0 (<repo>/crates/kernel-core)
+   Compiling desktop v0.1.0 (<repo>/apps/desktop/src-tauri)
+   Compiling policy v0.1.0 (<repo>/crates/policy)
+   Compiling mcp v0.1.0 (<repo>/crates/mcp)
+   Compiling api v0.1.0 (<repo>/crates/api)
+    Finished `release` profile [optimized] target(s) in 1m 35s
+       Built application at: <repo>/apps/desktop/src-tauri/target/release/desktop
+    Bundling agentkernel.app (<repo>/apps/desktop/src-tauri/target/release/bundle/macos/agentkernel.app)
+    Finished 1 bundle at:
+        <repo>/apps/desktop/src-tauri/target/release/bundle/macos/agentkernel.app
+

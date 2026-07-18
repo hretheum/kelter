@@ -1,0 +1,17 @@
+# Demo config, local leg: llama.cpp sidecar with GBNF constrained decoding.
+# Start the sidecar first:
+#   llama-server -hf Qwen/Qwen2.5-0.5B-Instruct-GGUF:q4_k_m --port 8080 -c 4096
+
+[server]
+bind = "127.0.0.1:7466"
+token = "demo-token-change-me"
+
+[policy]
+engine = "local:qwen2.5-0.5b-instruct"
+
+[kernel]
+max_steps = 8
+reflection = true
+
+[tools]
+workspace = "./work"

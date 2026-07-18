@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agentkernel</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; padding: 2rem;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      background: #101418; color: #e6e9ec;
+    }
+    h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
+    p.sub { color: #8b949e; font-size: .85rem; margin: 0 0 1.5rem; }
+    .mode {
+      display: block; width: 100%; text-align: left;
+      background: #1a2027; color: inherit;
+      border: 1px solid #30363d; border-radius: .5rem;
+      padding: 1rem; margin-bottom: 1rem; cursor: pointer; font: inherit;
+    }
+    .mode:hover { border-color: #4ea1ff; }
+    .mode b { display: block; margin-bottom: .25rem; }
+    .mode span { color: #8b949e; font-size: .8rem; }
+    #remote-form { display: none; margin-top: 1rem; }
+    label { display: block; font-size: .8rem; color: #8b949e; margin-bottom: .75rem; }
+    input {
+      display: block; width: 100%; box-sizing: border-box;
+      margin-top: .25rem; padding: .5rem;
+      border-radius: .35rem; border: 1px solid #30363d;
+      background: #101418; color: inherit; font: inherit;
+    }
+    button.go {
+      padding: .5rem 1.2rem; border: none; border-radius: .35rem;
+      background: #4ea1ff; color: #06121f; font-weight: 600; cursor: pointer;
+    }
+    #status { margin-top: 1rem; font-size: .8rem; color: #f85149; white-space: pre-wrap; }
+    .hint { font-size: .75rem; color: #8b949e; margin-top: 1.5rem; }
+  </style>
+</head>
+<body>
+  <h1>agentkernel</h1>
+  <p class="sub">Where should the kernel run?</p>
+
+  <button class="mode" id="standalone">
+    <b>Standalone (this computer)</b>
+    <span>Runs the kernel inside this app. Needs a local llama.cpp server
+    on port 8080 for the local policy engine.</span>
+  </button>
+
+  <button class="mode" id="remote">
+    <b>Remote daemon</b>
+    <span>Connect to a kernel running elsewhere (homelab, tailnet).
+    This app stays a thin client.</span>
+  </button>
+
+  <div id="remote-form">
+    <label>Daemon URL
+      <input id="url" type="text" placeholder="http://homelab:7466">
+    </label>
+    <label>API token
+      <input id="token" type="password" placeholder="bearer token">
+    </label>
+    <button class="go" id="connect">Connect</button>
+  </div>
+
+  <div id="status"></div>
+  <p class="hint">Your choice is remembered; delete the app's settings.json
+  to see this screen again.</p>
+
+  <script src="launcher.js"></script>
+</body>
+</html>

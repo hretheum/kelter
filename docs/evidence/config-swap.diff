@@ -1,0 +1,9 @@
+examples/config-local.toml → examples/config-openrouter.toml
+   +2 added, -2 removed, ~2 modified
+
+~   1 # Demo config, local leg: llama.cpp sidecar with GBNF constrained decoding. → # Demo config, frontier leg. The ONLY difference vs config-local.toml is the
+-   2 # Start the sidecar first:
++   2 # [policy] engine line — same kernel, same tools, same task.
+-   3 #   llama-server -hf Qwen/Qwen2.5-0.5B-Instruct-GGUF:q4_k_m --port 8080 -c 4096
++   3 # Requires OPENROUTER_API_KEY in the environment (never in this file).
+~  10 engine = "local:qwen2.5-0.5b-instruct" → engine = "openrouter:anthropic/claude-sonnet-5"

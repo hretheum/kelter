@@ -1,0 +1,41 @@
+# One pod: kernel + local model sidecar (+ pluggable memory backend).
+# The kernel talks to the model over HTTP inside the pod network; swap the
+# policy engine by editing one line in config/config.toml.
+services:
+  kernel:
+    image: agentkernel:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "7466:7466"
+    volumes:
+      - ./config:/data/config:ro
+      - work:/data/work
+    command: ["--config", "/data/config/config.toml"]
+    environment:
+      # Only needed when [policy] engine = "openrouter:<model>".
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+    depends_on:
+      - model
+
+  # llama.cpp server sidecar: the "weak but reliable" local engine.
+  # Pulls a small instruct model from the HF cache volume on first start.
+  model:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    command: >-
+      -hf Qwen/Qwen2.5-0.5B-Instruct-GGUF:q4_k_m
+      --host 0.0.0.0 --port 8080 -c 4096
+    volumes:
+      - models:/root/.cache/llama.cpp
+    ports:
+      - "8080:8080"
+
+  # Memory backend seam: the kernel ships with an in-memory provider; a
+  # graph/vector backend plugs in here later (see docs/architecture.md).
+  # memory-backend:
+  #   image: <your-kg-or-vector-store>
+
+volumes:
+  work:
+  models:

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agentkernel</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#101418">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>agentkernel</h1>
+    <p class="tagline">deterministic kernel · constrained policy · live runs</p>
+    <div id="conn" class="pill offline">disconnected</div>
+  </header>
+
+  <main>
+    <section id="setup">
+      <label>Server
+        <input id="server-url" type="text" placeholder="(same origin)" autocomplete="off">
+      </label>
+      <label>API token
+        <input id="token" type="password" placeholder="bearer token" autocomplete="off">
+      </label>
+      <button id="connect">Connect</button>
+    </section>
+
+    <section id="submit-box">
+      <label>Task
+        <textarea id="task" rows="3"
+          placeholder="e.g. Read https://example.com, extract its structure, write a markdown report to out/report.md"></textarea>
+      </label>
+      <button id="submit" disabled>Run</button>
+    </section>
+
+    <section id="runs">
+      <h2>Runs</h2>
+      <ul id="run-list"></ul>
+    </section>
+
+    <section id="events">
+      <h2>Live events</h2>
+      <pre id="event-log"></pre>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
