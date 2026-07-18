@@ -50,6 +50,14 @@ pub enum JournalEntry {
         arguments: serde_json::Value,
         idempotency_key: String,
     },
+    /// A durable side-note recorded by the executing action source at a
+    /// critical moment (e.g. a remote A2A task id, journaled at creation so
+    /// resume reconnects instead of re-delegating).
+    Note {
+        step: u32,
+        key: String,
+        value: serde_json::Value,
+    },
     /// Written durably AFTER a tool executed.
     Receipt {
         step: u32,
@@ -71,6 +79,7 @@ impl JournalEntry {
         match self {
             JournalEntry::Decision { step, .. }
             | JournalEntry::Intent { step, .. }
+            | JournalEntry::Note { step, .. }
             | JournalEntry::Receipt { step, .. } => Some(*step),
             JournalEntry::Terminal { .. } => None,
         }
@@ -82,6 +91,7 @@ impl JournalEntry {
 pub struct StepJournal {
     pub decision: Option<(String, serde_json::Value)>,
     pub intent: Option<(String, serde_json::Value, String)>,
+    pub notes: std::collections::HashMap<String, serde_json::Value>,
     pub receipt: Option<(bool, serde_json::Value)>,
 }
 
@@ -105,6 +115,9 @@ pub fn fold_step(journal: &[JournalEntry], step_index: u32) -> StepJournal {
                 idempotency_key,
             } if *step == step_index => {
                 folded.intent = Some((action.clone(), arguments.clone(), idempotency_key.clone()));
+            }
+            JournalEntry::Note { step, key, value } if *step == step_index => {
+                folded.notes.insert(key.clone(), value.clone());
             }
             JournalEntry::Receipt { step, ok, result } if *step == step_index => {
                 folded.receipt = Some((*ok, result.clone()));

@@ -105,34 +105,66 @@ async fn main() -> anyhow::Result<()> {
         })
         .context("cannot resolve tools workspace directory")?;
 
-    let mut memory_extensions: Vec<mcp::extensions::RegisteredExtension> = Vec::new();
-    for mut ext in extensions {
+    let mut memory_extensions: Vec<mcp::ServerSpec> = Vec::new();
+    let mut memory_extension_names: Vec<String> = Vec::new();
+    let mut remote_agents: Vec<a2a::RemoteAgent> = Vec::new();
+    for ext in extensions {
         tracing::info!(
             "registry: extension '{}' capability={:?} permissions={:?}",
             ext.name,
             ext.capability,
             ext.permissions
         );
-        // Permission scoping: the run workspace is handed over only when
-        // the manifest asked for it.
-        if ext.permissions.workspace_write {
-            ext.spec.env.push((
-                "KELTER_WORKSPACE".into(),
-                workspace_abs.to_string_lossy().into_owned(),
-            ));
-        }
-        if ext.permissions.network {
-            tracing::warn!(
-                "registry: extension '{}' requests network access — recorded; transport-level \
-                 enforcement is a later slice",
-                ext.name
-            );
-        }
-        match ext.capability {
-            mcp::extensions::Capability::Tools => servers.push(ext.spec),
-            mcp::extensions::Capability::Memory => memory_extensions.push(ext),
-            // load_manifest refuses agent/model-provider before this point.
-            other => anyhow::bail!("registry routed an unimplemented capability: {other:?}"),
+        match (ext.capability, ext.kind) {
+            (
+                mcp::extensions::Capability::Tools,
+                mcp::extensions::ExtensionKind::Server(mut spec),
+            ) => {
+                // Permission scoping: the run workspace is handed over only
+                // when the manifest asked for it.
+                if ext.permissions.workspace_write {
+                    spec.env.push((
+                        "KELTER_WORKSPACE".into(),
+                        workspace_abs.to_string_lossy().into_owned(),
+                    ));
+                }
+                if ext.permissions.network {
+                    tracing::warn!(
+                        "registry: subprocess extension '{}' requests network access — \
+                         recorded; transport-level sandboxing is a later slice",
+                        ext.name
+                    );
+                }
+                servers.push(spec);
+            }
+            (
+                mcp::extensions::Capability::Memory,
+                mcp::extensions::ExtensionKind::Server(mut spec),
+            ) => {
+                if ext.permissions.workspace_write {
+                    spec.env.push((
+                        "KELTER_WORKSPACE".into(),
+                        workspace_abs.to_string_lossy().into_owned(),
+                    ));
+                }
+                memory_extension_names.push(ext.name.clone());
+                memory_extensions.push(spec);
+            }
+            (
+                mcp::extensions::Capability::Agent,
+                mcp::extensions::ExtensionKind::RemoteAgent(endpoint),
+            ) => {
+                // A2A egress is kernel-owned: the `network` permission was
+                // already required at load; the client is pinned to the
+                // declared card host (SSRF allowlist).
+                remote_agents.push(a2a::RemoteAgent {
+                    name: ext.name.clone(),
+                    card_url: endpoint.card_url,
+                });
+            }
+            (capability, kind) => {
+                anyhow::bail!("registry mis-routed capability {capability:?} with kind {kind:?}")
+            }
         }
     }
 
@@ -140,6 +172,26 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("failed to start MCP tool servers")?;
     tracing::info!("mcp tools online: {}", tools.tool_names().join(", "));
+
+    // Remote agents join the action space as delegate_to_<name> actions;
+    // the kernel dials them as an A2A client (governed egress, ADR 0009).
+    let action_source: Arc<dyn kernel_core::ActionSource> = if remote_agents.is_empty() {
+        Arc::new(tools)
+    } else {
+        for agent in &remote_agents {
+            tracing::info!(
+                "a2a: remote agent '{}' registered (card: {})",
+                agent.name,
+                agent.card_url
+            );
+        }
+        let delegations = a2a::A2aActionSource::new(remote_agents.clone())
+            .context("failed to configure the A2A delegation client")?;
+        Arc::new(kernel_core::CompositeActionSource::new(vec![
+            Arc::new(tools),
+            Arc::new(delegations),
+        ]))
+    };
 
     // Storage for runs + journal: durable SQLite by default.
     let store: Arc<dyn RunStore> = match cfg.storage.backend.as_str() {
@@ -164,18 +216,20 @@ async fn main() -> anyhow::Result<()> {
     // registry seam (spawned `memory-server`, no in-process shortcut).
     if memory_extensions.len() > 1 {
         anyhow::bail!(
-            "multiple memory extensions registered ({:?}) — exactly one memory backend is \
-             supported",
-            memory_extensions
-                .iter()
-                .map(|e| e.name.as_str())
-                .collect::<Vec<_>>()
+            "multiple memory extensions registered ({memory_extension_names:?}) — exactly one \
+             memory backend is supported"
         );
     }
-    let memory: Arc<dyn MemoryProvider> = if let Some(ext) = memory_extensions.pop() {
-        tracing::info!("memory: extension '{}' (external backend)", ext.name);
+    let memory: Arc<dyn MemoryProvider> = if let Some(spec) = memory_extensions.pop() {
+        tracing::info!(
+            "memory: extension '{}' (external backend)",
+            memory_extension_names
+                .first()
+                .map(String::as_str)
+                .unwrap_or("?")
+        );
         Arc::new(
-            mcp::McpMemoryProvider::connect(ext.spec)
+            mcp::McpMemoryProvider::connect(spec)
                 .await
                 .context("failed to start the registered memory extension")?,
         )
@@ -204,7 +258,7 @@ async fn main() -> anyhow::Result<()> {
 
     let kernel = Arc::new(Kernel::new(
         oracle,
-        Arc::new(tools),
+        action_source,
         memory,
         store.clone(),
         KernelConfig {

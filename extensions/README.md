@@ -19,7 +19,8 @@ provides, and the registry routes it to the matching kernel seam
 |---|---|---|
 | `tools` | the model's action space | kernel-side action validation + run journal |
 | `memory` | the kernel's `MemoryProvider` seam (never the action space) | response schema validation, kernel-tagged provenance |
-| `agent`, `model-provider` | reserved — **refuse to load** until implemented | — |
+| `agent` | a **remote** A2A agent the kernel dials as `delegate_to_<name>` | `network` permission required, egress origin-pinned (SSRF), response validated, durable task id |
+| `model-provider` | reserved — **refuses to load** until implemented | — |
 
 Extensions are untrusted by construction (ADR 0006); the gates are not
 optional, and a manifest declaring anything the runtime cannot scope
@@ -132,6 +133,48 @@ Things to know:
 - `memory_upsert` is the knowledge-graph hook (`{"kind": "entity"|
   "relation", …}`) — a KG-backed memory implements ranking however it
   likes, as long as results come back in the contract shape.
+
+## Remote agents (outbound A2A)
+
+An `agent` extension is a **remote** agent Kelter delegates sub-tasks to
+over the A2A protocol — nothing is spawned. Its manifest points at the
+agent's Agent Card and MUST request `network`:
+
+```toml
+[extension]
+name = "toy"
+provides = ["agent"]
+
+[permissions]
+network = true              # REQUIRED — an agent without it is refused
+
+[agent]
+card_url = "http://127.0.0.1:7590"   # …/.well-known/agent-card.json
+```
+
+The kernel adds `delegate_to_toy(task)` to the action space; the model
+delegates, the kernel dials the remote agent (A2A v1.0.0 JSON-RPC:
+`SendMessage` → poll `GetTask` → collect the artifact text), and the answer
+returns as a validated, journaled observation attributed to the agent.
+
+Governance you get for free (ADR 0009):
+
+- **Egress is the kernel's** — the dial is pinned to the `card_url` origin
+  (SSRF allowlist); a card advertising an endpoint on another host is
+  refused, and redirects are disabled.
+- **Responses are validated** — an unknown A2A task state is rejected, like
+  the memory schema gate.
+- **Delegation is durable** — the remote task id is journaled at creation;
+  a crash-resume reconnects (`GetTask`) instead of delegating twice.
+- **Per-agent accounting** — `run.agent_usage` records delegations + remote
+  time per agent.
+
+Complete working target: [`examples/a2a-agent/`](../examples/a2a-agent/)
+(a ~90-line Starlette A2A agent) with its manifest at
+[`examples/extensions/toy-agent/`](../examples/extensions/toy-agent/). Smoke:
+`scripts/smoke-a2a.sh` (delegate → validate → kill-mid-poll → reconnect,
+plus the network-refusal check). This is **outbound only** — Kelter as an
+A2A *server* (inbound) is a later increment.
 
 ## Try it
 

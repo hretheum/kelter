@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 use kernel_core::{
-    ActionSchema, ActionSource, ActionSpec, ExecutionError, Latitude, ValidatedAction,
+    ActionSchema, ActionSource, ActionSpec, ExecutionContext, ExecutionError, Latitude,
+    ValidatedAction,
 };
 
 /// One MCP server to spawn over stdio.
@@ -230,7 +231,11 @@ impl ActionSource for McpToolSource {
         Ok(ActionSchema { actions })
     }
 
-    async fn execute(&self, action: &ValidatedAction) -> Result<serde_json::Value, ExecutionError> {
+    async fn execute(
+        &self,
+        action: &ValidatedAction,
+        _ctx: &ExecutionContext,
+    ) -> Result<serde_json::Value, ExecutionError> {
         let entry = self.tools.get(action.action()).ok_or_else(|| {
             ExecutionError::Tool(format!("tool '{}' is not registered", action.action()))
         })?;

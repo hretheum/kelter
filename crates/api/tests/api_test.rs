@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use kernel_core::{
-    ActionSchema, ActionSource, ActionSpec, ExecutionError, Kernel, KernelConfig, Latitude,
-    PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction, ValidatedAction,
+    ActionSchema, ActionSource, ActionSpec, ExecutionContext, ExecutionError, Kernel, KernelConfig,
+    Latitude, PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction, ValidatedAction,
 };
 use memory::InMemoryProvider;
 
@@ -30,7 +30,11 @@ impl ActionSource for EchoTools {
             }],
         })
     }
-    async fn execute(&self, a: &ValidatedAction) -> Result<serde_json::Value, ExecutionError> {
+    async fn execute(
+        &self,
+        a: &ValidatedAction,
+        _ctx: &ExecutionContext,
+    ) -> Result<serde_json::Value, ExecutionError> {
         Ok(json!({"echoed": a.arguments()["message"]}))
     }
 }

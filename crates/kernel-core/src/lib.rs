@@ -20,8 +20,9 @@ pub use action::{
     ActionSchema, ActionSpec, ProposedAction, ValidatedAction, ValidationError, IDEMPOTENCY_KEY_ARG,
 };
 pub use engine::{
-    ActionSource, ExecutionError, Kernel, KernelConfig, KernelError, Run, RunEvent,
-    RunEventEnvelope, RunStatus, StepRecord, FINISH_ACTION,
+    crash_point, ActionSource, AgentUsage, CompositeActionSource, ExecutionContext, ExecutionError,
+    Kernel, KernelConfig, KernelError, Run, RunEvent, RunEventEnvelope, RunStatus, StepRecord,
+    FINISH_ACTION,
 };
 pub use journal::{JournalEntry, Usage};
 pub use oracle::{Latitude, PolicyContext, PolicyError, PolicyOracle, Proposal};

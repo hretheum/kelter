@@ -1,0 +1,21 @@
+[package]
+name = "a2a"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+kernel-core.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+tokio = { workspace = true, features = ["time", "sync", "macros", "rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+axum.workspace = true

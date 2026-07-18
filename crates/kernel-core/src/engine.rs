@@ -20,12 +20,129 @@ use memory::{Episode, EpisodeOutcome, MemoryProvider, Provenance};
 /// Name of the terminal action the kernel itself adds to every action space.
 pub const FINISH_ACTION: &str = "finish";
 
+/// Durable context handed to an executing action source. Lets a source
+/// journal critical mid-execution facts (e.g. a created remote task id) so
+/// a crash-resume can reconnect instead of redoing the side effect, and
+/// attribute usage to remote agents for per-agent accounting.
+pub struct ExecutionContext {
+    run_id: Uuid,
+    step: u32,
+    store: Arc<dyn RunStore>,
+    notes: std::collections::HashMap<String, serde_json::Value>,
+    agent_usage: std::sync::Mutex<Vec<(String, u64)>>,
+}
+
+impl ExecutionContext {
+    /// Build a context for one step. The engine calls this with the step's
+    /// pre-crash notes folded from the journal; tests may construct one
+    /// directly (notes are journal metadata, not a trust boundary).
+    pub fn new(
+        run_id: Uuid,
+        step: u32,
+        store: Arc<dyn RunStore>,
+        notes: std::collections::HashMap<String, serde_json::Value>,
+    ) -> Self {
+        Self {
+            run_id,
+            step,
+            store,
+            notes,
+            agent_usage: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Durably journal a side-note for this step, immediately.
+    pub async fn record_note(
+        &self,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<(), crate::store::StoreError> {
+        self.store
+            .append_journal(
+                self.run_id,
+                crate::journal::JournalEntry::Note {
+                    step: self.step,
+                    key: key.to_string(),
+                    value,
+                },
+            )
+            .await
+    }
+
+    /// A note journaled for this step before a crash (available on resume).
+    pub fn note(&self, key: &str) -> Option<&serde_json::Value> {
+        self.notes.get(key)
+    }
+
+    /// Attribute remote-agent work to this run's per-agent accounting.
+    pub fn attribute_agent(&self, agent: &str, elapsed_ms: u64) {
+        if let Ok(mut usage) = self.agent_usage.lock() {
+            usage.push((agent.to_string(), elapsed_ms));
+        }
+    }
+}
+
 /// The tool substrate seam: something that can describe an action space and
-/// execute validated actions (in practice: the MCP client crate).
+/// execute validated actions (in practice: the MCP client crate and the
+/// A2A delegation client).
 #[async_trait]
 pub trait ActionSource: Send + Sync {
     async fn action_schema(&self, latitude: Latitude) -> Result<ActionSchema, ExecutionError>;
-    async fn execute(&self, action: &ValidatedAction) -> Result<serde_json::Value, ExecutionError>;
+    async fn execute(
+        &self,
+        action: &ValidatedAction,
+        ctx: &ExecutionContext,
+    ) -> Result<serde_json::Value, ExecutionError>;
+}
+
+/// Merge several action sources into one space; execution routes to the
+/// source that declared the action.
+pub struct CompositeActionSource {
+    sources: Vec<Arc<dyn ActionSource>>,
+}
+
+impl CompositeActionSource {
+    pub fn new(sources: Vec<Arc<dyn ActionSource>>) -> Self {
+        Self { sources }
+    }
+}
+
+#[async_trait]
+impl ActionSource for CompositeActionSource {
+    async fn action_schema(&self, latitude: Latitude) -> Result<ActionSchema, ExecutionError> {
+        let mut actions = Vec::new();
+        for source in &self.sources {
+            let schema = source.action_schema(latitude).await?;
+            for action in schema.actions {
+                if actions.iter().any(|a: &ActionSpec| a.name == action.name) {
+                    tracing::warn!(
+                        "composite action source: duplicate action '{}' — keeping the first",
+                        action.name
+                    );
+                    continue;
+                }
+                actions.push(action);
+            }
+        }
+        Ok(ActionSchema { actions })
+    }
+
+    async fn execute(
+        &self,
+        action: &ValidatedAction,
+        ctx: &ExecutionContext,
+    ) -> Result<serde_json::Value, ExecutionError> {
+        for source in &self.sources {
+            let schema = source.action_schema(Latitude::Wide).await?;
+            if schema.actions.iter().any(|a| a.name == action.action()) {
+                return source.execute(action, ctx).await;
+            }
+        }
+        Err(ExecutionError::Tool(format!(
+            "no source declares action '{}'",
+            action.action()
+        )))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -69,6 +186,16 @@ pub struct Run {
     /// Aggregated model-call accounting for this run.
     #[serde(default)]
     pub usage: Usage,
+    /// Per-remote-agent accounting (delegation count + remote wall time).
+    #[serde(default)]
+    pub agent_usage: std::collections::HashMap<String, AgentUsage>,
+}
+
+/// Accounting for one remote agent within a run.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct AgentUsage {
+    pub delegations: u64,
+    pub remote_ms: u64,
 }
 
 /// Events streamed to clients over WS/SSE while a run progresses.
@@ -215,6 +342,7 @@ impl Kernel {
             policy: self.oracle.describe(),
             created_at: now_secs(),
             usage: Usage::default(),
+            agent_usage: std::collections::HashMap::new(),
         };
         let id = run.id;
         self.store.put(run).await?;
@@ -619,26 +747,45 @@ impl Kernel {
                     exec_action.inject_idempotency_key(&idempotency_key);
                 }
 
+                let exec_ctx = ExecutionContext::new(
+                    run_id,
+                    step_index,
+                    self.store.clone(),
+                    folded.notes.clone(),
+                );
                 let tool_span = tracing::info_span!(
                     parent: &step_span,
                     "kelter.tool_call",
                     step = step_index,
                     tool = %validated.action()
                 );
-                let (result, ok) =
-                    match self.tools.execute(&exec_action).instrument(tool_span).await {
-                        Ok(v) => (v, true),
-                        Err(e) => {
-                            let msg = e.to_string();
-                            last_error = Some(format!(
-                                "tool '{}' failed: {msg}. Adjust and continue.",
-                                validated.action()
-                            ));
-                            (serde_json::json!({ "error": msg }), false)
-                        }
-                    };
+                let (result, ok) = match self
+                    .tools
+                    .execute(&exec_action, &exec_ctx)
+                    .instrument(tool_span)
+                    .await
+                {
+                    Ok(v) => (v, true),
+                    Err(e) => {
+                        let msg = e.to_string();
+                        last_error = Some(format!(
+                            "tool '{}' failed: {msg}. Adjust and continue.",
+                            validated.action()
+                        ));
+                        (serde_json::json!({ "error": msg }), false)
+                    }
+                };
 
                 crash_point("after_execute", validated.action());
+
+                // Per-agent accounting attributed during execution.
+                if let Ok(attributions) = exec_ctx.agent_usage.into_inner() {
+                    for (agent, elapsed_ms) in attributions {
+                        let entry = run.agent_usage.entry(agent).or_default();
+                        entry.delegations += 1;
+                        entry.remote_ms += elapsed_ms;
+                    }
+                }
 
                 self.store
                     .append_journal(
@@ -750,7 +897,7 @@ impl Kernel {
 /// `"<point>:<action>"` (e.g. `after_intent:append_ledger`), the process
 /// aborts hard at that boundary — simulating a crash exactly inside the
 /// durability windows. Never set in normal operation.
-fn crash_point(point: &str, action: &str) {
+pub fn crash_point(point: &str, action: &str) {
     if let Ok(v) = std::env::var("KELTER_CRASH_POINT") {
         if v == format!("{point}:{action}") {
             tracing::error!("KELTER_CRASH_POINT hit ({v}) — aborting process (test hook)");

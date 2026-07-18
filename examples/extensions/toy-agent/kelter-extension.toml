@@ -1,0 +1,16 @@
+# An `agent` capability extension: a REMOTE A2A agent Kelter dials as a
+# client. Unlike tool/memory extensions, nothing is spawned — `card_url`
+# points at the agent's Agent Card, and the kernel's A2A egress is pinned to
+# that host (SSRF allowlist). The `network` permission is REQUIRED for any
+# agent extension.
+
+[extension]
+name = "toy"
+description = "Toy remote A2A agent (uppercase echo) — outbound delegation target"
+provides = ["agent"]
+
+[permissions]
+network = true
+
+[agent]
+card_url = "http://127.0.0.1:7590"

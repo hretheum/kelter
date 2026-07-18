@@ -1,2 +1,2 @@
-[2m2026-07-18T18:28:34.123341Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m policy engine: local:qwen2.5-0.5b-instruct
-Error: extension manifest error: extension 'futuristic' declares capability 'agent', which this runtime does not implement yet — refusing to load rather than silently ignoring it
+[2m2026-07-18T19:36:58.752809Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m policy engine: local:qwen2.5-0.5b-instruct
+Error: extension manifest error: extension 'futuristic' declares capability 'model-provider', which this runtime does not implement yet — refusing to load rather than silently ignoring it

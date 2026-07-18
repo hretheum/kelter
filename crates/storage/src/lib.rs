@@ -334,6 +334,7 @@ mod tests {
             policy: "mock".into(),
             created_at: 1,
             usage: Default::default(),
+            agent_usage: Default::default(),
         }
     }
 

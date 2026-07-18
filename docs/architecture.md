@@ -76,7 +76,13 @@ it to the matching kernel seam. `tools` extensions join the action space
 (kernel validation + journal); `memory` extensions serve the reserved
 `memory_write`/`memory_retrieve`/`memory_upsert` MCP tools behind the
 `MemoryProvider` seam with kernel-side response-schema validation; `agent`
-and `model-provider` are reserved and refuse to load until implemented.
+extensions declare a **remote** A2A endpoint (Agent Card URL + required
+`network` permission) and join the action space as `delegate_to_<name>`;
+the kernel dials them as a governed A2A client — origin-pinned egress
+(SSRF allowlist), validated responses, and durable delegation (the remote
+task id is journaled at creation so a crash-resume reconnects via `GetTask`
+instead of re-delegating). `model-provider` is reserved and refuses to load
+until implemented.
 Unknown capabilities or permission keys fail startup loudly. The built-in
 durable memory is dogfooded through this same seam (spawned
 `memory-server`, no in-process shortcut); an external memory extension
@@ -157,5 +163,6 @@ explicitly v2+.
 | `memory` | memory providers | `MemoryProvider`, `InMemoryProvider`, `Episode`, `Provenance` |
 | `api` | HTTP+WS contract | `router`, `serve`, `serve_listener` |
 | `storage` | durable persistence | `Db`, `SqliteRunStore`, `SqliteMemoryProvider` |
-| `daemon` | headless assembly, resume-on-startup, OTel init | bin `kelter` |
+| `a2a` | outbound A2A client (ADR 0009) | `A2aActionSource`, `A2aClient`, `RemoteAgent` |
+| `daemon` | headless assembly, resume-on-startup, OTel init, composite action source | bin `kelter` |
 | `apps/desktop` | Tauri shell | commands `start_standalone`, `open_ui` |

@@ -2,8 +2,18 @@
 //! talk MCP over stdio, and drive the whole read→extract→report pipeline
 //! through the kernel's ActionSource seam (schema → validate → execute).
 
-use kernel_core::{ActionSource, Latitude, ProposedAction};
+use kernel_core::{ActionSource, ExecutionContext, Latitude, ProposedAction};
 use mcp::{McpToolSource, ServerSpec};
+use std::sync::Arc;
+
+fn test_ctx() -> ExecutionContext {
+    ExecutionContext::new(
+        uuid::Uuid::new_v4(),
+        0,
+        Arc::new(kernel_core::InMemoryRunStore::new()),
+        Default::default(),
+    )
+}
 use serde_json::json;
 
 const SAMPLE: &str = "# Sample Doc\n\n## Part A\n\nA [link](https://example.org/x).\n";
@@ -52,7 +62,7 @@ async fn full_pipeline_over_real_mcp_stdio() {
             rationale: None,
         })
         .unwrap();
-    let r = source.execute(&v).await.unwrap();
+    let r = source.execute(&v, &test_ctx()).await.unwrap();
     assert_eq!(r["saved_as"], "raw.md");
 
     // Step 2: extract_structure.
@@ -63,7 +73,7 @@ async fn full_pipeline_over_real_mcp_stdio() {
             rationale: None,
         })
         .unwrap();
-    let r = source.execute(&v).await.unwrap();
+    let r = source.execute(&v, &test_ctx()).await.unwrap();
     assert_eq!(r["links"], 1);
     assert_eq!(r["title"], "Sample Doc");
 
@@ -75,7 +85,7 @@ async fn full_pipeline_over_real_mcp_stdio() {
             rationale: None,
         })
         .unwrap();
-    let r = source.execute(&v).await.unwrap();
+    let r = source.execute(&v, &test_ctx()).await.unwrap();
     assert_eq!(r["output"], "report.md");
 
     let report = std::fs::read_to_string(dir.join("report.md")).unwrap();
@@ -97,6 +107,6 @@ async fn tool_error_surfaces_as_execution_error() {
             rationale: None,
         })
         .unwrap();
-    let err = source.execute(&v).await.unwrap_err();
+    let err = source.execute(&v, &test_ctx()).await.unwrap_err();
     assert!(err.to_string().contains("missing.md"));
 }

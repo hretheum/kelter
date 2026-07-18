@@ -6,6 +6,7 @@ node_modules
 extensions/*/.venv
 examples/extensions/*/.venv
 examples/extensions/*/memstore.json
+examples/a2a-agent/.venv
 /.bootstrap/
 
 # Secrets & local env — never commit keys

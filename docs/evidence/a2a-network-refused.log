@@ -1,0 +1,2 @@
+[2m2026-07-18T19:37:31.566258Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m policy engine: local:qwen2.5-0.5b-instruct
+Error: extension manifest error: agent extension 'nonet' does not request the `network` permission — a remote agent cannot be dialed without it; declare [permissions] network = true

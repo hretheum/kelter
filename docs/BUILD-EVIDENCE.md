@@ -353,3 +353,85 @@ in ADR 0008.
 mcp (Python) 1.28.1 · rmcp 2.2.0 · rusqlite 0.40.1 — all unchanged from
 Phase 3; no new dependencies added beyond wiring `jsonschema`/`storage`
 into the `mcp` crate.
+
+## Phase 4b — governed, durable outbound A2A
+
+Date: 2026-07-18 (fifth pass). Precondition verified: 4a + Phase 3 on origin
+(capability registry with reserved `agent` in `crates/mcp/src/extensions.rs`
++ ADR 0008; journal/durability + ADR 0007). Scope: OUTBOUND only (Kelter as
+an A2A client delegating to remote agents); inbound + subprocess network
+sandboxing explicitly deferred.
+
+### 1. Sources verified live (Phase 4b)
+
+| Area | What was verified | How |
+|---|---|---|
+| A2A protocol v1.0.0 | well-known path `/.well-known/agent-card.json`; card has `supportedInterfaces[]` (not top-level `url`) — the JSONRPC binding's `url` is the endpoint; **PascalCase** JSON-RPC methods `SendMessage`/`GetTask` (not slash-style); `SendMessage` returns a oneof Task|Message (JSON `result.task`/`result.message`, no `kind`); Task = `{id, contextId, status:{state}, artifacts[], history[]}`; states are full enum strings `TASK_STATE_*` (COMPLETED/FAILED/CANCELED/REJECTED terminal; INPUT/AUTH_REQUIRED interrupted); `GetTask{id, historyLength?}` returns the Task unwrapped (the reconnect primitive); result text at `task.artifacts[].parts[].text`; every request needs `A2A-Version` header; A2A errors `-32001..-32009` (TaskNotFoundError=-32001) | raw `specification.md` + `a2a.proto` from github.com/a2aproject/A2A main (the a2a-protocol.org rendered page was too large for reliable summarization — used canonical source) |
+| A2A SDK landscape | official a2aproject Rust SDK published as `a2a-lf`/`a2a-client-lf` (0.x, released the day before — very new); the plain `a2a-rs` crate is an *unrelated* third party; Python official `a2a-sdk` 1.1.1 (Starlette/FastAPI optional) | crates.io + pypi JSON APIs + a2aproject repo list |
+
+### 2. The two key design decisions
+
+**A2A client = minimal own, not the SDK.** The JSON-RPC binding needs two
+methods + card resolution; a hand-rolled `reqwest`+`serde` client (~470
+lines incl. the action source) keeps the egress trivially wrappable in the
+origin-pin/SSRF gate and keeps a day-old 0.x crate out of the trust path.
+The official `a2a-client-lf` is noted as a future swap. The Python **toy
+target** likewise skips the SDK (a ~90-line Starlette server) — it is the
+delegation *target*, not Kelter-as-server (inbound is out of scope).
+
+**Durable delegation = journaled task id + `GetTask` reconnect.** A new
+`Note` journal entry records the remote task id via
+`ExecutionContext::record_note` the instant the task is created (before
+polling). Resume folds notes per step; if the id is present the client
+reconnects with `GetTask` and never re-sends. This is the A2A analogue of
+Phase 3's intent→receipt idempotency, across a process+network boundary.
+
+### 3. Decision log (Phase 4b)
+
+| Decision | Rationale |
+|---|---|
+| `agent` extension = remote endpoint (`[agent] card_url`), never spawned; `network` permission REQUIRED | An agent is dialed, not run; the kernel owns that egress, so `network` (only *recorded* in 4a) is now *enforced* here — an agent manifest without it is refused at load. |
+| `ExecutionContext` handed to `ActionSource::execute` (trait change) | Gives an action source durable journaling (`record_note`/`note`) and per-agent attribution without leaking the store into every tool. Cross-cutting but mechanical; all existing sources updated, MCP tools ignore it. |
+| `CompositeActionSource` merges MCP tools + A2A delegations | One action space, uniform kernel validation/journal/durability over local tools and remote delegations. |
+| SSRF allowlist: pin every dial to the `card_url` origin; disable redirects; re-check on each RPC | The dial target must not be steerable by the model or a hostile Agent Card (e.g. cloud metadata IP). This is the enforceable case *because* the A2A client is the kernel's. |
+| Reject unknown A2A task states as protocol violations | Same trust posture as the 4a memory schema gate: a lying agent cannot inject an unvalidated observation. |
+| Interactive states (`input-required`/`auth-required`) → explicit step failure | Outbound delegation v1 is fire-and-collect; human-in-the-loop remote tasks are a later increment (declared, not faked). |
+| Per-agent accounting on `run.agent_usage` | Extends Phase 3 per-run accounting; surfaced by the runs API. |
+| Subprocess-extension egress still un-sandboxed — documented, not simulated | A2A egress is kernel-owned (enforced here); tool/memory subprocess egress needs container/WASM network isolation (staged). Keeping the honest ADR-0008 boundary, not regressing to pretending. |
+
+### 4. Definition-of-done evidence (Phase 4b)
+
+| Gate | Result | Raw log |
+|---|---|---|
+| build/test/clippy/fmt | PASS — **71 tests, 0 failures (25 suites)** incl. 8 A2A client/delegation tests + 3 new registry agent tests | `evidence/phase4b-gates.log` |
+| Naming | codename grep = 0; `agentkernel` only in historical evidence + notes | `evidence/phase4b-naming-check.log` |
+| Registry: agent = remote endpoint; no-`network` refused; tool/memory no regression | PASS — unit tests (agent loads with card_url+network; refused without network; needs `[agent]` not `[server]`); live startup refusal of a no-network agent; tool + memory smokes green | `evidence/a2a-network-refused.log`; `scripts/smoke-extension.sh`, `scripts/smoke-memory-extension.sh` |
+| Outbound delegation e2e | PASS — a real 0.5B run used `delegate_to_toy`; the toy agent's answer (`SUMMARIZE KELTER`) returned as a validated observation journaled with agent identity; `run.agent_usage` = `{toy:{delegations:1, remote_ms:~6000}}` | `evidence/a2a-resume-run.json`, `evidence/a2a-durable.log` |
+| **Durable A2A (money shot)** | **PASS** — delegation created a remote task (id journaled); daemon killed at `after_a2a_create`; resume log shows `reconnecting to existing remote task from the journal — NOT re-delegating`; run completed referencing the SAME task id — zero re-delegation | `evidence/a2a-durable.log`, `evidence/a2a-resume-run.json` |
+| Network enforced | PASS — (a) agent without `network` → startup refused; (b) SSRF: a card advertising an endpoint on another host is refused (unit test `ssrf_refuses_endpoint_outside_declared_host`) | `evidence/a2a-network-refused.log`; `crates/a2a/tests/a2a_client_test.rs` |
+| Governance: hostile response rejected; controlled degradation | PASS — unknown task state rejected (unit test); remote timeout/failure → explicit step failure (poll timeout + non-completed terminal states) | `crates/a2a/tests/a2a_client_test.rs` |
+| No secrets / demo localhost-only / no push | PASS — toy agent binds 127.0.0.1; key env-only; commits local | — |
+
+### 5. Uncertainties / TODO for human review (Phase 4b)
+
+- **Subprocess-extension egress is NOT sandboxed** (tool/memory servers can
+  make their own network calls) — the honest ADR-0008 boundary; the real
+  fix (container `--network none` / WASM) is a separate staged increment.
+  Only the kernel-owned A2A egress is enforced here.
+- Inbound A2A (Kelter as an A2A server / Agent Card exposure) is out of
+  scope — the toy server is a delegation target, not Kelter.
+- Interactive remote tasks (`input-required`/`auth-required`) fail the step
+  rather than pausing for human input — a later increment.
+- A2A auth (the card's `securitySchemes`) is not exercised — the toy agent
+  is unauthenticated localhost; a real agent needs credential handling
+  (env-only) before use.
+- The official `a2a-client-lf` crate (day-old 0.x) may be worth adopting
+  once stable; the minimal client covers the two methods used.
+- Poll timeout is a fixed 120s; long-running remote tasks would want
+  push-notification (A2A `pushNotifications`) instead of polling.
+
+### 6. Version pins observed (Phase 4b)
+
+A2A protocol v1.0.0 (own minimal client; no A2A crate dependency) · reqwest
+0.12 (unchanged) · rmcp 2.2.0 · rusqlite 0.40.1 — no new Rust dependencies.
+Toy target: starlette + uvicorn (example venv, not a repo dependency).

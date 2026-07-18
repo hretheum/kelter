@@ -52,7 +52,7 @@ path = "$RUN_DIR/kelter.db"
 [tools]
 workspace = "$RUN_DIR/work"
 bundled_tools = false
-extension_dirs = ["${REPO_ROOT}/examples/extensions"]
+extension_dirs = ["${REPO_ROOT}/examples/extensions/memstore"]
 
 [[tools.servers]]
 name = "ledger"
@@ -119,7 +119,7 @@ mkdir -p "$BAD_DIR/exts/futuristic"
 cat > "$BAD_DIR/exts/futuristic/kelter-extension.toml" <<EOF
 [extension]
 name = "futuristic"
-provides = ["agent"]
+provides = ["model-provider"]
 
 [server]
 command = "true"
@@ -134,7 +134,7 @@ set -e
 [ "$RC" -ne 0 ] || die "daemon should have refused to start"
 grep -q "does not implement yet" "$BAD_DIR/daemon.log" \
   || die "expected a loud unimplemented-capability error, got: $(tail -2 "$BAD_DIR/daemon.log")"
-log "  startup refused with: $(grep -o 'extension .futuristic. declares capability .agent..*' "$BAD_DIR/daemon.log" | head -1 | cut -c1-90)…"
+log "  startup refused with: $(grep -o 'extension .futuristic. declares capability .model-provider..*' "$BAD_DIR/daemon.log" | head -1 | cut -c1-90)…"
 
 if [ -n "$EVIDENCE_DIR" ]; then
   mkdir -p "$EVIDENCE_DIR"

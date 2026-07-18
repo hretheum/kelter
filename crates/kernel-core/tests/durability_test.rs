@@ -13,9 +13,9 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use kernel_core::{
-    ActionSchema, ActionSource, ActionSpec, ExecutionError, JournalEntry, Kernel, KernelConfig,
-    Latitude, PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction, RunStatus,
-    RunStore, Usage, ValidatedAction, IDEMPOTENCY_KEY_ARG,
+    ActionSchema, ActionSource, ActionSpec, ExecutionContext, ExecutionError, JournalEntry, Kernel,
+    KernelConfig, Latitude, PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction,
+    RunStatus, RunStore, Usage, ValidatedAction, IDEMPOTENCY_KEY_ARG,
 };
 use memory::InMemoryProvider;
 
@@ -103,7 +103,11 @@ impl ActionSource for RecordingTools {
         })
     }
 
-    async fn execute(&self, action: &ValidatedAction) -> Result<serde_json::Value, ExecutionError> {
+    async fn execute(
+        &self,
+        action: &ValidatedAction,
+        _ctx: &ExecutionContext,
+    ) -> Result<serde_json::Value, ExecutionError> {
         self.executions
             .lock()
             .await

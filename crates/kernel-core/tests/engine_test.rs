@@ -8,8 +8,9 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use kernel_core::{
-    ActionSchema, ActionSource, ActionSpec, ExecutionError, Kernel, KernelConfig, Latitude,
-    PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction, RunStatus, ValidatedAction,
+    ActionSchema, ActionSource, ActionSpec, ExecutionContext, ExecutionError, Kernel, KernelConfig,
+    Latitude, PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction, RunStatus,
+    ValidatedAction,
 };
 use memory::{InMemoryProvider, MemoryProvider};
 
@@ -32,7 +33,11 @@ impl ActionSource for MockTools {
         })
     }
 
-    async fn execute(&self, action: &ValidatedAction) -> Result<serde_json::Value, ExecutionError> {
+    async fn execute(
+        &self,
+        action: &ValidatedAction,
+        _ctx: &ExecutionContext,
+    ) -> Result<serde_json::Value, ExecutionError> {
         assert_eq!(action.action(), "echo");
         Ok(json!({"echoed": action.arguments()["message"]}))
     }
@@ -157,6 +162,7 @@ async fn tool_failure_is_fed_back_not_fatal() {
         async fn execute(
             &self,
             _action: &ValidatedAction,
+            _ctx: &ExecutionContext,
         ) -> Result<serde_json::Value, ExecutionError> {
             Err(ExecutionError::Tool("disk full".into()))
         }
