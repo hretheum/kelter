@@ -1,0 +1,25 @@
+docs/evidence/smoke-openrouter-report.md
+  s_ebdbabe3e659c2::t_a6e49191fbaa9f 1-18
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_e882a06e5b9c4c 56
+  s_ebdbabe3e659c2::t_69bc32cba6e502 84-86
+  s_ebdbabe3e659c2::t_2105013c115d80 55
+docs/evidence/smoke-openrouter-run.json
+  s_ebdbabe3e659c2::t_a6e49191fbaa9f 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "d0c045cd21b9f7da935c6dde821c4294c19029f7",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
