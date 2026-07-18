@@ -81,6 +81,15 @@ API keys, and implement constrained decoding, and OpenRouter already covers the
 "new models" demand through configuration. Not every axis needs to be
 runtime-pluggable.
 
+## Packaging & distribution
+
+Release hardening, not a capability phase. The Tauri desktop shell currently
+bundles a bare `.app`; shipping it to users means adding a `.dmg` target,
+Developer ID signing and notarization (to clear Gatekeeper), and a universal
+(arm64 + x86_64) build. Windows and Linux bundle targets follow the same
+pattern. The container / daemon path already ships via the Quadlet unit and
+Dockerfile.
+
 ## Beyond
 
 Multi-master offline / online sync (CRDTs) stays explicitly out of scope until
