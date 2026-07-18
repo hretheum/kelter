@@ -64,6 +64,12 @@ pub enum JournalEntry {
         ok: bool,
         result: serde_json::Value,
     },
+    /// The validated plan a `plan`-mode run will execute. Journaled once,
+    /// the moment the model proposes it: on resume the plan is replayed from
+    /// here and the model is NOT re-queried for it (the plan is a memoized
+    /// decision). Node execution reuses `Intent`/`Receipt`/`Note` keyed by
+    /// the node's index.
+    PlanProposed { plan: crate::plan::Plan },
     /// The run reached a terminal state.
     Terminal {
         status: RunStatus,
@@ -81,7 +87,7 @@ impl JournalEntry {
             | JournalEntry::Intent { step, .. }
             | JournalEntry::Note { step, .. }
             | JournalEntry::Receipt { step, .. } => Some(*step),
-            JournalEntry::Terminal { .. } => None,
+            JournalEntry::PlanProposed { .. } | JournalEntry::Terminal { .. } => None,
         }
     }
 }

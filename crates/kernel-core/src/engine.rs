@@ -241,6 +241,17 @@ pub struct RunEventEnvelope {
     pub event: RunEvent,
 }
 
+/// How a run is driven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RunMode {
+    /// The model picks one action at a time (Phases 1–4b).
+    #[default]
+    Step,
+    /// The model proposes a validated DAG up front; the kernel executes it
+    /// durably (ADR 0010).
+    Plan,
+}
+
 #[derive(Debug, Clone)]
 pub struct KernelConfig {
     pub max_steps: u32,
@@ -248,6 +259,7 @@ pub struct KernelConfig {
     /// Gate for the self-improvement stub: when false, no reflection episode
     /// is ever written. No silent memory self-mutation.
     pub reflection_enabled: bool,
+    pub mode: RunMode,
 }
 
 impl Default for KernelConfig {
@@ -256,8 +268,16 @@ impl Default for KernelConfig {
             max_steps: 12,
             latitude: Latitude::Standard,
             reflection_enabled: true,
+            mode: RunMode::Step,
         }
     }
+}
+
+/// Actions named `delegate_to_*` are A2A delegations; everything else is a
+/// plain tool. This is the naming convention the A2A source emits, and the
+/// classifier plan validation uses to check node types.
+pub fn is_a2a_action(name: &str) -> bool {
+    name.starts_with("delegate_to_")
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -410,6 +430,10 @@ impl Kernel {
 
         run.status = RunStatus::Running;
         self.store.put(run.clone()).await?;
+
+        if self.config.mode == RunMode::Plan {
+            return self.execute_plan(run, journal).await;
+        }
 
         let latitude = self.config.latitude;
         let mut seq: u64 = 1;
@@ -831,6 +855,22 @@ impl Kernel {
             )),
         ));
 
+        self.finalize_run(run, status, output, error, seq).await
+    }
+
+    /// Journal the terminal state, persist the run, write the gated
+    /// reflection episode, and emit the completed/failed event. Shared by
+    /// step mode and plan mode.
+    async fn finalize_run(
+        &self,
+        mut run: Run,
+        status: RunStatus,
+        output: Option<serde_json::Value>,
+        error: Option<String>,
+        mut seq: u64,
+    ) -> Result<Run, KernelError> {
+        let run_id = run.id;
+
         // Terminal state is journaled first, then applied to the run record.
         self.store
             .append_journal(
@@ -848,7 +888,7 @@ impl Kernel {
         run.error = error.clone();
         self.store.put(run.clone()).await?;
 
-        // 5. Gated, provenance-tagged reflection stub: write an episode.
+        // Gated, provenance-tagged reflection stub: write an episode.
         if self.config.reflection_enabled {
             let episode = Episode {
                 id: Uuid::new_v4(),
@@ -890,6 +930,424 @@ impl Kernel {
         }
 
         Ok(run)
+    }
+
+    /// Plan mode (ADR 0010): the model proposes a DAG, the kernel validates
+    /// it before running anything, then executes nodes durably.
+    ///
+    /// The plan is a **memoized decision** — journaled once via
+    /// `PlanProposed`; on resume it is replayed and the model is NOT
+    /// re-queried for it. Each node reuses the per-action durable machinery
+    /// (`Intent → execute → Receipt`, idempotency keys, A2A reconnect notes)
+    /// keyed by its node index, so completed nodes are never re-run.
+    async fn execute_plan(
+        &self,
+        mut run: Run,
+        journal: Vec<JournalEntry>,
+    ) -> Result<Run, KernelError> {
+        let run_id = run.id;
+        let mut seq: u64 = 1;
+        let latitude = self.config.latitude;
+
+        // 1. The action space this plan is validated and executed against.
+        let mut schema = self.tools.action_schema(latitude).await?;
+
+        // 2. Obtain the plan: replay the journaled one, or ask the model
+        //    ONCE (offering only `propose_plan`, schema-constrained).
+        let journaled_plan = journal.iter().find_map(|e| match e {
+            JournalEntry::PlanProposed { plan } => Some(plan.clone()),
+            _ => None,
+        });
+
+        let plan = match journaled_plan {
+            Some(plan) => {
+                tracing::info!(
+                    %run_id,
+                    "resume: replaying journaled plan — model NOT queried"
+                );
+                plan
+            }
+            None => {
+                let propose_schema = ActionSchema {
+                    actions: vec![ActionSpec {
+                        name: crate::plan::PROPOSE_PLAN_ACTION.into(),
+                        description: "Propose a plan: a DAG of typed nodes (tool / a2a / review) \
+                                      with dependencies. Keep it minimal and correct."
+                            .into(),
+                        parameters: crate::plan::plan_schema(),
+                    }],
+                };
+                let context = PolicyContext {
+                    task: run.task.clone(),
+                    steps: Vec::new(),
+                    memory: Vec::new(),
+                    last_error: None,
+                    latitude,
+                    guidance: Some(format!(
+                        "Available tool/a2a actions: [{}]. Rules: each node needs a unique `id` \
+                         (choose short ids like n1, n2 — NOT the action name); a node's `deps` \
+                         must be [] or list OTHER nodes' ids — a node must never depend on \
+                         itself or on its own action; a `tool`/`a2a` node needs `action` + \
+                         `arguments`; a `review` node needs no action. The simplest valid plan \
+                         is one tool node with deps [].",
+                        schema
+                            .actions
+                            .iter()
+                            .map(|a| a.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )),
+                };
+                let proposal = self
+                    .oracle
+                    .propose(&context, &propose_schema)
+                    .await
+                    .map_err(|e| ExecutionError::Tool(format!("plan proposal failed: {e}")))?;
+                if let Some(u) = proposal.usage {
+                    run.usage.add(&u);
+                }
+                let validated = propose_schema.validate(proposal.action).map_err(|e| {
+                    ExecutionError::Tool(format!("proposed plan is not schema-valid: {e}"))
+                })?;
+                let plan: crate::plan::Plan = serde_json::from_value(validated.arguments().clone())
+                    .map_err(|e| ExecutionError::Tool(format!("malformed plan: {e}")))?;
+                plan
+            }
+        };
+
+        // 3. Validate the plan (structure/cycles/types/references) BEFORE
+        //    any node executes. An invalid plan fails the run — no partial
+        //    side effects (this gate runs before the PlanProposed journal).
+        let validated_plan = match crate::plan::validate(plan.clone(), &schema, is_a2a_action) {
+            Ok(v) => v,
+            Err(e) => {
+                let reason = format!("plan rejected: {e}");
+                tracing::warn!(%run_id, "{reason}");
+                return self
+                    .finalize_run(run, RunStatus::Failed, None, Some(reason), seq)
+                    .await;
+            }
+        };
+
+        // Journal the accepted plan (once). On resume this is what gets
+        // replayed instead of re-querying the model.
+        if journal
+            .iter()
+            .all(|e| !matches!(e, JournalEntry::PlanProposed { .. }))
+        {
+            self.store
+                .append_journal(run_id, JournalEntry::PlanProposed { plan })
+                .await?;
+        }
+        self.emit(
+            run_id,
+            seq,
+            RunEvent::Proposed {
+                step: 0,
+                action: crate::plan::PROPOSE_PLAN_ACTION.into(),
+                arguments: serde_json::json!({ "nodes": validated_plan.len() }),
+                rationale: Some("validated plan".into()),
+            },
+        );
+        seq += 1;
+
+        // Ensure the review action is available for review nodes.
+        schema.actions.push(ActionSpec {
+            name: crate::plan::REVIEW_ACTION.into(),
+            description: "Approve or reject based on upstream node outputs.".into(),
+            parameters: crate::plan::review_schema(),
+        });
+
+        // 4. Execute nodes in topological order, each durably, keyed by its
+        //    node index so a resume skips completed nodes.
+        let mut node_outputs: std::collections::HashMap<String, serde_json::Value> =
+            std::collections::HashMap::new();
+        let mut failure: Option<String> = None;
+
+        for (node_index, node) in validated_plan
+            .nodes_in_order()
+            .map(|(i, n)| (i, n.clone()))
+            .collect::<Vec<_>>()
+        {
+            let step = node_index as u32;
+            let folded = fold_step(&journal, step);
+            let node_span = tracing::info_span!("kelter.plan_node", node = %node.id, step);
+
+            // Completed already (resume)? Use the journaled receipt.
+            if let Some((ok, result)) = folded.receipt.clone() {
+                tracing::info!(
+                    %run_id, node = %node.id,
+                    "resume: node receipt found — skipping execution"
+                );
+                node_outputs.insert(node.id.clone(), result.clone());
+                self.record_node_step(&mut run, step, &node, result, ok)
+                    .await?;
+                if !ok {
+                    failure = Some(format!("node '{}' had failed before the crash", node.id));
+                    break;
+                }
+                continue;
+            }
+
+            let deps_context: Vec<serde_json::Value> = node
+                .deps
+                .iter()
+                .filter_map(|d| node_outputs.get(d).cloned())
+                .collect();
+
+            let (result, ok) = self
+                .execute_plan_node(&mut run, step, &node, &deps_context, &folded, &schema)
+                .instrument(node_span)
+                .await?;
+
+            node_outputs.insert(node.id.clone(), result.clone());
+            self.emit(
+                run_id,
+                seq,
+                RunEvent::Executed {
+                    step,
+                    action: node
+                        .action
+                        .clone()
+                        .unwrap_or_else(|| format!("{:?}", node.node_type).to_lowercase()),
+                    ok,
+                    result,
+                },
+            );
+            seq += 1;
+
+            if !ok {
+                // Fail-on-node-error: adaptive re-planning is deliberately
+                // deferred (ADR 0010) — a node failure fails the plan
+                // explicitly rather than silently guessing a new plan.
+                failure = Some(format!("plan node '{}' failed", node.id));
+                break;
+            }
+        }
+
+        let (status, output, error) = match failure {
+            None => (
+                RunStatus::Completed,
+                Some(serde_json::json!({
+                    "summary": format!("plan completed: {} node(s)", validated_plan.len()),
+                    "nodes": node_outputs,
+                })),
+                None,
+            ),
+            Some(err) => (RunStatus::Failed, None, Some(err)),
+        };
+        self.finalize_run(run, status, output, error, seq).await
+    }
+
+    /// Record a plan node as a run step (mirrors StepRecord for observability
+    /// and reflection).
+    async fn record_node_step(
+        &self,
+        run: &mut Run,
+        step: u32,
+        node: &crate::plan::PlanNode,
+        result: serde_json::Value,
+        ok: bool,
+    ) -> Result<(), KernelError> {
+        run.steps.push(StepRecord {
+            index: step,
+            action: node
+                .action
+                .clone()
+                .unwrap_or_else(|| format!("{:?}", node.node_type).to_lowercase()),
+            arguments: node.arguments.clone(),
+            result,
+            ok,
+        });
+        self.store.put(run.clone()).await?;
+        Ok(())
+    }
+
+    /// Execute one plan node through the appropriate existing seam, inside
+    /// the durable intent→receipt boundary keyed by the node's index.
+    async fn execute_plan_node(
+        &self,
+        run: &mut Run,
+        step: u32,
+        node: &crate::plan::PlanNode,
+        deps_context: &[serde_json::Value],
+        folded: &crate::journal::StepJournal,
+        schema: &ActionSchema,
+    ) -> Result<(serde_json::Value, bool), KernelError> {
+        let run_id = run.id;
+
+        // Build the node's validated action. Every node — tool, a2a, review
+        // — goes through kernel-side schema validation (governance is NOT
+        // bypassed by planning).
+        let (validated, action_label) = match node.node_type {
+            crate::plan::NodeType::Review => {
+                // A review node is a kernel-owned decision. It calls the
+                // oracle (memoized via the receipt) for an approve/reject
+                // verdict over its upstream outputs.
+                let review_schema = ActionSchema {
+                    actions: vec![schema
+                        .spec(crate::plan::REVIEW_ACTION)
+                        .expect("review action present")
+                        .clone()],
+                };
+                let context = PolicyContext {
+                    task: format!(
+                        "Review the following upstream results and decide whether the work is \
+                         acceptable:\n{}",
+                        serde_json::to_string(deps_context).unwrap_or_default()
+                    ),
+                    steps: Vec::new(),
+                    memory: Vec::new(),
+                    last_error: None,
+                    latitude: self.config.latitude,
+                    guidance: Some(
+                        "Call review_verdict with approve=true only if the results look correct."
+                            .into(),
+                    ),
+                };
+                let proposal = self
+                    .oracle
+                    .propose(&context, &review_schema)
+                    .await
+                    .map_err(|e| ExecutionError::Tool(format!("review failed: {e}")))?;
+                if let Some(u) = proposal.usage {
+                    run.usage.add(&u);
+                }
+                let validated = review_schema
+                    .validate(proposal.action)
+                    .map_err(|e| ExecutionError::Tool(format!("review verdict invalid: {e}")))?;
+                let approved = validated.arguments()["approve"].as_bool().unwrap_or(false);
+                // A review node has no external side effect: journal its
+                // verdict directly as the receipt (memoized decision).
+                let result = validated.arguments().clone();
+                self.store
+                    .append_journal(
+                        run_id,
+                        JournalEntry::Receipt {
+                            step,
+                            ok: approved,
+                            result: result.clone(),
+                        },
+                    )
+                    .await?;
+                self.record_node_step(run, step, node, result.clone(), approved)
+                    .await?;
+                return Ok((result, approved));
+            }
+            crate::plan::NodeType::Tool | crate::plan::NodeType::A2a => {
+                let action = node.action.clone().unwrap_or_default();
+                let proposed = crate::action::ProposedAction {
+                    action: action.clone(),
+                    arguments: node.arguments.clone(),
+                    rationale: Some(format!("plan node '{}'", node.id)),
+                };
+                let validated = schema.validate(proposed).map_err(|e| {
+                    // Should not happen (plan validation checked existence),
+                    // but arguments are validated here per-action.
+                    ExecutionError::Tool(format!("node '{}' action invalid: {e}", node.id))
+                })?;
+                (validated, action)
+            }
+        };
+
+        // Durable intent → execute → receipt (identical contract to step
+        // mode; idempotency + A2A reconnect apply).
+        let keyed = schema
+            .spec(validated.action())
+            .map(|s| s.supports_idempotency_key())
+            .unwrap_or(false);
+
+        let idempotency_key = match folded.intent.clone() {
+            Some((_, _, journaled_key)) => {
+                if !keyed {
+                    let reason = format!(
+                        "cannot safely resume plan node '{}': action '{}' was dispatched before \
+                         the crash but wrote no receipt and declares no idempotency_key — manual \
+                         check required.",
+                        node.id, action_label
+                    );
+                    self.store
+                        .append_journal(
+                            run_id,
+                            JournalEntry::Receipt {
+                                step,
+                                ok: false,
+                                result: serde_json::json!({ "error": reason }),
+                            },
+                        )
+                        .await?;
+                    self.record_node_step(
+                        run,
+                        step,
+                        node,
+                        serde_json::json!({"error": reason}),
+                        false,
+                    )
+                    .await?;
+                    return Ok((
+                        serde_json::json!({ "error": "manual check required" }),
+                        false,
+                    ));
+                }
+                tracing::info!(
+                    %run_id, node = %node.id,
+                    "resume: dangling node intent — re-dispatching with the journaled key"
+                );
+                journaled_key
+            }
+            None => {
+                let key = format!("{run_id}:plan:{step}");
+                self.store
+                    .append_journal(
+                        run_id,
+                        JournalEntry::Intent {
+                            step,
+                            action: validated.action().to_string(),
+                            arguments: validated.arguments().clone(),
+                            idempotency_key: key.clone(),
+                        },
+                    )
+                    .await?;
+                key
+            }
+        };
+
+        crash_point("after_intent", validated.action());
+
+        let mut exec_action = validated.clone();
+        if keyed {
+            exec_action.inject_idempotency_key(&idempotency_key);
+        }
+        let exec_ctx =
+            ExecutionContext::new(run_id, step, self.store.clone(), folded.notes.clone());
+        let (result, ok) = match self.tools.execute(&exec_action, &exec_ctx).await {
+            Ok(v) => (v, true),
+            Err(e) => (serde_json::json!({ "error": e.to_string() }), false),
+        };
+
+        crash_point("after_execute", validated.action());
+
+        if let Ok(attributions) = exec_ctx.agent_usage.into_inner() {
+            for (agent, elapsed_ms) in attributions {
+                let entry = run.agent_usage.entry(agent).or_default();
+                entry.delegations += 1;
+                entry.remote_ms += elapsed_ms;
+            }
+        }
+
+        self.store
+            .append_journal(
+                run_id,
+                JournalEntry::Receipt {
+                    step,
+                    ok,
+                    result: result.clone(),
+                },
+            )
+            .await?;
+        self.record_node_step(run, step, node, result.clone(), ok)
+            .await?;
+        Ok((result, ok))
     }
 }
 

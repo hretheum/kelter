@@ -14,16 +14,18 @@ pub mod action;
 pub mod engine;
 pub mod journal;
 pub mod oracle;
+pub mod plan;
 pub mod store;
 
 pub use action::{
     ActionSchema, ActionSpec, ProposedAction, ValidatedAction, ValidationError, IDEMPOTENCY_KEY_ARG,
 };
 pub use engine::{
-    crash_point, ActionSource, AgentUsage, CompositeActionSource, ExecutionContext, ExecutionError,
-    Kernel, KernelConfig, KernelError, Run, RunEvent, RunEventEnvelope, RunStatus, StepRecord,
-    FINISH_ACTION,
+    crash_point, is_a2a_action, ActionSource, AgentUsage, CompositeActionSource, ExecutionContext,
+    ExecutionError, Kernel, KernelConfig, KernelError, Run, RunEvent, RunEventEnvelope, RunMode,
+    RunStatus, StepRecord, FINISH_ACTION,
 };
 pub use journal::{JournalEntry, Usage};
 pub use oracle::{Latitude, PolicyContext, PolicyError, PolicyOracle, Proposal};
+pub use plan::{Plan, PlanNode, ValidatedPlan};
 pub use store::{InMemoryRunStore, RunStore, StoreError};

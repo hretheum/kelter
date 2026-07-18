@@ -435,3 +435,77 @@ Phase 3's intent→receipt idempotency, across a process+network boundary.
 A2A protocol v1.0.0 (own minimal client; no A2A crate dependency) · reqwest
 0.12 (unchanged) · rmcp 2.2.0 · rusqlite 0.40.1 — no new Rust dependencies.
 Toy target: starlette + uvicorn (example venv, not a repo dependency).
+
+## Phase 4c — plan mode (validated, durable DAG)
+
+Date: 2026-07-18 (sixth pass). Precondition verified: Phase 3 + 4a + 4b on
+origin (journal/durability ADR 0007; capability registry ADR 0008; A2A
+ADR 0009). Plan mode composes those seams; no new external SDK.
+
+### 1. The key design decision: the DAG journal model
+
+A plan is a **memoized decision** — the Phase 3 replay law generalized from
+a linear sequence to a graph. The validated plan is journaled once
+(`PlanProposed`); on resume it is replayed from the journal and the model is
+NOT re-queried for it. Each node reuses the existing per-action durable
+entries (`Intent`/`Receipt`/`Note`) keyed by the node's index, so a
+completed node (receipt present) is skipped and a dangling intent
+re-dispatches with the journaled idempotency key. Review-node model calls
+are memoized as their receipts. Result: the model is consulted at most once
+for the plan plus once per review node; tool/a2a nodes need no model call;
+resume is fully deterministic. Full rationale in ADR 0010.
+
+### 2. Decision log (Phase 4c)
+
+| Decision | Rationale |
+|---|---|
+| Plan = one `propose_plan` action (schema-constrained), not a new action surface | The brief: plan composes existing seams. The plan DAG is the arguments of a single proposed action; GBNF constrains its structure. |
+| Node execution reuses the step-mode durable machinery keyed by node index | Zero new durability code path: idempotency, crash points, A2A reconnect and per-agent accounting all apply to plan nodes unchanged. |
+| `PlanProposed` is the only new journal entry | Minimal extension of ADR 0007; nodes reuse Intent/Receipt/Note. |
+| Node types `tool`/`a2a`/`review`; `a2a` node = a `delegate_to_*` action | A2A nodes inherit Phase 4b egress governance for free (they ARE actions in the composite space). `review` is kernel-owned (approve/reject over upstream outputs), memoized. |
+| Plan validation (cycles via Kahn topo-sort, type/reference checks) runs BEFORE the plan is journaled and before any node executes | Invalid plan → run fails with no side effect and no journaled plan (governance gate, like the 4a memory schema gate). |
+| Fail-on-node-error; adaptive re-planning deferred | Per the phase's failure guidance — never ship an uncertain re-plan that pretends to work. Node failure fails the plan explicitly. |
+| Plan node `arguments` constrained to a shallow string→string map under GBNF | **Empirical finding**: a generic recursive-object grammar for `arguments` makes constrained generation pathologically slow on a 0.5B (single proposal hung >180s). Bounding it to a string map made generation fast; the kernel re-validates each node's arguments against the real tool schema at execution. Tools needing non-string args in a plan are a documented follow-up. |
+
+### 3. Definition-of-done evidence (Phase 4c)
+
+| Gate | Result | Raw log |
+|---|---|---|
+| build/test/clippy/fmt | PASS — **85 tests, 0 failures (26 suites)** incl. 8 plan-validation unit tests + 5 plan-execution/durability integration tests | `evidence/phase4c-gates.log` |
+| Naming | codename grep = 0; `agentkernel` only in historical evidence + notes | `evidence/phase4c-naming-check.log` |
+| Plan validated pre-execution; invalid plan rejected | PASS live — 6/6 model-proposed plans with a self-referential dependency were rejected as cycles **before any node ran** (no side effect); the reject-before-execution gate is also unit-tested for cycle/unknown-action/type-mismatch/unknown-dep/dup-id/empty | `evidence/plan-validation.log`, `crates/kernel-core/src/plan.rs` tests |
+| **Durable plan (money shot)** | **PASS (deterministic)** — `resume_replays_plan_and_skips_completed_nodes`: a run whose journal holds `PlanProposed` + node-0 receipt resumes, does NOT re-run node 0, and calls the model exactly once (the review verdict) — proving the plan is replayed without re-querying and completed nodes are not repeated. Stronger than a live 0.5B run (see §note). | `crates/kernel-core/tests/plan_test.rs` (in gates log) |
+| Composition tool+a2a+review, each node validated + journaled | PASS (deterministic) — `plan_runs_all_node_types_in_order`: a DAG with a `record` tool node, a `delegate_to_toy` a2a node and a `review` node executes in topological order, each through its seam; review-reject fails the plan (`review_reject_fails_the_plan`) | `crates/kernel-core/tests/plan_test.rs` |
+| Governance not bypassed per node | PASS — nodes go through kernel-side schema validation + journal at execution (same path as step mode); a2a node inherits 4b egress governance (it is a composite-space action) | code + a2a smoke |
+| No secrets / demo localhost-only / no push | PASS | — |
+
+**Note on the live money shot.** Live plan *proposal* on the 0.5B is
+slow/unreliable: the small model rambles under the constrained plan grammar
+or self-references node ids (consistently producing a cycle the kernel
+rejects). That is a model-capability limit, not a kernel one — so the
+durable-execution money shot is proven by the deterministic harness
+(authoritative), while the live smoke proves the reliable-live part: the
+kernel validating and rejecting bad plans before execution.
+
+### 4. Uncertainties / TODO for human review (Phase 4c)
+
+- **Live durable-plan execution on a 0.5B is not smoke-able reliably**
+  (proposal is slow/self-cyclic). Proven deterministically instead. A
+  frontier model would execute plans reliably live, but Phase 4c's tool
+  access is localhost-only (no OpenRouter for the demo), so it wasn't used.
+- Plan node `arguments` are string-valued under constrained decoding;
+  tools needing typed (int/bool/nested) args in a plan need the follow-up
+  noted in ADR 0010 (kernel validation already rejects wrong types).
+- Adaptive re-planning on node failure is deferred (fail-on-node-error
+  ships); this is the largest scoped-out piece.
+- A GBNF generator bug was found and fixed en route (enum/alternation
+  values inlined into object/array sequences weren't parenthesized, so `|`
+  escaped the rule) — this also hardens step-mode grammars for any enum
+  argument.
+- Review nodes use the policy oracle for an approve/reject verdict; a richer
+  review (structured critique, partial acceptance) is future work.
+
+### 5. Version pins observed (Phase 4c)
+
+No new dependencies. rmcp 2.2.0 · rusqlite 0.40.1 · reqwest 0.12 —
+unchanged. Plan mode is entirely in `kernel-core` (+ config plumbing).

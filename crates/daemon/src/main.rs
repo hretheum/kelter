@@ -265,6 +265,10 @@ async fn main() -> anyhow::Result<()> {
             max_steps: cfg.kernel.max_steps,
             latitude,
             reflection_enabled: cfg.kernel.reflection,
+            mode: match cfg.kernel.mode.as_str() {
+                "plan" => kernel_core::RunMode::Plan,
+                _ => kernel_core::RunMode::Step,
+            },
         },
     ));
 

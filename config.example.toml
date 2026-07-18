@@ -23,6 +23,7 @@ path = "./kelter.db"
 [kernel]
 max_steps = 12
 reflection = true    # gate for the provenance-tagged reflection stub
+mode = "step"        # "step" (one action at a time) | "plan" (validated durable DAG, ADR 0010)
 
 [tools]
 workspace = "./work" # reference MCP tools read/write inside this directory

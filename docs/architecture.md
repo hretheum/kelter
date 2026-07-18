@@ -116,6 +116,22 @@ doesn't. Exactly-once side effects under kill-and-resume are proven by
 `scripts/smoke-durability.sh`. The journal also carries per-model-call
 token usage, aggregated on the run record (`run.usage`).
 
+### Plan mode (ADR 0010)
+
+With `[kernel] mode = "plan"` the model proposes a whole DAG up front
+(`propose_plan`, schema-constrained) instead of one action at a time. The
+kernel **validates** it before executing anything — unique ids, no cycles
+(topological sort), allowed node types, referenced actions exist in the
+registry — and rejects an invalid plan pre-execution. Nodes are typed
+`tool` / `a2a` / `review` and each executes through the *existing* seam
+(the action space, the A2A delegation source, or a kernel-owned review
+decision), so per-node validation, journaling and A2A egress governance
+still apply. The plan is a memoized decision: journaled once as
+`PlanProposed`, replayed on resume without re-querying the model, with node
+receipts skipping completed nodes (durable DAG execution generalizing
+ADR 0007). Node failure fails the plan explicitly; adaptive re-planning is
+a deferred follow-up.
+
 ### Observability
 
 `tracing` spans — `kelter.run` → `kelter.step` → `kelter.model_call` /
@@ -164,5 +180,6 @@ explicitly v2+.
 | `api` | HTTP+WS contract | `router`, `serve`, `serve_listener` |
 | `storage` | durable persistence | `Db`, `SqliteRunStore`, `SqliteMemoryProvider` |
 | `a2a` | outbound A2A client (ADR 0009) | `A2aActionSource`, `A2aClient`, `RemoteAgent` |
+| `kernel-core::plan` | plan validation (DAG/cycles/types) + durable DAG execution | `Plan`, `PlanNode`, `validate`, `ValidatedPlan` |
 | `daemon` | headless assembly, resume-on-startup, OTel init, composite action source | bin `kelter` |
 | `apps/desktop` | Tauri shell | commands `start_standalone`, `open_ui` |

@@ -69,6 +69,9 @@ impl Default for ServerConfig {
 pub struct KernelSection {
     pub max_steps: u32,
     pub reflection: bool,
+    /// "step" (default, one action at a time) or "plan" (validated durable
+    /// DAG proposed up front).
+    pub mode: String,
 }
 
 impl Default for KernelSection {
@@ -76,6 +79,7 @@ impl Default for KernelSection {
         Self {
             max_steps: 12,
             reflection: true,
+            mode: "step".into(),
         }
     }
 }

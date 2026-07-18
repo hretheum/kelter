@@ -72,13 +72,33 @@ impl Generator {
                     let body = self.object_body(props);
                     self.rules.push((name.clone(), body));
                     name
+                } else if schema
+                    .get("additionalProperties")
+                    .and_then(|ap| ap.get("type"))
+                    .and_then(|t| t.as_str())
+                    == Some("string")
+                {
+                    // A bounded string→string map: cheap for the decoder's
+                    // grammar sampler (no recursion into the generic `value`
+                    // rule, which is pathologically slow on weak models).
+                    let name = self.fresh("smap");
+                    self.rules.push((
+                        name.clone(),
+                        "\"{\" ws ( string ws \":\" ws string ( ws \",\" ws string ws \":\" ws \
+                         string )* )? ws \"}\""
+                            .into(),
+                    ));
+                    name
                 } else {
                     "object".into()
                 }
             }
             Some("array") => {
                 if let Some(items) = schema.get("items") {
-                    let inner = self.value_rule(items);
+                    // Group the item expression for the same precedence
+                    // reason as object properties (an enum item would
+                    // otherwise let `|` escape the repetition).
+                    let inner = format!("( {} )", self.value_rule(items));
                     let name = self.fresh("arr");
                     self.rules.push((
                         name.clone(),
@@ -104,7 +124,10 @@ impl Generator {
                 parts.push("\",\" ws".into());
             }
             let vrule = self.value_rule(prop_schema);
-            parts.push(format!("{} ws \":\" ws {} ws", json_key(key), vrule));
+            // Parenthesize the value expression: an enum/alternation value
+            // (`"a" | "b"`) inlined bare into this sequence would let `|`
+            // (lowest precedence in GBNF) split the whole object rule.
+            parts.push(format!("{} ws \":\" ws ( {} ) ws", json_key(key), vrule));
         }
         parts.push("\"}\"".into());
         parts.join(" ")
