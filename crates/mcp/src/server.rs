@@ -14,6 +14,9 @@ pub struct ReadSourceParams {
     pub input: String,
     /// Workspace-relative file name to store the raw content under.
     pub save_as: String,
+    /// Set by the runtime on resume; this tool is a deterministic
+    /// overwrite, so replaying with the same arguments is already safe.
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -22,6 +25,8 @@ pub struct ExtractParams {
     pub source: String,
     /// Workspace-relative file name for the extracted JSON structure.
     pub save_as: String,
+    /// Set by the runtime on resume; deterministic overwrite — replay-safe.
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -32,6 +37,20 @@ pub struct ReportParams {
     pub output: String,
     /// Report format: "markdown" or "json".
     pub format: String,
+    /// Set by the runtime on resume; deterministic overwrite — replay-safe.
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct LedgerParams {
+    /// Text to append as one ledger line.
+    pub entry: String,
+    /// Workspace-relative ledger file. Default: "ledger.txt".
+    pub ledger: Option<String>,
+    /// Set by the runtime; a repeated call with the same key is a no-op
+    /// (the appended line carries the key — effect and dedupe marker are
+    /// one atomic write).
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Clone)]
@@ -82,6 +101,47 @@ impl ToolServer {
     )]
     async fn write_report(&self, Parameters(p): Parameters<ReportParams>) -> CallToolResult {
         match tools::write_report(&self.ws, &p.source, &p.output, &p.format).await {
+            Ok(v) => ok(v),
+            Err(e) => fail(e),
+        }
+    }
+
+    #[tool(
+        description = "Append one entry line to a ledger file in the workspace (a durable, observable side effect)."
+    )]
+    async fn append_ledger(&self, Parameters(p): Parameters<LedgerParams>) -> CallToolResult {
+        let ledger = p.ledger.as_deref().unwrap_or("ledger.txt");
+        match tools::append_ledger(&self.ws, &p.entry, ledger, p.idempotency_key.as_deref()).await {
+            Ok(v) => ok(v),
+            Err(e) => fail(e),
+        }
+    }
+}
+
+/// A minimal server exposing ONLY the ledger tool — used by the durability
+/// smoke to give a small local model a two-action space (append_ledger +
+/// finish) so kill-and-resume runs are deterministic.
+#[derive(Clone)]
+pub struct LedgerServer {
+    ws: Workspace,
+}
+
+impl LedgerServer {
+    pub fn new(workspace: impl Into<std::path::PathBuf>) -> std::io::Result<Self> {
+        Ok(Self {
+            ws: Workspace::new(workspace)?,
+        })
+    }
+}
+
+#[tool_router(server_handler)]
+impl LedgerServer {
+    #[tool(
+        description = "Append one entry line to a ledger file in the workspace (a durable, observable side effect)."
+    )]
+    async fn append_ledger(&self, Parameters(p): Parameters<LedgerParams>) -> CallToolResult {
+        let ledger = p.ledger.as_deref().unwrap_or("ledger.txt");
+        match tools::append_ledger(&self.ws, &p.entry, ledger, p.idempotency_key.as_deref()).await {
             Ok(v) => ok(v),
             Err(e) => fail(e),
         }

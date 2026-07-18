@@ -9,6 +9,10 @@ publish = false
 name = "tools-server"
 path = "src/bin/tools_server.rs"
 
+[[bin]]
+name = "ledger-server"
+path = "src/bin/ledger_server.rs"
+
 [dependencies]
 kernel-core.workspace = true
 async-trait.workspace = true

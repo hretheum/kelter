@@ -11,7 +11,9 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use kernel_core::{ActionSchema, PolicyContext, PolicyError, PolicyOracle, ProposedAction};
+use kernel_core::{
+    ActionSchema, PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction, Usage,
+};
 
 use crate::prompt;
 
@@ -27,6 +29,16 @@ pub struct OpenRouterAdapter {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    #[serde(default)]
+    usage: Option<UsageBody>,
+}
+
+#[derive(Deserialize)]
+struct UsageBody {
+    #[serde(default)]
+    prompt_tokens: u64,
+    #[serde(default)]
+    completion_tokens: u64,
 }
 
 #[derive(Deserialize)]
@@ -94,7 +106,7 @@ impl PolicyOracle for OpenRouterAdapter {
         &self,
         context: &PolicyContext,
         schema: &ActionSchema,
-    ) -> Result<ProposedAction, PolicyError> {
+    ) -> Result<Proposal, PolicyError> {
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -132,6 +144,11 @@ impl PolicyOracle for OpenRouterAdapter {
             .json()
             .await
             .map_err(|e| PolicyError::Malformed(format!("bad response json: {e}")))?;
+        let usage = parsed.usage.as_ref().map(|u| Usage {
+            prompt_tokens: u.prompt_tokens,
+            completion_tokens: u.completion_tokens,
+            calls: 1,
+        });
         let message = parsed
             .choices
             .into_iter()
@@ -154,18 +171,22 @@ impl PolicyOracle for OpenRouterAdapter {
                         call.function.arguments
                     ))
                 })?;
-            return Ok(ProposedAction {
-                action: call.function.name,
-                arguments,
-                rationale: None,
+            return Ok(Proposal {
+                action: ProposedAction {
+                    action: call.function.name,
+                    arguments,
+                    rationale: None,
+                },
+                usage,
             });
         }
 
         // Fallback: some models answer with a JSON envelope in content.
         if let Some(content) = message.content.as_deref() {
-            return prompt::parse_envelope(content).map_err(|e| {
+            let action = prompt::parse_envelope(content).map_err(|e| {
                 PolicyError::Malformed(format!("no tool call and content is not an envelope: {e}"))
-            });
+            })?;
+            return Ok(Proposal { action, usage });
         }
 
         Err(PolicyError::Malformed(

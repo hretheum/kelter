@@ -91,12 +91,34 @@ is itself a native MCP client (`claude mcp add`), so tools registered for
 the kernel are reusable by the executor — one substrate, no seam. Executor
 integration is an interface in v1, not an implementation.
 
+### Durability — `crates/storage` + the journal (ADR 0007)
+
+Runs, their journal and memory persist in SQLite (WAL; one file, migrations
+via `user_version`; in-memory backend remains for tests). Every run appends
+`Decision → Intent → Receipt → Terminal` journal entries as it progresses.
+On restart the daemon resumes non-terminal runs: journaled decisions replay
+**without re-querying the model**, receipts skip re-execution, and a
+dangling intent (crash mid-effect) is re-dispatched with the journaled
+idempotency key when the tool declares support — or fails loudly when it
+doesn't. Exactly-once side effects under kill-and-resume are proven by
+`scripts/smoke-durability.sh`. The journal also carries per-model-call
+token usage, aggregated on the run record (`run.usage`).
+
+### Observability
+
+`tracing` spans — `kelter.run` → `kelter.step` → `kelter.model_call` /
+`kelter.validate` / `kelter.tool_call` — bridge to OpenTelemetry when
+`[otel] endpoint` is configured (OTLP/HTTP; see `docs/observability.md`).
+
 ### Memory — `crates/memory`
 
 Provider protocol: `write(episode)` / `retrieve(task) → ranked_context` /
-`upsert(entity|relation)`. Reference impl is in-memory with a scored,
-unit-tested retrieval; graph/vector backends plug in behind the same trait
-(ADR 0005). All writes are provenance-tagged and versioned; the reflection
+`upsert(entity|relation)`. Retrieval is BM25 (dependency-free, tested on a
+query contract in `memory::retrieval`); the durable backend stores episodes
+and graph upserts in the shared SQLite file. Bring-your-own backends
+(knowledge graph, vector store) plug in behind the same trait (ADR 0005) —
+implement `MemoryProvider`, wire it where the daemon selects the storage
+backend. All writes are provenance-tagged and versioned; the reflection
 stub is gated by config. No silent self-mutation.
 
 ### API — `crates/api`
@@ -128,5 +150,6 @@ explicitly v2+.
 | `mcp` | tool substrate | `McpToolSource`, `ServerSpec`, `extensions::discover`, `server::ToolServer`, bin `tools-server` |
 | `memory` | memory providers | `MemoryProvider`, `InMemoryProvider`, `Episode`, `Provenance` |
 | `api` | HTTP+WS contract | `router`, `serve`, `serve_listener` |
-| `daemon` | headless assembly | bin `kelter` |
+| `storage` | durable persistence | `Db`, `SqliteRunStore`, `SqliteMemoryProvider` |
+| `daemon` | headless assembly, resume-on-startup, OTel init | bin `kelter` |
 | `apps/desktop` | Tauri shell | commands `start_standalone`, `open_ui` |

@@ -416,3 +416,84 @@ mod tests {
         ));
     }
 }
+
+/// Tool D: append an entry to a ledger file — a REAL side effect (appending
+/// twice is observable), used to prove exactly-once resume. The idempotency
+/// contract: the appended line carries the key, and a second call with the
+/// same key finds it and becomes a no-op. The effect and its dedupe marker
+/// are the same write, so there is no window in which the effect happened
+/// but the marker is missing.
+pub async fn append_ledger(
+    ws: &Workspace,
+    entry: &str,
+    ledger: &str,
+    idempotency_key: Option<&str>,
+) -> Result<serde_json::Value, ToolError> {
+    let path = ws.resolve(ledger)?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    if let Some(key) = idempotency_key {
+        if path.is_file() {
+            let existing = tokio::fs::read_to_string(&path).await?;
+            if existing.lines().any(|l| l.split('\t').next() == Some(key)) {
+                return Ok(serde_json::json!({
+                    "deduped": true,
+                    "idempotency_key": key,
+                    "ledger": ledger,
+                }));
+            }
+        }
+    }
+
+    let line = match idempotency_key {
+        Some(key) => format!("{key}\t{entry}\n"),
+        None => format!("-\t{entry}\n"),
+    };
+    use tokio::io::AsyncWriteExt;
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .await?;
+    file.write_all(line.as_bytes()).await?;
+    file.flush().await?;
+
+    Ok(serde_json::json!({
+        "appended": true,
+        "entry": entry,
+        "ledger": ledger,
+    }))
+}
+
+#[cfg(test)]
+mod ledger_tests {
+    use super::*;
+
+    fn temp_ws() -> Workspace {
+        let dir = std::env::temp_dir().join(format!("ak-ledger-{}", uuid::Uuid::new_v4()));
+        Workspace::new(dir).unwrap()
+    }
+
+    #[tokio::test]
+    async fn same_key_appends_exactly_once() {
+        let ws = temp_ws();
+        let r1 = append_ledger(&ws, "hello", "ledger.txt", Some("k1"))
+            .await
+            .unwrap();
+        assert_eq!(r1["appended"], true);
+        let r2 = append_ledger(&ws, "hello", "ledger.txt", Some("k1"))
+            .await
+            .unwrap();
+        assert_eq!(r2["deduped"], true);
+        let content = std::fs::read_to_string(ws.root().join("ledger.txt")).unwrap();
+        assert_eq!(content.lines().count(), 1);
+        // Different key appends again.
+        append_ledger(&ws, "hello", "ledger.txt", Some("k2"))
+            .await
+            .unwrap();
+        let content = std::fs::read_to_string(ws.root().join("ledger.txt")).unwrap();
+        assert_eq!(content.lines().count(), 2);
+    }
+}

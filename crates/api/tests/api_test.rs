@@ -8,7 +8,7 @@ use serde_json::json;
 
 use kernel_core::{
     ActionSchema, ActionSource, ActionSpec, ExecutionError, Kernel, KernelConfig, Latitude,
-    PolicyContext, PolicyError, PolicyOracle, ProposedAction, ValidatedAction,
+    PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction, ValidatedAction,
 };
 use memory::InMemoryProvider;
 
@@ -43,19 +43,21 @@ impl PolicyOracle for OneShotOracle {
         &self,
         context: &PolicyContext,
         _schema: &ActionSchema,
-    ) -> Result<ProposedAction, PolicyError> {
+    ) -> Result<Proposal, PolicyError> {
         if context.steps.is_empty() {
             Ok(ProposedAction {
                 action: "echo".into(),
                 arguments: json!({"message": "hi"}),
                 rationale: None,
-            })
+            }
+            .into())
         } else {
             Ok(ProposedAction {
                 action: "finish".into(),
                 arguments: json!({"summary": "echoed"}),
                 rationale: None,
-            })
+            }
+            .into())
         }
     }
     fn describe(&self) -> String {

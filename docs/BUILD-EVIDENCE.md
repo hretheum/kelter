@@ -202,3 +202,79 @@ slice), launch-grade README + Product Hunt draft.
 mcp (Python) 1.28.1 · rmcp 2.2.0 · llama.cpp b10050 ·
 model `Qwen/Qwen2.5-0.5B-Instruct-GGUF:q4_k_m` · frontier demo model
 `anthropic/claude-sonnet-5` (verified verbatim in the live catalog).
+
+## Phase 3 — durable, operable runtime
+
+Date: 2026-07-18 (same day, third pass). Same machine/toolchain.
+Scope per the Phase 3 brief: durable RunStore (SQLite), crash-resume from a
+journal, idempotent tool boundaries, durable memory with real retrieval,
+OpenTelemetry, op-hardening.
+
+### 1. Sources verified live (Phase 3)
+
+| Area | What was verified | How |
+|---|---|---|
+| rusqlite | **0.40.1** latest stable; `bundled` feature (no system dep); exact API: `Connection::open/execute/prepare/query_row`, `params!`, `pragma_update`/`pragma_query_value` (user_version, WAL); `Connection` is Send-not-Sync → mutex/blocking-pool patterns; companion `rusqlite_migration` 2.6.0 exists (chose DIY `user_version` migrations for dep-minimalism); sqlx 0.9.0 noted for comparison | crates.io JSON API + docs.rs Connection/params pages |
+| OpenTelemetry Rust | opentelemetry/opentelemetry_sdk/opentelemetry-otlp **0.32.x** pair with tracing-opentelemetry **0.33.x**; OTLP default transport is now HTTP (`http-proto` + `reqwest-blocking-client`), gRPC needs explicit `grpc-tonic`; current builder API (`SpanExporter::builder().with_http().with_endpoint()`, `SdkTracerProvider::builder().with_batch_exporter()`); no auto-flush — explicit `shutdown()`; official opentelemetry.io getting-started is stale (0.28) — docs.rs authoritative | crates.io + docs.rs (SpanExporterBuilder, SdkTracerProvider, tracing-opentelemetry); **then compiled and exercised against a live collector in this repo** |
+| Retrieval approach | BM25 implemented in-repo (~90 lines, zero deps) per the brief's dep-light preference; embeddings remain an optional future backend behind the same trait | design decision; contract tested (see §3) |
+| rmcp / reqwest / axum | unchanged from the Phase 1/2 lockfile (rmcp 2.2.0) | `Cargo.lock` |
+
+### 2. Decision log (Phase 3)
+
+| Decision | Rationale |
+|---|---|
+| Journal model: `Decision → Intent → Receipt → Terminal` per run, replayed by folding per-step | The Decision entry is written the moment a proposal passes validation — **before** anything acts on it — which is what makes "LLM journaled at first execution, never re-queried on replay" airtight. |
+| Replay re-validates journaled decisions against the current schema | Guards against tool-configuration drift between crash and resume; a mismatch fails the run explicitly instead of executing under a different contract. |
+| Idempotency via schema-declared `idempotency_key` (kernel-injected, `run_id:step`) | The kernel cannot make a non-cooperating tool exactly-once (fundamental distributed-systems limit). Declaring the key in the tool schema is an honest, checkable contract; the kernel detects it from the schema it already validates against. Tools without it: dangling intents fail the resume loudly ("manual check required") — at-most-once, never silent duplication. |
+| Ledger tool: the appended line carries the key; dedupe = scan for the key | Effect and dedupe marker are one atomic write — no window in which the effect exists but the marker doesn't. This is the money-shot tool. |
+| One SQLite file (WAL) for runs + journal + episodes + graph; single connection behind an async mutex | Kelter writes one journal row per kernel step — microsecond statements; a pool/spawn_blocking would be complexity without measurable benefit (documented seam if load changes). WAL keeps readers non-blocking and survives OS crashes consistently. |
+| Migrations: DIY `PRAGMA user_version`, forward-only array | Dep-light; `rusqlite_migration` exists but adds a dependency for what is ~20 lines here. |
+| BM25 (k1=1.2, b=0.75, +1-smoothed IDF) in `memory::retrieval`, shared by both providers | Real scoring with a tested query contract (incl. an IDF case naive overlap gets wrong), zero dependencies, clean seam for embeddings (llama.cpp embeddings endpoint) later. |
+| `KELTER_CRASH_POINT` env hook (`after_intent:<tool>` / `after_execute:<tool>`) | Kill-and-resume smokes must crash at exact boundaries of the real daemon process — impossible to time externally. Env-gated, documented, inert in normal operation. |
+| Auth review: constant-time token comparison (HTTP header + WS query param) | Closes the timing side channel on token comparison; noted during the op-hardening pass. |
+| OTel spans named `kelter.run/step/model_call/validate/tool_call`; export off by default | Table-stakes operability without imposing a collector on every user; batch exporter flushed on Ctrl-C shutdown. |
+| Usage accounting on the run record (`run.usage`), fed from adapter-reported token counts journaled per Decision | Per-run cost visibility through the existing API without a new endpoint. |
+
+### 3. Definition-of-done evidence (Phase 3)
+
+| Gate | Result | Raw log |
+|---|---|---|
+| build/test/clippy/fmt | PASS — **55 tests, 0 failures (20 suites)** incl. 7 new durability unit tests, 4 storage tests, BM25 contract tests | `evidence/phase3-gates.log` |
+| Naming | case-insensitive grep for the internal codename over the tracked tree = 0 hits; `agentkernel` only in historical evidence + notes | `evidence/phase3-naming-check.log` |
+| Persistence across restart | **PASS** — run completed → daemon killed → restarted: run + journal (5 entries) + reflection episode still present (SQLite/WAL) | `evidence/durability-restart.log` |
+| Crash-resume without repeating steps | **PASS** — run killed mid-flight resumes to `completed`; resume log shows `replaying journaled decision — model NOT queried` and receipt-based skip | `evidence/durability-resume-after-effect.log` |
+| Exactly-once side effect | **PASS, both crash windows** — killed *after* the ledger append (before receipt): resume re-dispatches with the journaled key, tool reports `deduped:true`, ledger has exactly 1 line; killed *before* the append: resume fires the effect exactly once | `evidence/durability-resume-after-effect.log`, `evidence/durability-resume-before-effect.log`, `evidence/durability-resume-run.json` |
+| Memory: real retrieval + persistence | **PASS** — BM25 ranking contract (6 query→top-1 assertions + an IDF-beats-overlap case + negative cases) green; episodes persist in SQLite and survive restart (scenario A) | `memory::retrieval` tests + `storage` tests (in `evidence/phase3-gates.log`) |
+| Observability | **PASS** — live collector captured the span tree for one run: `kelter.run` (1) → `kelter.step` (2) → `kelter.model_call` (2) / `kelter.validate` (2) / `kelter.tool_call` (1), OTLP/HTTP | `evidence/otel-trace-sample.log` |
+| Per-run accounting | **PASS** — `GET /api/v1/runs/{id}` returns `usage: {prompt_tokens: 646, completion_tokens: 67, calls: 2}` for the OTel demo run | `evidence/otel-trace-sample.log` header / run output in session log |
+| Quadlet harness | Present; static checks PASS on this host; **real `quadlet -dryrun` requires podman — printed as explicit human step (K12)** | `evidence/quadlet-harness.log` |
+| No secrets / no push | key env-only; no push (human gate) | — |
+
+### 4. Uncertainties / TODO for human review (Phase 3)
+
+- **Quadlet real validation is a human act** on the podman host (K12):
+  `scripts/validate-quadlet.sh` prints the exact commands.
+- The exactly-once guarantee holds for tools that declare
+  `idempotency_key`; third-party MCP tools without it get honest-failure
+  resume, not exactly-once. Documented in ADR 0007 and `extensions/README.md`
+  ecosystem docs should repeat it (currently in the ADR).
+- Ledger dedupe scans the ledger file per call — O(n) per append; fine for
+  the demo tool, not a general transactional store.
+- SQLite retrieval loads all episodes and ranks in memory — the scale seam
+  (term index / embeddings) is documented in code and architecture.md.
+- Cost-in-dollars is not computed (token counts only) — model price tables
+  change; pricing lookup would need a live catalog (OpenRouter returns
+  pricing metadata; wiring it is a small follow-up).
+- OTel: traces only; metrics/logs signals not wired. tracing-opentelemetry
+  0.33 pairs with opentelemetry 0.32 — pin all four crates together on
+  upgrades (ecosystem churns).
+- Desktop standalone topology still uses in-memory stores (durable SQLite
+  is wired in the daemon; pointing the desktop shell at the same storage
+  crate is a small follow-up).
+
+### 5. Version pins observed (Phase 3)
+
+rusqlite 0.40.1 (bundled SQLite) · opentelemetry 0.32.0 /
+opentelemetry_sdk 0.32.1 / opentelemetry-otlp 0.32.0 /
+tracing-opentelemetry 0.33.0 · rmcp 2.2.0 (unchanged) ·
+otel/opentelemetry-collector 0.156.0 (evidence capture).

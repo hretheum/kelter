@@ -69,12 +69,21 @@ async fn health() -> &'static str {
 
 // ---- auth ----------------------------------------------------------------
 
+/// Constant-time equality: comparison cost must not depend on how many
+/// leading bytes of a guessed token match (timing side channel).
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 fn authorized(state: &ApiState, headers: &HeaderMap) -> bool {
     headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .is_some_and(|t| t == state.token.as_str())
+        .is_some_and(|t| constant_time_eq(t.as_bytes(), state.token.as_bytes()))
 }
 
 fn unauthorized() -> Response {
@@ -184,7 +193,11 @@ async fn events_ws(
     Query(auth): Query<WsAuth>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let ok = authorized(&state, &headers) || auth.token.as_deref() == Some(state.token.as_str());
+    let ok = authorized(&state, &headers)
+        || auth
+            .token
+            .as_deref()
+            .is_some_and(|t| constant_time_eq(t.as_bytes(), state.token.as_bytes()));
     if !ok {
         return unauthorized();
     }

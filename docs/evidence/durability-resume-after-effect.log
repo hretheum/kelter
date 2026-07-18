@@ -1,0 +1,12 @@
+[2m2026-07-18T17:23:51.776123Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m policy engine: local:qwen2.5-0.5b-instruct
+[2m2026-07-18T17:23:51.780366Z[0m [32m INFO[0m [1mserve_inner[0m[2m:[0m [2mrmcp::service[0m[2m:[0m Service initialized as client [3mpeer_info[0m[2m=[0mSome(InitializeResult { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ServerCapabilities { experimental: None, extensions: None, logging: None, completions: None, prompts: None, resources: None, tools: Some(ToolsCapability { list_changed: None }), tasks: None }, server_info: Implementation { name: "rmcp", title: None, version: "2.2.0", description: None, icons: None, website_url: None }, instructions: None, meta: None })
+[2m2026-07-18T17:23:51.780988Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m mcp tools online: append_ledger
+[2m2026-07-18T17:23:51.783485Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m storage: sqlite at <run>/kelter.db
+[2m2026-07-18T17:23:51.783646Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m resuming 1 unfinished run(s) from the journal
+ui:  http://127.0.0.1:7541/
+api: http://127.0.0.1:7541/api/v1  (Authorization: Bearer <token>)
+[2m2026-07-18T17:23:51.783833Z[0m [32m INFO[0m [2mkernel_core::engine[0m[2m:[0m resume: continuing run from durable journal [3mrun_id[0m[2m=[0m40c3717a-b0a7-44f4-a69b-6e3c9cbda6ff [3mcompleted_steps[0m[2m=[0m0 [3mjournal_entries[0m[2m=[0m2
+[2m2026-07-18T17:23:51.783878Z[0m [32m INFO[0m [2mapi[0m[2m:[0m api listening on http://127.0.0.1:7541
+[2m2026-07-18T17:23:51.783983Z[0m [32m INFO[0m [2mkernel_core::engine[0m[2m:[0m resume: replaying journaled decision — model NOT queried [3mrun_id[0m[2m=[0m40c3717a-b0a7-44f4-a69b-6e3c9cbda6ff [3mstep[0m[2m=[0m0 [3maction[0m[2m=[0mappend_ledger
+[2m2026-07-18T17:23:51.809469Z[0m [32m INFO[0m [2mkernel_core::engine[0m[2m:[0m resume: dangling intent — re-dispatching with the journaled idempotency key (tool-side dedupe guarantees exactly-once) [3mrun_id[0m[2m=[0m40c3717a-b0a7-44f4-a69b-6e3c9cbda6ff [3mstep[0m[2m=[0m0 [3maction[0m[2m=[0mappend_ledger
+[2m2026-07-18T17:23:52.091505Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m resume finished [3mrun_id[0m[2m=[0m40c3717a-b0a7-44f4-a69b-6e3c9cbda6ff [3mstatus[0m[2m=[0mCompleted

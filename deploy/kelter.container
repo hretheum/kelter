@@ -14,8 +14,10 @@ Volume=%h/.config/kelter:/data/config:ro,Z
 Volume=kelter-work:/data/work:Z
 Exec=--config /data/config/config.toml
 # Only needed when [policy] engine = "openrouter:<model>"; keep the key in
-# an env file outside the repo, never in the unit itself.
-EnvironmentFile=-%h/.config/kelter/env
+# an env file outside the repo, never in the unit itself. Podman skips it if
+# absent (local engine needs no key); create an empty file to be safe on
+# stricter podman builds.
+EnvironmentFile=%h/.config/kelter/env
 
 [Service]
 Restart=on-failure

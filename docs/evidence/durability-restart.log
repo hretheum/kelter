@@ -1,0 +1,7 @@
+[2m2026-07-18T17:23:50.002767Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m policy engine: local:qwen2.5-0.5b-instruct
+[2m2026-07-18T17:23:50.006348Z[0m [32m INFO[0m [1mserve_inner[0m[2m:[0m [2mrmcp::service[0m[2m:[0m Service initialized as client [3mpeer_info[0m[2m=[0mSome(InitializeResult { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ServerCapabilities { experimental: None, extensions: None, logging: None, completions: None, prompts: None, resources: None, tools: Some(ToolsCapability { list_changed: None }), tasks: None }, server_info: Implementation { name: "rmcp", title: None, version: "2.2.0", description: None, icons: None, website_url: None }, instructions: None, meta: None })
+[2m2026-07-18T17:23:50.006990Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m mcp tools online: append_ledger
+[2m2026-07-18T17:23:50.009064Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m storage: sqlite at <run>/kelter.db
+ui:  http://127.0.0.1:7541/
+api: http://127.0.0.1:7541/api/v1  (Authorization: Bearer <token>)
+[2m2026-07-18T17:23:50.009389Z[0m [32m INFO[0m [2mapi[0m[2m:[0m api listening on http://127.0.0.1:7541

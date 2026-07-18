@@ -1,0 +1,69 @@
+---
+provenance: ai_authored
+provenance_metadata:
+  agent: claude-fable-5
+  session_date: 2026-07-18
+  human_validated: false
+  session_context: "Phase 3: how to export and inspect Kelter traces (OTLP)"
+---
+
+# Observability
+
+Kelter emits `tracing` spans for everything the kernel does:
+
+| Span | Attributes | Covers |
+|---|---|---|
+| `kelter.run` | `run_id`, `policy` | one whole run (incl. resume legs) |
+| `kelter.step` | `step` | one decision + execution cycle |
+| `kelter.model_call` | `step`, `attempt` | one policy-oracle (LLM) call |
+| `kelter.validate` | `step` | kernel-side schema validation |
+| `kelter.tool_call` | `step`, `tool` | one MCP tool execution |
+
+Per-run token accounting is separate from tracing: every model call's usage
+is journaled and aggregated on the run record — `GET /api/v1/runs/{id}`
+returns `usage: {prompt_tokens, completion_tokens, calls}`.
+
+## Exporting (OTLP)
+
+Off by default. Enable in the config:
+
+```toml
+[otel]
+endpoint = "http://127.0.0.1:4318"   # OTLP over HTTP
+# service_name = "kelter"
+```
+
+Spans are batched; the daemon flushes them on Ctrl-C shutdown.
+
+## Seeing spans locally
+
+Any OTLP-capable backend works. The minimal loop with the official
+collector and its debug exporter:
+
+```sh
+cat > /tmp/otel-config.yaml <<'EOF'
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+exporters:
+  debug:
+    verbosity: detailed
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [debug]
+EOF
+docker run -d --name otel -p 127.0.0.1:4318:4318 \
+  -v /tmp/otel-config.yaml:/etc/otelcol/config.yaml \
+  otel/opentelemetry-collector:0.156.0
+docker logs -f otel     # spans print here as runs execute
+```
+
+A captured sample lives in `docs/evidence/otel-trace-sample.log`.
+
+Version note (verified live 2026-07-18): opentelemetry/opentelemetry_sdk/
+opentelemetry-otlp 0.32.x pair with tracing-opentelemetry 0.33.x; the
+OTLP crate's default transport is HTTP (`http-proto`) as of 0.32.

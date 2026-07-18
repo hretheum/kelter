@@ -9,7 +9,7 @@ use serde_json::json;
 
 use kernel_core::{
     ActionSchema, ActionSource, ActionSpec, ExecutionError, Kernel, KernelConfig, Latitude,
-    PolicyContext, PolicyError, PolicyOracle, ProposedAction, RunStatus, ValidatedAction,
+    PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction, RunStatus, ValidatedAction,
 };
 use memory::{InMemoryProvider, MemoryProvider};
 
@@ -59,11 +59,12 @@ impl PolicyOracle for ScriptedOracle {
         &self,
         _context: &PolicyContext,
         _schema: &ActionSchema,
-    ) -> Result<ProposedAction, PolicyError> {
+    ) -> Result<Proposal, PolicyError> {
         let i = self.cursor.fetch_add(1, Ordering::SeqCst);
         self.script
             .get(i)
             .cloned()
+            .map(Proposal::from)
             .ok_or_else(|| PolicyError::Backend("script exhausted".into()))
     }
 

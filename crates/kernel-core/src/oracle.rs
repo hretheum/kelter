@@ -78,6 +78,23 @@ pub enum PolicyError {
     Malformed(String),
 }
 
+/// A proposal plus what the model call cost. Usage is accounting metadata —
+/// it never influences validation.
+#[derive(Debug, Clone)]
+pub struct Proposal {
+    pub action: ProposedAction,
+    pub usage: Option<crate::journal::Usage>,
+}
+
+impl From<ProposedAction> for Proposal {
+    fn from(action: ProposedAction) -> Self {
+        Self {
+            action,
+            usage: None,
+        }
+    }
+}
+
 /// The adapter contract: return a proposal drawn from the action schema, or
 /// fail loudly. Adapters may use constrained decoding (local) or native
 /// tool-calling (remote) to satisfy it — the kernel re-validates either way.
@@ -87,7 +104,7 @@ pub trait PolicyOracle: Send + Sync {
         &self,
         context: &PolicyContext,
         schema: &ActionSchema,
-    ) -> Result<ProposedAction, PolicyError>;
+    ) -> Result<Proposal, PolicyError>;
 
     /// Human-readable adapter identity (e.g. "local:qwen2.5-0.5b").
     fn describe(&self) -> String;

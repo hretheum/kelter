@@ -7,6 +7,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Reserved argument name for tool-side idempotency (see
+/// [`ActionSpec::supports_idempotency_key`]).
+pub const IDEMPOTENCY_KEY_ARG: &str = "idempotency_key";
+
 /// One action the policy may propose at a decision point.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionSpec {
@@ -14,6 +18,19 @@ pub struct ActionSpec {
     pub description: String,
     /// JSON Schema for the action's arguments object.
     pub parameters: serde_json::Value,
+}
+
+impl ActionSpec {
+    /// A tool that declares an `idempotency_key` property commits to the
+    /// dedupe contract: calling it twice with the same key produces the
+    /// effect exactly once. The kernel only re-executes a dangling side
+    /// effect on resume when this holds (or fails the resume loudly).
+    pub fn supports_idempotency_key(&self) -> bool {
+        self.parameters
+            .get("properties")
+            .and_then(|p| p.get(IDEMPOTENCY_KEY_ARG))
+            .is_some()
+    }
 }
 
 /// The full action space offered to the policy oracle at one decision point.
@@ -51,6 +68,18 @@ impl ValidatedAction {
     }
     pub fn rationale(&self) -> Option<&str> {
         self.rationale.as_deref()
+    }
+
+    /// Kernel-side injection of the idempotency key into the arguments of a
+    /// tool that declares support for it. Called after validation with a
+    /// kernel-generated key — never with model-provided data.
+    pub(crate) fn inject_idempotency_key(&mut self, key: &str) {
+        if let Some(obj) = self.arguments.as_object_mut() {
+            obj.insert(
+                IDEMPOTENCY_KEY_ARG.to_string(),
+                serde_json::Value::String(key.to_string()),
+            );
+        }
     }
 }
 

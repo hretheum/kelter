@@ -13,6 +13,38 @@ pub struct Config {
     pub kernel: KernelSection,
     #[serde(default)]
     pub tools: ToolsConfig,
+    #[serde(default)]
+    pub storage: StorageConfig,
+    #[serde(default)]
+    pub otel: OtelConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct OtelConfig {
+    /// OTLP/HTTP endpoint (e.g. "http://127.0.0.1:4318"). Absent = tracing
+    /// export disabled (console logging only).
+    pub endpoint: Option<String>,
+    /// service.name resource attribute.
+    pub service_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct StorageConfig {
+    /// "sqlite" (durable, default) or "memory" (ephemeral, for tests).
+    pub backend: String,
+    /// SQLite database file (runs + journal + memory share it).
+    pub path: String,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            backend: "sqlite".into(),
+            path: "./kelter.db".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

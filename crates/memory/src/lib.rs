@@ -5,6 +5,8 @@
 //! can be plugged in behind it. Retrieval is a tested component with a
 //! relevance metric, not "dump everything into the prompt".
 
+pub mod retrieval;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -117,22 +119,14 @@ impl InMemoryProvider {
     }
 }
 
-fn tokenize(s: &str) -> Vec<String> {
-    s.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| t.len() > 2)
-        .map(|t| t.to_string())
-        .collect()
-}
-
-/// Jaccard-style overlap between query tokens and episode task tokens.
-fn relevance(query: &[String], candidate: &str) -> f64 {
-    let cand = tokenize(candidate);
-    if query.is_empty() || cand.is_empty() {
-        return 0.0;
-    }
-    let hits = query.iter().filter(|t| cand.contains(t)).count();
-    hits as f64 / query.len().max(cand.len()) as f64
+/// One-line summary of an episode for prompt context.
+pub fn episode_summary(e: &Episode) -> String {
+    format!(
+        "task: {} | outcome: {:?} | steps: {}",
+        e.task,
+        e.outcome,
+        e.trace.len()
+    )
 }
 
 #[async_trait]
@@ -143,26 +137,17 @@ impl MemoryProvider for InMemoryProvider {
     }
 
     async fn retrieve(&self, task: &str, limit: usize) -> Result<Vec<RankedContext>, MemoryError> {
-        let query = tokenize(task);
         let store = self.inner.read().await;
-        let mut ranked: Vec<RankedContext> = store
-            .episodes
-            .iter()
-            .map(|e| RankedContext {
-                episode_id: e.id,
-                summary: format!(
-                    "task: {} | outcome: {:?} | steps: {}",
-                    e.task,
-                    e.outcome,
-                    e.trace.len()
-                ),
-                score: relevance(&query, &e.task),
+        let docs: Vec<String> = store.episodes.iter().map(|e| e.task.clone()).collect();
+        let ranked = retrieval::normalize(&retrieval::rank_bm25(task, &docs, limit));
+        Ok(ranked
+            .into_iter()
+            .map(|(i, score)| RankedContext {
+                episode_id: store.episodes[i].id,
+                summary: episode_summary(&store.episodes[i]),
+                score,
             })
-            .filter(|r| r.score > 0.0)
-            .collect();
-        ranked.sort_by(|a, b| b.score.total_cmp(&a.score));
-        ranked.truncate(limit);
-        Ok(ranked)
+            .collect())
     }
 
     async fn upsert(&self, item: GraphUpsert) -> Result<(), MemoryError> {

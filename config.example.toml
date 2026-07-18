@@ -12,6 +12,14 @@ engine = "local:qwen2.5-0.5b-instruct"
 # base_url = "http://127.0.0.1:8080"  # llama.cpp server (default shown)
 # latitude = "constrained"            # constrained | standard | wide (default derives from adapter)
 
+[storage]
+backend = "sqlite"     # "sqlite" (durable — runs/journal/memory survive restarts) | "memory"
+path = "./kelter.db"
+
+# [otel]
+# endpoint = "http://127.0.0.1:4318"   # OTLP/HTTP; absent = tracing export off
+# service_name = "kelter"
+
 [kernel]
 max_steps = 12
 reflection = true    # gate for the provenance-tagged reflection stub

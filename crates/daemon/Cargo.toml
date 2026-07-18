@@ -15,6 +15,7 @@ policy.workspace = true
 mcp.workspace = true
 memory.workspace = true
 api.workspace = true
+storage.workspace = true
 tokio = { workspace = true, features = ["full"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -23,3 +24,7 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 rand.workspace = true
+opentelemetry = { version = "0.32", features = ["trace"] }
+opentelemetry_sdk = { version = "0.32", features = ["trace"] }
+opentelemetry-otlp = { version = "0.32" }
+tracing-opentelemetry = "0.33"

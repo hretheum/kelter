@@ -6,6 +6,7 @@ members = [
     "crates/mcp",
     "crates/memory",
     "crates/api",
+    "crates/storage",
     "crates/daemon",
 ]
 exclude = ["apps/desktop/src-tauri"]
@@ -26,6 +27,7 @@ policy = { path = "crates/policy" }
 mcp = { path = "crates/mcp" }
 memory = { path = "crates/memory" }
 api = { path = "crates/api" }
+storage = { path = "crates/storage" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

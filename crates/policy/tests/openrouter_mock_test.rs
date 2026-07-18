@@ -10,9 +10,7 @@ use axum::{Json, Router};
 use serde_json::json;
 use tokio::sync::Mutex;
 
-use kernel_core::{
-    ActionSchema, ActionSpec, Latitude, PolicyContext, PolicyOracle, ProposedAction,
-};
+use kernel_core::{ActionSchema, ActionSpec, Latitude, PolicyContext, PolicyOracle};
 use policy::OpenRouterAdapter;
 
 #[derive(Default)]
@@ -98,7 +96,7 @@ async fn openrouter_adapter_speaks_the_documented_contract() {
         "sk-or-test-not-a-real-key",
     );
 
-    let proposed: ProposedAction = adapter.propose(&context(), &schema()).await.unwrap();
+    let proposed = adapter.propose(&context(), &schema()).await.unwrap().action;
 
     // The adapter parsed the JSON-encoded arguments string into a value.
     assert_eq!(proposed.action, "read_source");

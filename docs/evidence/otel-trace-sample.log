@@ -1,0 +1,28 @@
+=== OTel trace sample (collector debug exporter, otlp/http) ===
+spans received for one run:
+   2     Name           : kelter.model_call
+   1     Name           : kelter.run
+   2     Name           : kelter.step
+   1     Name           : kelter.tool_call
+   2     Name           : kelter.validate
+
+--- kelter.run span detail ---
+    Parent ID      : 
+    ID             : 0e6ca19c0555824e
+    Name           : kelter.run
+    Kind           : Internal
+    Start time     : 2026-07-18 17:27:48.335618 +0000 UTC
+    End time       : 2026-07-18 17:27:48.984604 +0000 UTC
+    Status code    : Unset
+    Status message : 
+    DroppedAttributesCount: 0
+    DroppedEventsCount: 0
+    DroppedLinksCount: 0
+Attributes:
+     -> code.file.path: Str(crates/kernel-core/src/engine.rs)
+     -> code.module.name: Str(kernel_core::engine)
+     -> code.line.number: Int(245)
+     -> thread.id: Int(8)
+     -> thread.name: Str(tokio-rt-worker)
+     -> target: Str(kernel_core::engine)
+     -> run_id: Str(1574a0c1-1af3-420d-be3b-76e8a9335633)

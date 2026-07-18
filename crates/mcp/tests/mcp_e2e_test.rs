@@ -31,11 +31,18 @@ async fn full_pipeline_over_real_mcp_stdio() {
 
     assert_eq!(
         source.tool_names(),
-        vec!["extract_structure", "read_source", "write_report"]
+        vec![
+            "append_ledger",
+            "extract_structure",
+            "read_source",
+            "write_report"
+        ]
     );
 
     let schema = source.action_schema(Latitude::Constrained).await.unwrap();
-    assert_eq!(schema.actions.len(), 3);
+    assert_eq!(schema.actions.len(), 4);
+    // Every reference tool declares the idempotency contract.
+    assert!(schema.actions.iter().all(|a| a.supports_idempotency_key()));
 
     // Step 1: read_source — proposal must pass kernel-side validation first.
     let v = schema

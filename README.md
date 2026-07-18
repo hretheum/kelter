@@ -22,6 +22,11 @@ Kelter inverts both halves of that deal:
   new capabilities register through a manifest at startup — [~25 lines of
   Python](extensions/wordstats/server.py), zero Rust, zero recompilation —
   and still pass the same kernel-side validation as everything else.
+- **Runs survive crashes — correctly.** Every decision and side effect is
+  journaled (SQLite). Kill the daemon mid-run: it resumes to completion
+  without re-querying the model for decisions already made and without
+  re-firing side effects — exactly-once, receipt-gated, or an honest
+  failure. Never a silent duplicate.
 
 ## Sixty seconds of proof
 
@@ -52,6 +57,20 @@ $ curl …/api/v1/tools
 ```
 
 Reproduce: `scripts/smoke-extension.sh` · guide: [`extensions/`](extensions/README.md)
+
+**3 · Kill it mid-run. Watch it finish anyway.** A run is killed *after* a
+ledger-append side effect fired but *before* its receipt landed — the worst
+crash window. On restart the run resumes from the journal (the model is not
+re-asked for decisions it already made) and the tool dedupes on the
+journaled idempotency key:
+
+```
+[resume] replaying journaled decision — model NOT queried
+[resume] dangling intent — re-dispatching with the journaled idempotency key
+→ run completed · ledger has exactly ONE line
+```
+
+Reproduce: `scripts/smoke-durability.sh` · design: [ADR 0007](docs/adr/0007-durable-execution-journal-replay.md)
 
 ## Why the weak-model story matters
 
@@ -150,6 +169,9 @@ Clients are stateless; the kernel owns all state.
 | Area | Status |
 |---|---|
 | Deterministic kernel: state machine, retries, journaling | ✅ |
+| **Durable execution**: SQLite journal, crash-resume, exactly-once keyed side effects | ✅ |
+| Per-run token accounting (`run.usage` via the API) | ✅ |
+| OpenTelemetry spans (run/step/model/validate/tool) over OTLP | ✅ |
 | Kernel-side schema validation of every proposal (typed trust boundary) | ✅ |
 | `local` adapter — llama.cpp + GBNF constrained decoding | ✅ |
 | `openrouter` adapter — one adapter, many frontier models | ✅ |
@@ -161,7 +183,7 @@ Clients are stateless; the kernel owns all state.
 | One API contract: HTTP + WebSocket, bearer auth | ✅ |
 | Web UI (PWA) · desktop shell (standalone/remote) · container/Quadlet | ✅ |
 | WASM in-process extensions · memory/agents as extensions · marketplace | 🔜 [ADR 0006](docs/adr/0006-governed-microkernel-extension-model.md) |
-| Durable persistence · CRDT sync · learning distillation | 🔜 interfaces shipped |
+| CRDT sync · learning distillation · WASM extension mechanism | 🔜 interfaces shipped |
 
 ## Design notes
 
@@ -172,10 +194,12 @@ The architecture and each load-bearing decision are documented:
 [adapter contract](docs/adr/0003-adapter-contract-constrained-vs-native.md) ·
 [topology-as-config](docs/adr/0004-topology-as-config.md) ·
 [memory provider](docs/adr/0005-memory-provider-interface.md) ·
-[governed extensions](docs/adr/0006-governed-microkernel-extension-model.md)
+[governed extensions](docs/adr/0006-governed-microkernel-extension-model.md) ·
+[durable execution](docs/adr/0007-durable-execution-journal-replay.md) ·
+[observability](docs/observability.md)
 
 Status: young project, honest scope — the kernel, both adapters, the demo
-slice and the extension slice all work end-to-end (see
+slice, the extension slice and crash-resume all work end-to-end (see
 [docs/BUILD-EVIDENCE.md](docs/BUILD-EVIDENCE.md) for receipts); several
 backends are deliberately in-memory reference implementations behind stable
 traits.

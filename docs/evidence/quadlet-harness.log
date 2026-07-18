@@ -1,0 +1,8 @@
+[quadlet] static checks on kelter.container:
+[quadlet]   static checks OK (sections + required keys present)
+[quadlet] podman/quadlet NOT available on this host — real validation SKIPPED.
+[quadlet] Run on the target podman host (this is the human step):
+[quadlet]   mkdir -p ~/.config/containers/systemd
+[quadlet]   cp deploy/kelter.container ~/.config/containers/systemd/
+[quadlet]   /usr/libexec/podman/quadlet -dryrun -user   # must print a generated unit, no errors
+[quadlet]   systemctl --user daemon-reload && systemctl --user start kelter
