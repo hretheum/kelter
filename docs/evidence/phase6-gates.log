@@ -1,0 +1,89 @@
+=== Phase 6 gates (2026-07-18T23:35:38Z) ===
+--- fmt --check ---
+Diff in /Users/eorlowski/dev/better-hermes/crates/kernel-core/src/journal.rs:67:
+     /// The extension trust posture in effect when the run started (ADR
+     /// 0012): `(extension_name, trust_label)`. Journaled once so "what ran
+     /// unsandboxed" is durably attributable.
+[31m-    TrustPosture {
+(B[m[31m-        entries: Vec<(String, String)>,
+(B[m[31m-    },
+(B[m[32m+    TrustPosture { entries: Vec<(String, String)> },
+(B[m     /// The validated plan a `plan`-mode run will execute. Journaled once,
+     /// the moment the model proposes it: on resume the plan is replayed from
+     /// here and the model is NOT re-queried for it (the plan is a memoized
+Diff in /Users/eorlowski/dev/better-hermes/crates/mcp/src/extensions.rs:534:
+         );
+         let (exts, errors) = discover(&[root.to_string_lossy().into_owned()]);
+         assert!(exts.is_empty());
+[31m-        assert!(errors[0].to_string().contains("did not declare a trust mode"));
+(B[m[32m+        assert!(errors[0]
+(B[m[32m+            .to_string()
+(B[m[32m+            .contains("did not declare a trust mode"));
+(B[m     }
+ 
+     #[test]
+--- clippy -D warnings ---
+    Checking api v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/api)
+    Checking wasmhost v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/wasmhost)
+    Checking mcp v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/mcp)
+    Checking daemon v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/daemon)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.86s
+--- test ---
+     Running unittests src/lib.rs (target/debug/deps/a2a-12a86ab5082ebec6)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/a2a_client_test.rs (target/debug/deps/a2a_client_test-dea6b96e2dad0084)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.08s
+     Running unittests src/lib.rs (target/debug/deps/api-83575cdcfdf091dc)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/api_test.rs (target/debug/deps/api_test-26dc0bb783565fe7)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running unittests src/main.rs (target/debug/deps/kelter-c035375dede32759)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/kernel_core-163a9d92b749e072)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running tests/durability_test.rs (target/debug/deps/durability_test-33ca3c01b0246327)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/engine_test.rs (target/debug/deps/engine_test-6c9d02c3992511b4)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/plan_test.rs (target/debug/deps/plan_test-c02c1a13492349dc)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/mcp-795bb9b303126ff5)
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running unittests src/bin/ledger_server.rs (target/debug/deps/ledger_server-fa0c94838b53b9ad)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/bin/memory_server.rs (target/debug/deps/memory_server-6e30005fbe36745d)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/bin/tools_server.rs (target/debug/deps/tools_server-ded4bb57b1bce61c)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/mcp_e2e_test.rs (target/debug/deps/mcp_e2e_test-3e0888d4bfae74a2)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+     Running tests/memory_ext_test.rs (target/debug/deps/memory_ext_test-83eac3da8b91b069)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+     Running unittests src/lib.rs (target/debug/deps/memory-29ce2e042713707b)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/policy-3f7c53ef71ce99ec)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/openrouter_mock_test.rs (target/debug/deps/openrouter_mock_test-02f1b93c4d976088)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/storage-cccd014671d40404)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running unittests src/lib.rs (target/debug/deps/wasmhost-f084a49b87f07882)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+--- build ---
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.60s
+
+=== Phase 6 gates (re-verify after fmt fix) ===
+--- fmt --check ---
+fmt: OK
+--- clippy -D warnings ---
+cargo clippy: No issues found
+--- test summary ---
+TOTAL passed:  across  suites; 0 failed

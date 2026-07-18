@@ -1,0 +1,2 @@
+[2m2026-07-18T23:41:12.956185Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m registry: extension 'optin' capability=Tools trust=SubprocessUnsandboxed permissions=Permissions { network: false, workspace_write: false }
+[2m2026-07-18T23:41:12.956219Z[0m [33m WARN[0m [2mkelter[0m[2m:[0m trust: 'optin' runs as an operator-trusted subprocess (unsandboxed — it has OS-level egress and is NOT contained; the operator explicitly accepted this)

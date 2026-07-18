@@ -6,6 +6,9 @@
 name = "memstore"
 description = "Example memory backend in ~30 lines of Python (write/retrieve/upsert over MCP)"
 provides = ["memory"]
+# Runs as a local subprocess (MCP) — not sandboxed. Explicit trust opt-in
+# (ADR 0012); the operator must also allow it in the daemon config.
+trust = "subprocess-unsandboxed"
 
 [server]
 command = "./run.sh"

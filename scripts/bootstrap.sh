@@ -82,6 +82,9 @@ engine = "local:qwen2.5-0.5b-instruct"
 max_steps = 8
 reflection = true
 
+[trust]
+allow_unsandboxed_subprocess = ["wordstats"]
+
 [tools]
 workspace = "${STATE_DIR}/work"
 extension_dirs = ["${REPO_ROOT}/extensions"]

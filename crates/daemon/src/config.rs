@@ -17,6 +17,23 @@ pub struct Config {
     pub storage: StorageConfig,
     #[serde(default)]
     pub otel: OtelConfig,
+    #[serde(default)]
+    pub trust: TrustConfig,
+}
+
+/// Operator-side trust policy (ADR 0012). The manifest declares a trust
+/// mode; THIS is the separate operator consent. A subprocess extension that
+/// opted into `subprocess-unsandboxed` runs only if the operator lists it
+/// here by name — the manifest cannot authorise its own escape.
+///
+/// Note: this is NOT a sandbox. An allowed subprocess still has OS-level
+/// egress; the operator is explicitly accepting that (see ADR 0009/0012).
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct TrustConfig {
+    /// Names of extensions the operator trusts to run as unsandboxed
+    /// subprocesses.
+    pub allow_unsandboxed_subprocess: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

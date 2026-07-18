@@ -9,7 +9,7 @@ provenance_metadata:
 
 # ADR 0012: Extension trust — containment vs governance, sandbox-by-default
 
-Status: accepted · Date: 2026-07-18 · Builds on: ADR 0006 (two mechanisms), ADR 0008 (registry), ADR 0009 (subprocess egress gap), ADR 0011 (WASM containment)
+Status: implemented (Phase 6) · Date: 2026-07-18 · Builds on: ADR 0006 (two mechanisms), ADR 0008 (registry), ADR 0009 (subprocess egress gap), ADR 0011 (WASM containment)
 
 ## Context
 
@@ -81,4 +81,29 @@ subprocess at all.
   capability gateway is built later for its governance value, it must be
   labelled as such and must not claim containment.
 - Enforcement — the registry policy (trust-mode declaration, operator gate,
-  loud refusal, journaling) — is implemented in Phase 6.
+  loud refusal, journaling) — is implemented (Phase 6).
+
+## Enforcement (Phase 6)
+
+The two-part opt-in is split so the manifest can never authorise its own
+escape — each part lives on a different side of the trust boundary:
+
+- **Manifest side (registry, `crates/mcp/src/extensions.rs`).** A `tools`
+  subprocess must declare `[extension] trust = "subprocess-unsandboxed"`. A
+  WASM tool is `wasm-sandboxed` by construction (declaring a subprocess trust
+  on it is an error); a subprocess with no trust line, or one claiming
+  `wasm-sandboxed`, or an unknown value, is refused loudly — sandbox-by-default.
+- **Operator side (daemon, `crates/daemon/src/config.rs` + `main.rs`).** A
+  declared subprocess-unsandboxed extension loads only if the operator lists it
+  in `[trust] allow_unsandboxed_subprocess`. Missing consent → the daemon
+  refuses to start, naming the extension and the exact config key to add. The
+  refusal message states plainly that allowing it does **not** sandbox the
+  subprocess.
+- **Transparency.** The resolved per-extension trust posture is journaled once
+  per run (`JournalEntry::TrustPosture`) and exposed on the run
+  (`Run.trust_posture`), so "what ran unsandboxed" is durably answerable via
+  API and journal. Subprocess-unsandboxed extensions also emit an honest
+  startup warning (never the word "sandbox").
+
+Evidence: `scripts/smoke-trust.sh` (legs A–D) and
+`docs/evidence/BUILD-EVIDENCE.md` §6.

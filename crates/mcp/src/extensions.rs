@@ -109,10 +109,48 @@ pub struct ExtensionSection {
     /// A2A) or `"wasm"` (in-process, capability-sandboxed via wasmtime).
     #[serde(default = "default_mechanism")]
     pub mechanism: String,
+    /// The declared trust mode (ADR 0012). `"wasm-sandboxed"` (structural
+    /// containment) or `"subprocess-unsandboxed"` (an explicit, operator-
+    /// gated decision to run untrusted code with OS-level egress — NOT a
+    /// sandbox). Absent = no declaration; a subprocess tool/memory extension
+    /// then fails to load (sandbox-by-default).
+    #[serde(default)]
+    pub trust: Option<String>,
 }
 
 fn default_mechanism() -> String {
     "subprocess".into()
+}
+
+/// The trust posture under which an extension runs (ADR 0012).
+///
+/// Honest labelling is a hard rule: `SubprocessUnsandboxed` is NOT a sandbox
+/// and must never be described as one — it is an operator-trusted subprocess
+/// that still has OS-level egress (ADR 0009). Only `WasmSandboxed` is
+/// structural containment (ADR 0011).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustMode {
+    /// In-process WASM: the code cannot reach a capability it was not
+    /// granted (structural containment).
+    WasmSandboxed,
+    /// A local subprocess the operator explicitly trusted. Governed and
+    /// attributable, NOT contained.
+    SubprocessUnsandboxed,
+    /// A remote A2A agent — a separate axis, bounded by origin-pin/SSRF
+    /// egress (ADR 0009), not the subprocess-trust gate.
+    RemoteAgent,
+}
+
+impl TrustMode {
+    /// The label recorded in the run journal (honest, never "sandbox" for
+    /// a subprocess).
+    pub fn label(self) -> &'static str {
+        match self {
+            TrustMode::WasmSandboxed => "wasm-sandboxed",
+            TrustMode::SubprocessUnsandboxed => "subprocess-unsandboxed",
+            TrustMode::RemoteAgent => "remote-agent",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,7 +194,18 @@ pub struct RegisteredExtension {
     pub name: String,
     pub capability: Capability,
     pub permissions: Permissions,
+    pub trust: TrustMode,
     pub kind: ExtensionKind,
+}
+
+impl RegisteredExtension {
+    /// The operator-gate check (ADR 0012): a `SubprocessUnsandboxed`
+    /// extension requires the operator to have listed it by name. The
+    /// manifest declaring the trust mode is necessary but NOT sufficient —
+    /// the manifest is untrusted input and cannot authorise its own escape.
+    pub fn requires_operator_consent(&self) -> bool {
+        self.trust == TrustMode::SubprocessUnsandboxed
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -194,6 +243,29 @@ pub enum ManifestError {
          WASM currently supports only the `tools` capability"
     )]
     UnsupportedMechanism(String, &'static str, &'static str),
+    #[error(
+        "extension '{0}' is a subprocess and did not declare a trust mode — refusing to load \
+         (sandbox-by-default). Either use a sandboxed mechanism (mechanism = \"wasm\") or, to run \
+         it as an untrusted subprocess with OS-level egress, declare `trust = \
+         \"subprocess-unsandboxed\"` AND have the operator allow it"
+    )]
+    TrustNotDeclared(String),
+    #[error(
+        "extension '{0}' declares unknown trust mode '{1}' (expected \"wasm-sandboxed\" or \
+         \"subprocess-unsandboxed\")"
+    )]
+    UnknownTrust(String, String),
+    #[error(
+        "extension '{0}' (WASM, structurally sandboxed) declares trust = \"{1}\" — a WASM \
+         extension is sandboxed by construction and must not declare a subprocess trust mode"
+    )]
+    WasmTrustMismatch(String, String),
+    #[error(
+        "extension '{0}' is a subprocess opted-in as `subprocess-unsandboxed`, but the operator \
+         policy does not allow it. Add it to [trust] allow_unsandboxed_subprocess in the daemon \
+         config to run it (this is an explicit trust decision — it does NOT sandbox the subprocess)"
+    )]
+    OperatorConsentRequired(String),
 }
 
 /// Parse one manifest file into a registered extension.
@@ -286,7 +358,7 @@ pub fn load_manifest(manifest_path: &Path) -> Result<RegisteredExtension, Manife
                 server.command.clone()
             };
             ExtensionKind::Server(ServerSpec {
-                name: manifest.extension.name,
+                name: manifest.extension.name.clone(),
                 command,
                 args: server.args.clone(),
                 cwd: Some(dir.to_string_lossy().into_owned()),
@@ -295,10 +367,47 @@ pub fn load_manifest(manifest_path: &Path) -> Result<RegisteredExtension, Manife
         }
     };
 
+    // Trust posture (ADR 0012). The manifest DECLARES; the operator gate is
+    // applied separately by the daemon (a manifest can't authorise its own
+    // escape). Here we validate the manifest side only.
+    let declared_trust = manifest.extension.trust.as_deref();
+    let trust = match &kind {
+        ExtensionKind::Wasm(_) => {
+            // Structurally sandboxed. It may omit `trust` or say
+            // "wasm-sandboxed"; declaring a subprocess trust is a mistake.
+            match declared_trust {
+                None | Some("wasm-sandboxed") => TrustMode::WasmSandboxed,
+                Some(other) => {
+                    return Err(ManifestError::WasmTrustMismatch(name, other.to_string()))
+                }
+            }
+        }
+        ExtensionKind::RemoteAgent(_) => {
+            // A separate axis (origin-pin/SSRF, ADR 0009); the subprocess
+            // trust gate does not apply. A stray `trust` is ignored.
+            TrustMode::RemoteAgent
+        }
+        ExtensionKind::Server(_) => match declared_trust {
+            // Sandbox-by-default: a subprocess with no declaration is refused.
+            None => return Err(ManifestError::TrustNotDeclared(name)),
+            Some("subprocess-unsandboxed") => TrustMode::SubprocessUnsandboxed,
+            Some("wasm-sandboxed") => {
+                // Claiming sandbox for a subprocess is exactly the overclaim
+                // ADR 0012 forbids.
+                return Err(ManifestError::WasmTrustMismatch(
+                    name,
+                    "wasm-sandboxed".into(),
+                ));
+            }
+            Some(other) => return Err(ManifestError::UnknownTrust(name, other.to_string())),
+        },
+    };
+
     Ok(RegisteredExtension {
         name,
         capability,
         permissions: manifest.permissions,
+        trust,
         kind,
     })
 }
@@ -353,18 +462,19 @@ mod tests {
         let tool_dir = write_ext(
             &root,
             "tooly",
-            "[extension]\nname = \"tooly\"\nprovides = [\"tools\"]\n\n[server]\ncommand = \"./run.sh\"\n",
+            "[extension]\nname = \"tooly\"\nprovides = [\"tools\"]\ntrust = \"subprocess-unsandboxed\"\n\n[server]\ncommand = \"./run.sh\"\n",
         );
         write_ext(
             &root,
             "memy",
-            "[extension]\nname = \"memy\"\nprovides = [\"memory\"]\n\n[permissions]\nworkspace_write = true\n\n[server]\ncommand = \"python3\"\nargs = [\"server.py\"]\n",
+            "[extension]\nname = \"memy\"\nprovides = [\"memory\"]\ntrust = \"subprocess-unsandboxed\"\n\n[permissions]\nworkspace_write = true\n\n[server]\ncommand = \"python3\"\nargs = [\"server.py\"]\n",
         );
         let (exts, errors) = discover(&[root.to_string_lossy().into_owned()]);
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(exts.len(), 2);
         assert_eq!(exts[0].capability, Capability::Memory);
         assert!(exts[0].permissions.workspace_write);
+        assert_eq!(exts[0].trust, TrustMode::SubprocessUnsandboxed);
         assert_eq!(exts[1].capability, Capability::Tools);
         // relative command resolved into the extension dir; bare left to PATH
         let (mem_cmd, tool_cmd) = match (&exts[0].kind, &exts[1].kind) {
@@ -412,6 +522,81 @@ mod tests {
             }
             other => panic!("expected wasm kind, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn subprocess_without_trust_declaration_is_refused() {
+        let root = tmp();
+        write_ext(
+            &root,
+            "untrusted",
+            "[extension]\nname = \"untrusted\"\nprovides = [\"tools\"]\n\n[server]\ncommand = \"./run.sh\"\n",
+        );
+        let (exts, errors) = discover(&[root.to_string_lossy().into_owned()]);
+        assert!(exts.is_empty());
+        assert!(errors[0]
+            .to_string()
+            .contains("did not declare a trust mode"));
+    }
+
+    #[test]
+    fn subprocess_cannot_claim_wasm_sandboxed() {
+        // The overclaim ADR 0012 forbids: a subprocess labelling itself as
+        // sandboxed.
+        let root = tmp();
+        write_ext(
+            &root,
+            "liar",
+            "[extension]\nname = \"liar\"\nprovides = [\"tools\"]\ntrust = \"wasm-sandboxed\"\n\n[server]\ncommand = \"./run.sh\"\n",
+        );
+        let (_, errors) = discover(&[root.to_string_lossy().into_owned()]);
+        assert!(errors[0].to_string().contains("sandboxed by construction"));
+    }
+
+    #[test]
+    fn unknown_trust_mode_is_refused() {
+        let root = tmp();
+        write_ext(
+            &root,
+            "weird-trust",
+            "[extension]\nname = \"weird-trust\"\nprovides = [\"tools\"]\ntrust = \"totally-safe-trust-me\"\n\n[server]\ncommand = \"x\"\n",
+        );
+        let (_, errors) = discover(&[root.to_string_lossy().into_owned()]);
+        assert!(errors[0].to_string().contains("unknown trust mode"));
+    }
+
+    #[test]
+    fn wasm_extension_is_sandboxed_by_default() {
+        let root = tmp();
+        write_ext(
+            &root,
+            "wc",
+            "[extension]\nname = \"wc\"\nprovides = [\"tools\"]\nmechanism = \"wasm\"\n\n[wasm]\nmodule = \"m.wasm\"\ntool = \"t\"\n",
+        );
+        let (exts, _) = discover(&[root.to_string_lossy().into_owned()]);
+        assert_eq!(exts[0].trust, TrustMode::WasmSandboxed);
+        assert!(!exts[0].requires_operator_consent());
+    }
+
+    #[test]
+    fn subprocess_opt_in_requires_operator_consent() {
+        // The two-part gate: the manifest declaring opt-in makes
+        // `requires_operator_consent()` true; the daemon still has to allow
+        // it (tested at the daemon level). The manifest alone does NOT let
+        // it in.
+        let root = tmp();
+        write_ext(
+            &root,
+            "opted-in",
+            "[extension]\nname = \"opted-in\"\nprovides = [\"tools\"]\ntrust = \"subprocess-unsandboxed\"\n\n[server]\ncommand = \"./run.sh\"\n",
+        );
+        let (exts, errors) = discover(&[root.to_string_lossy().into_owned()]);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(exts[0].trust, TrustMode::SubprocessUnsandboxed);
+        assert!(
+            exts[0].requires_operator_consent(),
+            "manifest opt-in must still require operator consent"
+        );
     }
 
     #[test]

@@ -42,6 +42,9 @@ engine = "local:qwen2.5-0.5b-instruct"
 max_steps = 6
 reflection = true
 
+[trust]
+allow_unsandboxed_subprocess = ["wordstats"]
+
 [tools]
 workspace = "${RUN_DIR}/work"
 # Only the extension: the runtime serves exactly the tools YOU registered.

@@ -109,13 +109,46 @@ async fn main() -> anyhow::Result<()> {
     let mut memory_extension_names: Vec<String> = Vec::new();
     let mut remote_agents: Vec<a2a::RemoteAgent> = Vec::new();
     let mut wasm_sources: Vec<Arc<dyn kernel_core::ActionSource>> = Vec::new();
+    // Trust posture recorded on every run (ADR 0012).
+    let mut trust_posture: Vec<(String, String)> = Vec::new();
     for ext in extensions {
         tracing::info!(
-            "registry: extension '{}' capability={:?} permissions={:?}",
+            "registry: extension '{}' capability={:?} trust={:?} permissions={:?}",
             ext.name,
             ext.capability,
+            ext.trust,
             ext.permissions
         );
+
+        // Operator-consent gate (ADR 0012), part two of the two-part opt-in.
+        // The manifest declaring `subprocess-unsandboxed` is NOT enough — the
+        // operator must list the extension here. A manifest cannot authorise
+        // its own escape.
+        if ext.requires_operator_consent()
+            && !cfg
+                .trust
+                .allow_unsandboxed_subprocess
+                .iter()
+                .any(|n| n == &ext.name)
+        {
+            anyhow::bail!(
+                "extension '{}' opted into subprocess-unsandboxed, but the operator has not \
+                 allowed it. Add it to [trust] allow_unsandboxed_subprocess to run it — this is \
+                 an explicit trust decision and does NOT sandbox the subprocess (ADR 0012).",
+                ext.name
+            );
+        }
+        if ext.trust == mcp::extensions::TrustMode::SubprocessUnsandboxed {
+            // Honest labelling (ADR 0012): this is operator-trusted, NOT
+            // contained. Say so plainly at startup.
+            tracing::warn!(
+                "trust: '{}' runs as an operator-trusted subprocess (unsandboxed — it has \
+                 OS-level egress and is NOT contained; the operator explicitly accepted this)",
+                ext.name
+            );
+        }
+        trust_posture.push((ext.name.clone(), ext.trust.label().to_string()));
+
         match (ext.capability, ext.kind) {
             (
                 mcp::extensions::Capability::Tools,
@@ -318,6 +351,7 @@ async fn main() -> anyhow::Result<()> {
                 "plan" => kernel_core::RunMode::Plan,
                 _ => kernel_core::RunMode::Step,
             },
+            trust_posture,
         },
     ));
 

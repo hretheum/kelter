@@ -49,6 +49,9 @@ reflection = true
 backend = "sqlite"
 path = "$RUN_DIR/kelter.db"
 
+[trust]
+allow_unsandboxed_subprocess = ["memstore"]
+
 [tools]
 workspace = "$RUN_DIR/work"
 bundled_tools = false

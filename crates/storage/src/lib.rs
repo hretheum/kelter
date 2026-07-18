@@ -335,6 +335,7 @@ mod tests {
             created_at: 1,
             usage: Default::default(),
             agent_usage: Default::default(),
+            trust_posture: Vec::new(),
         }
     }
 

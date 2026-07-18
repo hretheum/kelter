@@ -64,6 +64,10 @@ pub enum JournalEntry {
         ok: bool,
         result: serde_json::Value,
     },
+    /// The extension trust posture in effect when the run started (ADR
+    /// 0012): `(extension_name, trust_label)`. Journaled once so "what ran
+    /// unsandboxed" is durably attributable.
+    TrustPosture { entries: Vec<(String, String)> },
     /// The validated plan a `plan`-mode run will execute. Journaled once,
     /// the moment the model proposes it: on resume the plan is replayed from
     /// here and the model is NOT re-queried for it (the plan is a memoized
@@ -87,7 +91,9 @@ impl JournalEntry {
             | JournalEntry::Intent { step, .. }
             | JournalEntry::Note { step, .. }
             | JournalEntry::Receipt { step, .. } => Some(*step),
-            JournalEntry::PlanProposed { .. } | JournalEntry::Terminal { .. } => None,
+            JournalEntry::TrustPosture { .. }
+            | JournalEntry::PlanProposed { .. }
+            | JournalEntry::Terminal { .. } => None,
         }
     }
 }

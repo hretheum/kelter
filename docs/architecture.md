@@ -83,7 +83,17 @@ the kernel dials them as a governed A2A client — origin-pinned egress
 task id is journaled at creation so a crash-resume reconnects via `GetTask`
 instead of re-delegating). `model-provider` is reserved and refuses to load
 until implemented. **WASM tool extensions** (`mechanism = "wasm"`, ADR 0011) run in-process through wasmtime with a capability sandbox — the host grants only the permissions the manifest declares (default: none), so an ungranted network/disk capability is structurally unreachable; a WASM tool is an action-space `tool` like any other (works as a plan node too).
-Unknown capabilities or permission keys fail startup loudly. The built-in
+Unknown capabilities or permission keys fail startup loudly. **Trust posture —
+sandboxed by default (ADR 0012):** a subprocess `tools` extension has OS-level
+egress the kernel cannot contain, so running one is a two-part, attributable
+opt-in — the manifest must declare `trust = "subprocess-unsandboxed"` **and**
+the operator must list it in `[trust] allow_unsandboxed_subprocess`; either
+part missing → loud refusal (a manifest cannot authorise its own escape). A
+WASM tool is `wasm-sandboxed` by construction and needs no opt-in. Allowing a
+subprocess is explicitly *not* a sandbox (it keeps full OS egress) and is never
+labelled one. The resolved per-extension posture is journaled once per run
+(`JournalEntry::TrustPosture`) and exposed on the run (`Run.trust_posture`), so
+"what ran unsandboxed" is durably answerable. The built-in
 durable memory is dogfooded through this same seam (spawned
 `memory-server`, no in-process shortcut); an external memory extension
 replaces it. Reference examples: a Python tool in ~25 lines

@@ -44,6 +44,9 @@ engine = "${engine}"
 max_steps = 8
 reflection = true
 
+[trust]
+allow_unsandboxed_subprocess = ["wordstats"]
+
 [tools]
 workspace = "${run_dir}/work"
 extension_dirs = ["${REPO_ROOT}/extensions"]

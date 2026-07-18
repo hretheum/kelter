@@ -582,3 +582,80 @@ pure-compute module needs no WASI at all. Full rationale in ADR 0011.
 wasmtime 46.0.1 (features `cranelift`, `runtime`) · rustc 1.95 with target
 `wasm32-unknown-unknown` · rmcp 2.2.0 / rusqlite 0.40.1 / reqwest 0.12
 unchanged.
+
+## Phase 6 — extension trust posture (sandbox-by-default + two-part opt-in)
+
+Date: 2026-07-18/19. Implements ADR 0012. Precondition verified: Phase 5A
+(WASM containment) + 4b (A2A egress governance) + 3 (journal/durability) on
+origin. This phase adds a registry trust policy on top of ADR 0008; it changes
+no mechanism — it decides, loudly and attributably, *whether* a subprocess
+mechanism is allowed to run unsandboxed.
+
+### 1. The design decision: where the two halves of the opt-in live
+
+The crux of ADR 0012 is that a manifest is untrusted input, so it cannot
+authorise its own escape from the sandbox-by-default posture. The opt-in is
+therefore split across the trust boundary, and the two halves live in different
+code and different files:
+
+- **Manifest half — the registry** (`crates/mcp/src/extensions.rs`). A `tools`
+  subprocess must declare `[extension] trust = "subprocess-unsandboxed"`. The
+  registry resolves a `TrustMode` per extension: a WASM tool is
+  `wasm-sandboxed` by construction (a subprocess `trust` on it is an error); a
+  subprocess with no declaration, a subprocess claiming `wasm-sandboxed`, or an
+  unknown value are each **refused loudly** (`TrustNotDeclared`,
+  `WasmTrustMismatch`, `UnknownTrust`) — the same forward-compatible refusal
+  style used for unknown capabilities/mechanisms.
+- **Operator half — the daemon** (`crates/daemon/src/config.rs` +
+  `main.rs`). A declared subprocess-unsandboxed extension loads only if the
+  operator lists it in `[trust] allow_unsandboxed_subprocess`. Missing consent
+  → the daemon refuses to start, naming the extension and the exact key to add,
+  and stating that allowing it does **not** sandbox the subprocess.
+
+Neither half alone lets an unsandboxed subprocess run — that is the money shot
+(legs B/C of the smoke).
+
+### 2. Decision log (Phase 6)
+
+| Decision | Rationale |
+|---|---|
+| Trust mode is a manifest field (`trust`), resolved to a `TrustMode` enum, not inferred | Explicit and forward-compatible; an unknown value fails loudly rather than silently downgrading. |
+| Operator consent is a *separate* daemon-config list, never the manifest alone | The manifest is untrusted input (ADR 0006); a two-key gate is the only way "explicit opt-in" is meaningful. A manifest cannot authorise its own escape. |
+| WASM tools need no opt-in (`wasm-sandboxed` by construction) | Sandbox-by-default: the safe mechanism is the silent default; only the unsafe one is gated. No regression for Phase 5A tools. |
+| Never label an allowed subprocess a "sandbox"/"containment" anywhere | ADR 0012 honest-labelling hard rule. The startup warning and the label say "subprocess-unsandboxed (operator-trusted)"; allowing it is explicitly not containment (it keeps OS egress, ADR 0009). |
+| Per-run trust posture journaled once (`JournalEntry::TrustPosture`) + exposed on `Run.trust_posture` | Transparency/provenance: "what ran unsandboxed" is durably answerable via journal and API. Journaled once and replayed on resume (replay law), like the plan and the model decision. |
+| Existing subprocess manifests (wordstats, memstore, toy-agent) migrated to declare `trust`; smoke/bootstrap configs gained the operator allow-list | Migration without weakening policy: the ecosystem keeps working, but now as an explicit, attributable decision. |
+
+### 3. Definition-of-done evidence (Phase 6)
+
+| Gate | Result | Raw log |
+|---|---|---|
+| build/test/clippy/fmt | PASS — **97 tests, 0 failures (28 suites)**, incl. 5 new registry trust tests; clippy `-D warnings` clean; fmt clean | `evidence/phase6-gates.log` |
+| Naming | codename grep = 0 over the whole tracked tree; `agentkernel` only in historical evidence + notes describing them | `evidence/phase6-naming-check.log` |
+| **A — sandbox-by-default** | **PASS** — a subprocess tool with NO `trust` declaration → the daemon refuses to start (`did not declare a trust mode`) | `evidence/trust-refuse-no-declaration.log` |
+| **B — manifest cannot self-authorise (money shot pt 1)** | **PASS** — manifest opts in (`trust = "subprocess-unsandboxed"`) but the operator has NOT allowed it → still refused (`operator has not allowed it`) | `evidence/trust-refuse-no-operator.log` |
+| **C — two-part opt-in loads (money shot pt 2)** | **PASS** — manifest opt-in AND operator consent → loads, recorded `trust=SubprocessUnsandboxed`, honest "operator-trusted subprocess (unsandboxed)" startup warning (never "sandbox") | `evidence/trust-loaded-with-consent.log` |
+| **D — WASM sandbox-by-default + posture journaled** | **PASS** — a WASM tool loads with NO opt-in (`trust=WasmSandboxed`); a real 0.5B run exposed `Run.trust_posture = [["wordcount-wasm","wasm-sandboxed"]]` via the API AND journaled a `TrustPosture` entry (durably attributable) | `evidence/trust-run.json` |
+| No regression | PASS — tool/memory/a2a/wasm/durability/plan smokes all green after migration (wordstats & memstore now opt-in; toy-agent unaffected) | `scripts/smoke-extension.sh`, `smoke-memory-extension.sh`, `smoke-a2a.sh`, `smoke-wasm.sh`, `smoke-durability.sh`, `smoke-plan.sh` |
+| No secrets / no push | PASS | — |
+
+### 4. Uncertainties / TODO for human review (Phase 6)
+
+- **This is governance, not containment (the ADR 0012 honest boundary).**
+  Allowing a subprocess-unsandboxed extension does NOT sandbox it — it keeps
+  full OS-level network/disk egress (ADR 0009). The gate makes the choice
+  explicit, operator-owned and auditable; it does not retroactively contain the
+  subprocess. Real containment for a subprocess still needs an OS layer
+  (network-restricted namespace/container), which remains deferred — WASM
+  sidesteps it by not being a subprocess.
+- The operator allow-list is by extension *name*; a deployment that pins by
+  content hash / signature is stronger and is follow-up work.
+- No audited capability gateway/broker is built here — ADR 0012 explicitly
+  reserves the right to build one later for its governance value, but forbids
+  ever calling it a sandbox. Nothing in this phase does.
+
+### 5. Version pins observed (Phase 6)
+
+No new dependencies. serde/toml (config), rmcp 2.2.0, rusqlite 0.40.1,
+wasmtime 46.0.1 — all unchanged. The trust policy is pure kernel/registry/config
+logic plus one new journal variant.

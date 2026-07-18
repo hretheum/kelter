@@ -189,6 +189,12 @@ pub struct Run {
     /// Per-remote-agent accounting (delegation count + remote wall time).
     #[serde(default)]
     pub agent_usage: std::collections::HashMap<String, AgentUsage>,
+    /// The extension trust posture in effect for this run: `(name, label)`
+    /// per registered extension (ADR 0012). Makes "what ran unsandboxed"
+    /// answerable via the API. Labels are honest — a subprocess is never
+    /// labelled "sandbox".
+    #[serde(default)]
+    pub trust_posture: Vec<(String, String)>,
 }
 
 /// Accounting for one remote agent within a run.
@@ -260,6 +266,9 @@ pub struct KernelConfig {
     /// is ever written. No silent memory self-mutation.
     pub reflection_enabled: bool,
     pub mode: RunMode,
+    /// The extension trust posture (ADR 0012): `(name, label)` per
+    /// registered extension. Recorded on every run for provenance.
+    pub trust_posture: Vec<(String, String)>,
 }
 
 impl Default for KernelConfig {
@@ -269,6 +278,7 @@ impl Default for KernelConfig {
             latitude: Latitude::Standard,
             reflection_enabled: true,
             mode: RunMode::Step,
+            trust_posture: Vec::new(),
         }
     }
 }
@@ -363,6 +373,7 @@ impl Kernel {
             created_at: now_secs(),
             usage: Usage::default(),
             agent_usage: std::collections::HashMap::new(),
+            trust_posture: self.config.trust_posture.clone(),
         };
         let id = run.id;
         self.store.put(run).await?;
@@ -430,6 +441,32 @@ impl Kernel {
 
         run.status = RunStatus::Running;
         self.store.put(run.clone()).await?;
+
+        // Journal the extension trust posture once (ADR 0012): what ran, and
+        // under which trust mode — durably attributable, not re-derived.
+        if !self.config.trust_posture.is_empty()
+            && !journal
+                .iter()
+                .any(|e| matches!(e, JournalEntry::TrustPosture { .. }))
+        {
+            for (name, label) in &self.config.trust_posture {
+                if label == "subprocess-unsandboxed" {
+                    tracing::warn!(
+                        %run_id, extension = %name,
+                        "trust: extension runs as an operator-trusted subprocess \
+                         (unsandboxed — OS-level egress; NOT contained)"
+                    );
+                }
+            }
+            self.store
+                .append_journal(
+                    run_id,
+                    JournalEntry::TrustPosture {
+                        entries: self.config.trust_posture.clone(),
+                    },
+                )
+                .await?;
+        }
 
         if self.config.mode == RunMode::Plan {
             return self.execute_plan(run, journal).await;

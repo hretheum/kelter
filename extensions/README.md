@@ -48,6 +48,7 @@ extensions/
 name = "wordstats"
 description = "Word statistics tool in ~25 lines of Python"
 provides = ["tools"]        # exactly one capability per manifest
+trust = "subprocess-unsandboxed"   # required for a subprocess tool (see below)
 
 [permissions]
 workspace_write = true      # required to receive KELTER_WORKSPACE
@@ -93,6 +94,41 @@ to validate every call the model proposes.
   manifest fails startup loudly; it is never skipped silently.
 - **Only your tools:** set `[tools] bundled_tools = false` to serve
   exclusively your extensions.
+
+## Trust: sandboxed by default, unsandboxed only when you say so
+
+Kelter is secure by default: an extension runs sandboxed unless the operator
+*explicitly* trusts a subprocess. A subprocess tool has OS-level network and
+disk access the kernel cannot contain (ADR 0009), so running one is a
+deliberate, attributable decision — never a silent default. It takes **two
+independent parts** (ADR 0012):
+
+1. **The manifest declares its trust mode.** A subprocess tool must set
+   `[extension] trust = "subprocess-unsandboxed"`. A subprocess with no `trust`
+   line — or one claiming `wasm-sandboxed` it can't back up, or an unknown
+   value — is refused at startup, loudly. (A WASM tool is `wasm-sandboxed` by
+   construction; you don't declare it, and declaring a subprocess trust on a
+   WASM tool is an error.)
+2. **The operator consents, in the daemon config.** Even a manifest that opts
+   in loads only if the operator lists it by name:
+
+   ```toml
+   [trust]
+   allow_unsandboxed_subprocess = ["wordstats"]
+   ```
+
+   The manifest is untrusted input and cannot authorise its own escape — so the
+   operator gate is separate on purpose. Missing consent → the daemon refuses to
+   start and tells you exactly which extension and which key to add.
+
+**This is not a sandbox.** Allowing a subprocess-unsandboxed extension does not
+contain it — it still has full OS egress. The name says so on purpose:
+"subprocess-unsandboxed (operator-trusted)", never "sandbox" or "contained".
+Want an actual sandbox for pure-compute logic? Use the WASM mechanism below.
+
+The resolved trust posture is recorded per run — journaled and exposed on the
+run object (`trust_posture`), so "what ran unsandboxed" is always answerable.
+Proof: `scripts/smoke-trust.sh`.
 
 ## Memory extensions (bring your own backend)
 
