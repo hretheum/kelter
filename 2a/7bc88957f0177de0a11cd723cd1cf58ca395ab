@@ -1,0 +1,234 @@
+crates/daemon/Cargo.toml
+  s_ebdbabe3e659c2::t_86a847a2d6c147 1-7,12
+  s_ebdbabe3e659c2::t_7d3314b8ae16e6 8-11,13-25
+crates/kernel-core/src/engine.rs
+  s_ebdbabe3e659c2::t_c33b788e922913 270-271
+  s_ebdbabe3e659c2::t_2385e414464882 1-245,257-269,272-309,352-513
+  s_ebdbabe3e659c2::t_9f7f6e079bb04c 246-256
+  s_ebdbabe3e659c2::t_cef10d4ea82395 310,321,339-351
+  s_ebdbabe3e659c2::t_920b71e3d4e5a1 311-314,323-338
+  s_ebdbabe3e659c2::t_c995390e235dd6 315-320,322
+crates/mcp/Cargo.toml
+  s_ebdbabe3e659c2::t_2bfa4d9fabafba 8-11,22-29,31-32
+  s_ebdbabe3e659c2::t_ddadd8a213575c 1-7,12-21
+  s_ebdbabe3e659c2::t_b5e1c072fb2e34 30
+crates/policy/src/gbnf.rs
+  s_ebdbabe3e659c2::t_804310dbd7957e 1-84,86-252
+  s_ebdbabe3e659c2::t_c995390e235dd6 85
+apps/desktop/src-tauri/Cargo.toml
+  s_ebdbabe3e659c2::t_062dd9a0860a28 1-32
+docs/evidence/smoke-openrouter-SKIPPED.log
+  s_ebdbabe3e659c2::t_70b6c830d19819 1
+apps/web-ui/sw.js
+  s_ebdbabe3e659c2::t_c6e1a19aa8d1b2 1-24
+deploy/compose.yaml
+  s_ebdbabe3e659c2::t_b322818eedc038 1-41
+docs/adr/0004-topology-as-config.md
+  s_ebdbabe3e659c2::t_d6538a99d5ea65 1-34
+crates/kernel-core/src/action.rs
+  s_ebdbabe3e659c2::t_c2854964805207 1-176
+docs/evidence/smoke-local-run.json
+  s_ebdbabe3e659c2::t_569c4dbe64248d 1
+Cargo.toml
+  s_ebdbabe3e659c2::t_0657a565cd0a80 11
+  s_ebdbabe3e659c2::t_b03b626e18807b 1-10,12-45
+apps/desktop/dist/launcher.js
+  s_ebdbabe3e659c2::t_53257e416ca49a 1-45
+apps/web-ui/icon.svg
+  s_ebdbabe3e659c2::t_8c283ed11f78dd 1-7
+.github/workflows/ci.yml
+  s_ebdbabe3e659c2::t_662f316858fc50 1-62
+crates/api/tests/api_test.rs
+  s_ebdbabe3e659c2::t_8ec06e5837278b 1-84,88-159
+  s_ebdbabe3e659c2::t_c995390e235dd6 85-87
+CONTRIBUTING.md
+  s_ebdbabe3e659c2::t_421b6b4b65258d 1-41
+apps/desktop/src-tauri/capabilities/default.json
+  s_ebdbabe3e659c2::t_0816e7c1c432ea 1-7
+apps/desktop/src-tauri/src/main.rs
+  s_ebdbabe3e659c2::t_0bdab907cac244 1-5
+apps/desktop/src-tauri/icons/android/values/ic_launcher_background.xml
+  s_ebdbabe3e659c2::t_ad0f126983dda2 1-4
+apps/web-ui/app.js
+  s_ebdbabe3e659c2::t_4e75ff13da69a2 1-11,18-76,87-141
+  s_ebdbabe3e659c2::t_6f376091aab57d 77-86
+  s_ebdbabe3e659c2::t_9d33b7f9fed7a3 12-17
+crates/kernel-core/tests/engine_test.rs
+  s_ebdbabe3e659c2::t_775f7176451682 186-231
+  s_ebdbabe3e659c2::t_c995390e235dd6 75,258-263
+  s_ebdbabe3e659c2::t_7ed583af5ab33c 1-74,76-185,232-257,264-276
+crates/daemon/src/config.rs
+  s_ebdbabe3e659c2::t_056a2234872ce5 1-73,76-78
+  s_ebdbabe3e659c2::t_c995390e235dd6 74-75
+crates/policy/src/prompt.rs
+  s_ebdbabe3e659c2::t_9aefa4442a1343 55-67
+  s_ebdbabe3e659c2::t_c995390e235dd6 97-98
+  s_ebdbabe3e659c2::t_249c3206fa53f6 1-54,68-96,99-150
+docs/adr/0005-memory-provider-interface.md
+  s_ebdbabe3e659c2::t_8e8d77d3530e1d 1-37
+examples/config-local.toml
+  s_ebdbabe3e659c2::t_06ce8068ff231e 1-17
+crates/mcp/src/bin/tools_server.rs
+  s_ebdbabe3e659c2::t_261fa61bd34cda 1,3,5,13
+  s_ebdbabe3e659c2::t_47a11cd9a87996 2,4,6-12,14-16
+docs/evidence/smoke-local-daemon.log
+  s_ebdbabe3e659c2::t_37d7cb022c62c5 1-6
+LICENSE-MIT
+  s_ebdbabe3e659c2::t_fa18576212fdb6 1-21
+docs/adr/0003-adapter-contract-constrained-vs-native.md
+  s_ebdbabe3e659c2::t_683d58c212e2b4 1-42
+apps/desktop/src-tauri/src/lib.rs
+  s_ebdbabe3e659c2::t_ca0ef44695a01c 1-172
+docs/evidence/smoke-local-events.ndjson
+  s_ebdbabe3e659c2::t_569c4dbe64248d 1,3
+  s_ebdbabe3e659c2::t_37d7cb022c62c5 2,4-9
+README.md
+  s_ebdbabe3e659c2::t_8be5995a626394 1-177
+docs/evidence/quickstart-daemon.log
+  s_ebdbabe3e659c2::t_08cfab9e3d62eb 1-17
+docs/evidence/build-test-clippy-fmt.log
+  s_ebdbabe3e659c2::t_569c4dbe64248d 1-5
+  s_ebdbabe3e659c2::t_7ee7d46fa9be9c 6-12
+apps/web-ui/index.html
+  s_ebdbabe3e659c2::t_c34614eae26493 1-51
+docs/adr/0001-kernel-as-runtime.md
+  s_ebdbabe3e659c2::t_4bc1cef69edf5e 1-36
+config.example.toml
+  s_ebdbabe3e659c2::t_40d2257ba17984 1-25
+crates/mcp/src/client.rs
+  s_ebdbabe3e659c2::t_6f6db2f8be5b59 63-81,85-87
+  s_ebdbabe3e659c2::t_503138821bca61 1-15,19-62,90,92-103,105,115,117,119-133,135-215,217-227
+  s_ebdbabe3e659c2::t_c995390e235dd6 16-18,82-84,104,134,216
+  s_ebdbabe3e659c2::t_a12c000ed650d0 88-89,91,106-114,116,118
+crates/mcp/tests/mcp_e2e_test.rs
+  s_ebdbabe3e659c2::t_6391a6a06be829 1-93
+.gitignore
+  s_ebdbabe3e659c2::t_9fd54bd87be413 4
+  s_ebdbabe3e659c2::t_6d87a53604bf56 17-18
+  s_ebdbabe3e659c2::t_49c2e693bc27b2 1-3,5-16,19-24
+docs/launch/product-hunt.md
+  s_ebdbabe3e659c2::t_27ac5adf668dac 1-66
+docs/evidence/config-swap.diff
+  s_ebdbabe3e659c2::t_c26decfe2e0297 1-9
+apps/desktop/src-tauri/icons/android/mipmap-anydpi-v26/ic_launcher.xml
+  s_ebdbabe3e659c2::t_ad0f126983dda2 1-5
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_cf9fdae12cadd7 1-62,64-120
+  s_ebdbabe3e659c2::t_aa832eeb899b63 63
+SECURITY.md
+  s_ebdbabe3e659c2::t_2d8acacc43c490 1-27
+crates/policy/src/openrouter.rs
+  s_ebdbabe3e659c2::t_b5526d1c030b2b 1-178
+deploy/config/config.toml
+  s_ebdbabe3e659c2::t_54042fda4d7dcd 1-16
+docs/evidence/smoke-local-report.md
+  s_ebdbabe3e659c2::t_37d7cb022c62c5 1-18
+crates/mcp/src/server.rs
+  s_ebdbabe3e659c2::t_a619f9e5a452cd 1-89
+Dockerfile
+  s_ebdbabe3e659c2::t_4aed47e52a6df2 1-22
+CODE_OF_CONDUCT.md
+  s_ebdbabe3e659c2::t_aecc6686596d0a 1-132
+crates/policy/src/local.rs
+  s_ebdbabe3e659c2::t_6cc82447664ade 1-102
+docs/architecture.md
+  s_ebdbabe3e659c2::t_3e5885b62c8f3e 1-123
+scripts/smoke-openrouter.sh
+  s_ebdbabe3e659c2::t_d25d6ef7b1650e 101-105
+  s_ebdbabe3e659c2::t_c948099ddac125 1-100,106-109
+crates/api/Cargo.toml
+  s_ebdbabe3e659c2::t_86a847a2d6c147 1-8
+  s_ebdbabe3e659c2::t_ed71112842232c 9-24
+crates/api/src/lib.rs
+  s_ebdbabe3e659c2::t_0dda16475f18f9 48-61
+  s_ebdbabe3e659c2::t_06c5bef36d538f 1-3,5-47,62-160,162-204
+  s_ebdbabe3e659c2::t_86a847a2d6c147 4
+  s_ebdbabe3e659c2::t_c995390e235dd6 161
+crates/policy/tests/openrouter_mock_test.rs
+  s_ebdbabe3e659c2::t_b570eda17bd569 1-132
+apps/web-ui/style.css
+  s_ebdbabe3e659c2::t_573389179da5c4 1-98
+LICENSE-APACHE
+  s_ebdbabe3e659c2::t_644f7b5fd4d336 1-201
+crates/memory/Cargo.toml
+  s_ebdbabe3e659c2::t_d0b391825ada97 1-14
+crates/mcp/src/tools.rs
+  s_ebdbabe3e659c2::t_5d785dc3eb0120 381,394-416
+  s_ebdbabe3e659c2::t_7954b150fadb9a 16-19
+  s_ebdbabe3e659c2::t_f4be3521ca2157 227,230
+  s_ebdbabe3e659c2::t_1c944984b5506a 256,259-260
+  s_ebdbabe3e659c2::t_aced7edcd69a13 1-15,20-44,69-107,111-226,228-229,231-255,257-258,261-361,365-380,382-390,417-418
+  s_ebdbabe3e659c2::t_c995390e235dd6 108-110,362-364,391-393
+  s_ebdbabe3e659c2::t_01eeb11f30819c 45-68
+crates/policy/Cargo.toml
+  s_ebdbabe3e659c2::t_60fab8aaf06ef0 1-19
+scripts/smoke-local.sh
+  s_ebdbabe3e659c2::t_b4328bf67f70eb 1-107,114-117
+  s_ebdbabe3e659c2::t_158fabef51bf16 108-113
+.dockerignore
+  s_ebdbabe3e659c2::t_ed81337b727699 1-10
+crates/kernel-core/src/store.rs
+  s_ebdbabe3e659c2::t_2c8f5407b5e13e 1-59
+crates/kernel-core/Cargo.toml
+  s_ebdbabe3e659c2::t_72c7fcc057fa4e 1-20
+apps/desktop/src-tauri/tauri.conf.json
+  s_ebdbabe3e659c2::t_44440de3b89445 10
+  s_ebdbabe3e659c2::t_35005b3f15ba71 27
+  s_ebdbabe3e659c2::t_125f61b2c0d871 1-9,11-26,28-30
+apps/desktop/dist/index.html
+  s_ebdbabe3e659c2::t_83a707853856c7 1-73
+crates/kernel-core/src/oracle.rs
+  s_ebdbabe3e659c2::t_92405cc0000dec 41-54
+  s_ebdbabe3e659c2::t_22be08c00ff277 1-40,55-94
+crates/memory/src/lib.rs
+  s_ebdbabe3e659c2::t_5160b65c3497d4 1-248
+examples/sample.md
+  s_ebdbabe3e659c2::t_57e81a5559cf4f 1-24
+crates/mcp/src/lib.rs
+  s_ebdbabe3e659c2::t_2b65d273684507 7
+  s_ebdbabe3e659c2::t_663295ba3e4902 5,8
+  s_ebdbabe3e659c2::t_0662906fd8beda 1-4,6,9-10
+deploy/agentkernel.container
+  s_ebdbabe3e659c2::t_d949fe1ef6b778 1-24
+crates/policy/src/lib.rs
+  s_ebdbabe3e659c2::t_98937a0bd1f5b3 1-46,48-112
+  s_ebdbabe3e659c2::t_c995390e235dd6 47
+examples/config-openrouter.toml
+  s_ebdbabe3e659c2::t_583aee882bc38e 1-17
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_c995390e235dd6 24
+  s_ebdbabe3e659c2::t_2ff6b0d6e677fc 1-23,25-80
+docs/evidence/naming-check.log
+  s_ebdbabe3e659c2::t_569c4dbe64248d 1
+apps/web-ui/manifest.webmanifest
+  s_ebdbabe3e659c2::t_c8e6f5f1b8fb18 1-17
+docs/evidence/desktop-build.log
+  s_ebdbabe3e659c2::t_fd74d54b8be3a2 1-2,8,11,13
+  s_ebdbabe3e659c2::t_569c4dbe64248d 3-7,9-10,12
+docs/adr/0002-mcp-as-tool-substrate.md
+  s_ebdbabe3e659c2::t_21f32466904754 1-29
+crates/kernel-core/src/lib.rs
+  s_ebdbabe3e659c2::t_7dc2507d9d454c 1-24
+apps/desktop/src-tauri/build.rs
+  s_ebdbabe3e659c2::t_86bbcc6b00a40c 1-3
+Cargo.lock
+  s_ebdbabe3e659c2::t_fa64ab8a407c56 1-2706
+apps/desktop/src-tauri/Cargo.lock
+  s_ebdbabe3e659c2::t_d8143dce97c216 1-5478
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "2a7bc88957f0177de0a11cd723cd1cf58ca395ab",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
