@@ -38,11 +38,18 @@ WASI preview 2.** The guest exports three things over its linear memory:
 `alloc(len) -> ptr`, `run(ptr, len) -> i64` (the result packed as
 `ptr<<32 | len`), and `memory`. The host writes the input string in, calls
 `run`, reads the JSON result out. This ABI is a handful of functions,
-stable across wasmtime releases, and trivial to keep in the trust path.
-The component model / WASI preview 2 is richer but still moving; we keep it
-out of the kernel exactly as we kept the fast-moving A2A SDK out in Phase 4b
-(dep-light, stability over richness). A pure-compute tool needs **no WASI at
-all** — it imports nothing.
+stable across wasmtime releases, and trivial to keep in the trust path. We
+keep the component model / WASI preview 2 out of the kernel not because it
+is unstable — wasmtime's own stability-tiers page now positions the
+component model / WASIp2 as Tier 1 (production-supported), a shift from its
+earlier "still stabilizing" reputation — but because it is **heavier**: it
+needs the `wit`/`wasi-bindgen` toolchain and a larger interface surface for
+no benefit to a single-string-in/JSON-out compute tool. Core WASM keeps the
+trust path and the build minimal (dep-light, simplicity over richness — the
+same spirit as keeping the A2A SDK out in Phase 4b). A pure-compute tool
+needs **no WASI at all** — it imports nothing. (The Tier-1 claim is from a
+WebFetch summary of the tiers page, not a verbatim read — worth a human
+double-check before adopting the component model later.)
 
 **Capability sandbox = the absence of host imports (structural, not
 runtime).** A core WASM module has no syscalls and no ambient authority — it

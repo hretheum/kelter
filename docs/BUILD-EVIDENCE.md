@@ -522,7 +522,7 @@ Date: 2026-07-18/19. Precondition verified: Phase 3 + 4a + 4b on origin
 | Area | What was verified | How |
 |---|---|---|
 | wasmtime | latest stable **46.0.1**; core embedding API (`Engine`/`Module`/`Store`/`Linker::func_wrap`/`Instance::get_typed_func`/`Memory::write`+`data`), fuel bounding (`Config::consume_fuel` + `Store::set_fuel`); a core module with unsatisfied imports has NO ambient I/O — the host grants capabilities only by defining host functions; pure-compute needs no `wasmtime-wasi` | crates.io JSON + docs.rs; **then compiled and run against 46.0.1 in this repo** |
-| WASI preview 2 / component model | richer but still moving — kept OUT of the trust path per the interface decision | ecosystem status |
+| WASI preview 2 / component model | wasmtime's stability-tiers page now positions the component model / WASIp2 as **Tier 1** (production-supported), not experimental (WebFetch-summarized — flagged for a human double-check). Kept OUT of the trust path anyway — for *simplicity* (no `wit`/`wasi-bindgen` toolchain, minimal surface), not instability | crates.io + docs.wasmtime.dev (security, stability-tiers) |
 
 ### 2. The key design decision: host↔guest interface
 
