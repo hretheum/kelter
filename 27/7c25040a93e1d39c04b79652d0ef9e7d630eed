@@ -1,0 +1,19 @@
+docs/ROADMAP.md
+  s_ebdbabe3e659c2::t_a37671a9af9b59 84-113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "277c25040a93e1d39c04b79652d0ef9e7d630eed",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
