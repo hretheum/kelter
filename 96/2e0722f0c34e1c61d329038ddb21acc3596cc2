@@ -1,0 +1,133 @@
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_07712a8c33eabb 205-280
+crates/kernel-core/src/oracle.rs
+  s_ebdbabe3e659c2::t_50a9691cb457aa 81-97,107
+crates/mcp/src/bin/ledger_server.rs
+  s_ebdbabe3e659c2::t_56e5afd25a90a0 1-16
+deploy/kelter.container
+  s_ebdbabe3e659c2::t_d949fe1ef6b778 17
+  s_ebdbabe3e659c2::t_9853b5680db8c8 20
+  s_ebdbabe3e659c2::t_0e2d2c710c9893 18-19
+crates/kernel-core/tests/engine_test.rs
+  s_ebdbabe3e659c2::t_13028e58e091ce 62,67
+  s_ebdbabe3e659c2::t_07712a8c33eabb 12
+crates/daemon/Cargo.toml
+  s_ebdbabe3e659c2::t_a9f0158f35d7f1 18
+  s_ebdbabe3e659c2::t_9c425751aba242 27-30
+docs/evidence/durability-resume-before-effect.log
+  s_ebdbabe3e659c2::t_4f4f6cdaa709c2 1-12
+crates/policy/src/openrouter.rs
+  s_ebdbabe3e659c2::t_07712a8c33eabb 14-16
+  s_ebdbabe3e659c2::t_a3cd154d4a7995 32-41,109,147-151,174-180,186,188-189
+Cargo.toml
+  s_ebdbabe3e659c2::t_4de5e15c249305 9,30
+docs/evidence/phase3-naming-check.log
+  s_ebdbabe3e659c2::t_2d0dbe1c8fd372 1-9
+crates/mcp/src/tools.rs
+  s_ebdbabe3e659c2::t_82a775e4717d44 419-439,441-481,485,489-492,496-499
+  s_ebdbabe3e659c2::t_07712a8c33eabb 440,482-484,486-488,493-495
+crates/memory/src/retrieval.rs
+  s_ebdbabe3e659c2::t_f2b374f3a460b7 1-30,32-56,59-72,78-135
+  s_ebdbabe3e659c2::t_07712a8c33eabb 31,57-58,73-77
+crates/policy/src/local.rs
+  s_ebdbabe3e659c2::t_a3cd154d4a7995 12,26-35,64,100-104,111-112
+crates/kernel-core/src/engine.rs
+  s_ebdbabe3e659c2::t_91999b0fa9c0a4 15,69-71,217,239-243,252-282,299-303,305,321-331,337-339,343-376,389-392,406-422,430-509,511-524,526,541-606,608,627-640,674-685,736-745
+  s_ebdbabe3e659c2::t_f24f0feffaf009 747-748
+  s_ebdbabe3e659c2::t_07712a8c33eabb 245-246,615-626
+  s_ebdbabe3e659c2::t_0f3cb7a304b03b 11,247-250,304,377-388,423-429,609-614,746
+crates/api/src/lib.rs
+  s_ebdbabe3e659c2::t_effb2497b43192 72-80,86
+  s_ebdbabe3e659c2::t_f32e0610f133ae 196-200
+README.md
+  s_ebdbabe3e659c2::t_8578eff83629e4 25-29,61-74,172-174,186,197-199,202
+crates/kernel-core/tests/durability_test.rs
+  s_ebdbabe3e659c2::t_8ffbc9c4c50dac 1-255,261-371
+  s_ebdbabe3e659c2::t_07712a8c33eabb 256-260
+docs/evidence/durability-resume-after-effect.log
+  s_ebdbabe3e659c2::t_4f4f6cdaa709c2 1-12
+deploy/README.md
+  s_ebdbabe3e659c2::t_b15969ad68d1ef 1-46
+crates/api/tests/api_test.rs
+  s_ebdbabe3e659c2::t_13028e58e091ce 11,46,52-53,59-60
+docs/adr/0007-durable-execution-journal-replay.md
+  s_ebdbabe3e659c2::t_18def4cd48cdcb 1-78
+crates/storage/src/lib.rs
+  s_ebdbabe3e659c2::t_e83ebdfe56c63d 1-436
+scripts/validate-quadlet.sh
+  s_ebdbabe3e659c2::t_e6d03c63ed923e 1-63
+crates/kernel-core/src/store.rs
+  s_ebdbabe3e659c2::t_2950f3c77980d8 1-3,12-13,28-34,40,70-100
+docs/evidence/phase3-gates.log
+  s_ebdbabe3e659c2::t_07712a8c33eabb 1-6
+docs/architecture.md
+  s_ebdbabe3e659c2::t_3cbb39a9ad33bb 94-112,116-121,153-154
+docs/evidence/durability-restart.log
+  s_ebdbabe3e659c2::t_4f4f6cdaa709c2 1-7
+crates/memory/src/lib.rs
+  s_ebdbabe3e659c2::t_f2bccebe9702b2 122-129,141-148,150
+  s_ebdbabe3e659c2::t_be8ad1d35960d5 8-9
+docs/ROADMAP.md
+  s_ebdbabe3e659c2::t_6fc022a9632ab9 1-87
+crates/policy/tests/openrouter_mock_test.rs
+  s_ebdbabe3e659c2::t_13028e58e091ce 13,99
+crates/mcp/Cargo.toml
+  s_ebdbabe3e659c2::t_56e5afd25a90a0 12-15
+docs/observability.md
+  s_ebdbabe3e659c2::t_849d3fe1b0405d 1-69
+crates/kernel-core/src/journal.rs
+  s_ebdbabe3e659c2::t_07712a8c33eabb 107
+  s_ebdbabe3e659c2::t_e1d04ecdedb2e4 1-106,108-116
+Cargo.lock
+  s_ebdbabe3e659c2::t_5c1208f2e1232d 52,313-315,320,324,406-411,437-448,477-482,639-647,653-664,920,929-937,974,1007-1017,1067,1229-1298,1346-1351,1359,1367-1372,1414-1436,1668-1698,1750-1774,2060-2071,2078-2092,2395-2410,2522-2527
+crates/storage/Cargo.toml
+  s_ebdbabe3e659c2::t_bdfbd1c9502e14 1-20
+scripts/smoke-durability.sh
+  s_ebdbabe3e659c2::t_30bb2675194a69 1-186
+docs/launch/hero.svg
+  s_ebdbabe3e659c2::t_9ad04ddc8adfbe 1
+config.example.toml
+  s_ebdbabe3e659c2::t_3cbb39a9ad33bb 15-22
+docs/evidence/quadlet-harness.log
+  s_ebdbabe3e659c2::t_16a6bc3a5676db 1-8
+crates/kernel-core/src/lib.rs
+  s_ebdbabe3e659c2::t_325a3ca83833ba 15,19,21,26-27
+  s_ebdbabe3e659c2::t_07712a8c33eabb 20
+crates/mcp/src/server.rs
+  s_ebdbabe3e659c2::t_07712a8c33eabb 114,144
+  s_ebdbabe3e659c2::t_56e5afd25a90a0 17-19,28-29,40-53,108-113,115-143,145-148
+crates/mcp/tests/mcp_e2e_test.rs
+  s_ebdbabe3e659c2::t_59979150312040 34-39,43-45
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_9c425751aba242 78,194-204
+  s_ebdbabe3e659c2::t_07712a8c33eabb 28-29
+  s_ebdbabe3e659c2::t_8cc09af4dc3b21 20-27,30-34,36-70
+  s_ebdbabe3e659c2::t_25375167005c4b 35
+  s_ebdbabe3e659c2::t_a9f0158f35d7f1 12-13,123-147,151-152,160-177
+  s_ebdbabe3e659c2::t_ab0e6bd9c73421 178
+crates/daemon/src/config.rs
+  s_ebdbabe3e659c2::t_0f3cb7a304b03b 18-29
+  s_ebdbabe3e659c2::t_a9f0158f35d7f1 16-17,30-47
+docs/evidence/otel-trace-sample.log
+  s_ebdbabe3e659c2::t_92dfeab96d69be 1-28
+crates/kernel-core/src/action.rs
+  s_ebdbabe3e659c2::t_10d2c8f270832f 10-13,23-33
+  s_ebdbabe3e659c2::t_cfd70afa2f41b6 34-35
+  s_ebdbabe3e659c2::t_75adca0a62560d 72-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "962e0722f0c34e1c61d329038ddb21acc3596cc2",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
