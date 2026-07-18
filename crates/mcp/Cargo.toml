@@ -13,8 +13,15 @@ path = "src/bin/tools_server.rs"
 name = "ledger-server"
 path = "src/bin/ledger_server.rs"
 
+[[bin]]
+name = "memory-server"
+path = "src/bin/memory_server.rs"
+
 [dependencies]
 kernel-core.workspace = true
+memory.workspace = true
+storage.workspace = true
+jsonschema.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -1,0 +1,17 @@
+[2m2026-07-18T18:28:19.082757Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m policy engine: local:qwen2.5-0.5b-instruct
+[2m2026-07-18T18:28:19.083870Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m registry: extension 'memstore' capability=Memory permissions=Permissions { network: false, workspace_write: false }
+[2m2026-07-18T18:28:19.586390Z[0m [32m INFO[0m [1mserve_inner[0m[2m:[0m [2mrmcp::service[0m[2m:[0m Service initialized as client [3mpeer_info[0m[2m=[0mSome(InitializeResult { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ServerCapabilities { experimental: None, extensions: None, logging: None, completions: None, prompts: None, resources: None, tools: Some(ToolsCapability { list_changed: None }), tasks: None }, server_info: Implementation { name: "rmcp", title: None, version: "2.2.0", description: None, icons: None, website_url: None }, instructions: None, meta: None })
+[2m2026-07-18T18:28:19.587796Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m mcp tools online: append_ledger
+[2m2026-07-18T18:28:19.591747Z[0m [32m INFO[0m [2mstorage[0m[2m:[0m storage: applying schema migration v1
+[2m2026-07-18T18:28:19.593802Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m storage: sqlite at <run>/kelter.db
+[2m2026-07-18T18:28:19.593821Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m memory: extension 'memstore' (external backend)
+[2m2026-07-18T18:28:29.272724Z[0m [32m INFO[0m [1mserve_inner[0m[2m:[0m [2mrmcp::service[0m[2m:[0m Service initialized as client [3mpeer_info[0m[2m=[0mSome(InitializeResult { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ServerCapabilities { experimental: Some({}), extensions: None, logging: None, completions: None, prompts: Some(PromptsCapability { list_changed: Some(false) }), resources: Some(ResourcesCapability { subscribe: Some(false), list_changed: Some(false) }), tools: Some(ToolsCapability { list_changed: Some(false) }), tasks: None }, server_info: Implementation { name: "memstore", title: None, version: "1.28.1", description: None, icons: None, website_url: None }, instructions: None, meta: None })
+Processing request of type ListToolsRequest
+ui:  http://127.0.0.1:7561/
+api: http://127.0.0.1:7561/api/v1  (Authorization: Bearer <token>)
+[2m2026-07-18T18:28:29.275553Z[0m [32m INFO[0m [2mapi[0m[2m:[0m api listening on http://127.0.0.1:7561
+Processing request of type CallToolRequest
+Processing request of type CallToolRequest
+Processing request of type CallToolRequest
+[2m2026-07-18T18:28:32.025425Z[0m [32m INFO[0m [1mkelter.run[0m[1m{[0m[3mrun_id[0m[2m=[0mbd0a6376-643d-4498-bb76-0862691c6eb0 [3mpolicy[0m[2m=[0mlocal:qwen2.5-0.5b-instruct[1m}[0m[2m:[0m [2mkernel_core::engine[0m[2m:[0m memory: retrieved context from the registered provider [3mrun_id[0m[2m=[0mbd0a6376-643d-4498-bb76-0862691c6eb0 [3mhits[0m[2m=[0m1 [3mtop_score[0m[2m=[0m0.9
+Processing request of type CallToolRequest

@@ -7,5 +7,8 @@ name = "wordstats"
 description = "Word statistics tool in ~25 lines of Python (example extension)"
 provides = ["tools"]
 
+[permissions]
+workspace_write = true
+
 [server]
 command = "./run.sh"

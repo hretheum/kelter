@@ -278,3 +278,78 @@ rusqlite 0.40.1 (bundled SQLite) · opentelemetry 0.32.0 /
 opentelemetry_sdk 0.32.1 / opentelemetry-otlp 0.32.0 /
 tracing-opentelemetry 0.33.0 · rmcp 2.2.0 (unchanged) ·
 otel/opentelemetry-collector 0.156.0 (evidence capture).
+
+## Phase 4a — capability registry + memory as an extension
+
+Date: 2026-07-18 (fourth pass). Precondition verified: Phase 3 interfaces
+present at HEAD (`MemoryProvider` + BM25 in `crates/memory/`, journal/store
++ ADR 0007, `crates/storage/`). Note: HEAD is `962e072` — the Phase 3
+content with a different hash than the `e7dc335` recorded pre-push
+(history was evidently amended when the maintainer pushed; parent chain
+and tree content match, so the precondition is satisfied on substance).
+
+### 1. Sources verified live (Phase 4a)
+
+| Area | What was verified | How |
+|---|---|---|
+| Python MCP SDK | `mcp` still **1.28.1** on PyPI (requires ≥3.10) — unchanged from Phase 2; pin `<2` still correct | pypi.org JSON API |
+| rmcp | still **2.2.0** on crates.io — unchanged | crates.io JSON API |
+
+### 2. The key design decision: memory protocol = MCP reuse
+
+Considered a dedicated memory protocol vs reusing MCP. **Chose MCP reuse**:
+the provider contract (`write`/`retrieve`/`upsert`) maps 1:1 onto three
+reserved MCP tools with typed schemas and structured results; MCP already
+supplies transport, schemas and SDKs in every language. A bespoke protocol
+would add surface without expressiveness. What MCP does NOT decide —
+keeping memory tools out of the model's action space — is the registry's
+job, not the protocol's (routing by declared capability). Full rationale
+in ADR 0008.
+
+### 3. Decision log (Phase 4a)
+
+| Decision | Rationale |
+|---|---|
+| One capability per manifest; `agent`/`model-provider` reserved words that parse but refuse to load | Forward-compatible manifests with zero silent ignoring — the 4b/4c seams are pre-declared. |
+| `[permissions]` with `deny_unknown_fields`; `workspace_write` gates the `KELTER_WORKSPACE` handover; `network` recorded+logged only | Enforce exactly what this slice can enforce; declare the rest honestly (transport-level sandboxing is staged, not simulated). |
+| Kernel-side schema gate on `memory_retrieve` responses (shape + score ∈ [0,1]) | "Untrusted by construction" extended to memory: a hostile/broken backend cannot inject malformed context (proven by the rogue-backend test). Episodes are kernel-constructed and provenance-tagged before the backend ever sees them. |
+| Built-in durable memory = bundled `memory-server` bin spawned via the registry seam | Dogfooding per ADR 0006 made literal: the daemon has NO in-process memory path when storage=sqlite; whatever the built-in can do, a third-party backend can. |
+| External memory extension replaces built-in; >1 memory extension = startup error | Memory is a singleton backend; replacement must be deterministic and explicit. |
+| `memstore` example placed in `examples/extensions/`, NOT auto-scanned `extensions/` | A toy backend silently replacing durable memory in every repo-root daemon would be a footgun; tools are additive (safe to auto-load), storage replacement is an explicit act. |
+| Memory retrieval failures degrade to "no context" with a warning | Backend quality must never become run-integrity failure (graceful degradation applies to memory too). |
+
+### 4. Definition-of-done evidence (Phase 4a)
+
+| Gate | Result | Raw log |
+|---|---|---|
+| build/test/clippy/fmt | PASS — see `evidence/phase4a-gates.log` (**60 tests, 0 failures** incl. 6 registry tests + 2 memory-over-MCP integration tests) | `evidence/phase4a-gates.log` |
+| Naming | codename grep = 0; `agentkernel` only in historical evidence + notes | `evidence/phase4a-naming-check.log` |
+| Registry: capability + permissions + loud failures | PASS — unit tests cover unknown capability, declared-but-unimplemented (`agent`), unknown permission key, >1 capability; live daemon startup refused a `provides=["agent"]` manifest with an explicit error | `evidence/memory-extension-badmanifest.log` |
+| Tool extensions regression | PASS — wordstats smoke green, unchanged behavior (now with explicit `workspace_write` permission) | session log; `scripts/smoke-extension.sh` |
+| Memory as registered extension + dogfood | PASS — daemon log: `memory: builtin durable extension (dogfooded via the registry seam)`; durability smoke (restart survival incl. episodes) green **through the spawned memory-server**, no in-process path | `evidence/durability-restart.log` |
+| Non-Rust memory proof | **PASS** — `memstore` (~30 lines Python) registered via manifest; real model run wrote its reflection episode into the Python backend's store; a second real run retrieved that context back (`memory: retrieved context from the registered provider`); zero kernel recompilation | `evidence/memory-extension-daemon.log`, `evidence/memory-extension-store.json` |
+| Governance intact | PASS — rogue backend returning score=42 rejected by the kernel-side schema gate (integration test over real MCP duplex); tool-side validation/journal unchanged (durability + extension smokes) | `crates/mcp/tests/memory_ext_test.rs` (in gates log) |
+| No secrets / no push | key env-only; commits local, push = human gate | — |
+
+### 5. Uncertainties / TODO for human review (Phase 4a)
+
+- `network` permission is recorded, not enforced at transport level —
+  staged (ADR 0008 notes it); don't present it as sandboxing.
+- Memory now crosses a process boundary (stdio MCP) — negligible at
+  current call rates (one retrieve per run start, one write per
+  reflection); a hot-path memory revisits via the WASM mechanism.
+- The desktop standalone topology still uses in-process in-memory stores
+  (unchanged Phase 3 note; the registry work here is daemon-path only, per
+  the brief).
+- The memstore example's overlap scoring is deliberately simple — the
+  quality contract (BM25 tests) applies to the built-in backend; example
+  docs say so.
+- Uncommitted human edit to `docs/ROADMAP.md` was present in the working
+  tree before this phase started — intentionally left unstaged for the
+  maintainer.
+
+### 6. Version pins observed (Phase 4a)
+
+mcp (Python) 1.28.1 · rmcp 2.2.0 · rusqlite 0.40.1 — all unchanged from
+Phase 3; no new dependencies added beyond wiring `jsonschema`/`storage`
+into the `mcp` crate.

@@ -69,14 +69,20 @@ tool JSON Schemas into the action space, and executes validated actions as
 `extract_structure`, `write_report`) ship as a normal MCP server binary
 (`tools-server`) and get no special treatment.
 
-**Extensions (ADR 0006, first slice):** a directory with a
-`kelter-extension.toml` manifest (`provides = ["tools"]` + a start command)
-is discovered from `[tools] extension_dirs` at startup and run as an
-ordinary MCP server — no recompilation. The runtime passes
-`KELTER_WORKSPACE` in the environment; unknown capabilities in a manifest
-fail startup loudly. `GET /api/v1/tools` shows the live action space, so
-registration is observable. The reference example is a Python tool in ~25
-lines (`extensions/wordstats/`).
+**Extensions — the capability registry (ADR 0006 → ADR 0008):** a
+directory with a `kelter-extension.toml` manifest declares exactly one
+capability, requested permissions, and a start command; the registry routes
+it to the matching kernel seam. `tools` extensions join the action space
+(kernel validation + journal); `memory` extensions serve the reserved
+`memory_write`/`memory_retrieve`/`memory_upsert` MCP tools behind the
+`MemoryProvider` seam with kernel-side response-schema validation; `agent`
+and `model-provider` are reserved and refuse to load until implemented.
+Unknown capabilities or permission keys fail startup loudly. The built-in
+durable memory is dogfooded through this same seam (spawned
+`memory-server`, no in-process shortcut); an external memory extension
+replaces it. Reference examples: a Python tool in ~25 lines
+(`extensions/wordstats/`) and a Python memory backend in ~30 lines
+(`examples/extensions/memstore/`).
 
 ### Executors
 
@@ -147,7 +153,7 @@ explicitly v2+.
 |---|---|---|
 | `kernel-core` | state machine, validation, events | `Kernel`, `ActionSchema`, `ValidatedAction`, `PolicyOracle`, `ActionSource`, `Latitude` |
 | `policy` | model adapters | `LocalAdapter`, `OpenRouterAdapter`, `PolicyConfig`, `build_oracle`, `gbnf::grammar_for` |
-| `mcp` | tool substrate | `McpToolSource`, `ServerSpec`, `extensions::discover`, `server::ToolServer`, bin `tools-server` |
+| `mcp` | tool substrate + capability registry | `McpToolSource`, `McpMemoryProvider`, `extensions::{discover, Capability}`, `server::ToolServer`, `memory_server::MemoryToolServer`, bins `tools-server`/`ledger-server`/`memory-server` |
 | `memory` | memory providers | `MemoryProvider`, `InMemoryProvider`, `Episode`, `Provenance` |
 | `api` | HTTP+WS contract | `router`, `serve`, `serve_listener` |
 | `storage` | durable persistence | `Db`, `SqliteRunStore`, `SqliteMemoryProvider` |

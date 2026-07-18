@@ -92,8 +92,8 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    // Extensions: manifest-declared MCP servers, registered at startup with
-    // no recompilation (ADR 0006). Invalid manifests fail loudly.
+    // Capability registry: manifest-declared extensions, routed by the
+    // capability they provide (ADR 0008). Invalid manifests fail loudly.
     let (extensions, manifest_errors) = mcp::extensions::discover(&cfg.tools.extension_dirs);
     if let Some(err) = manifest_errors.first() {
         anyhow::bail!("extension manifest error: {err}");
@@ -104,15 +104,36 @@ async fn main() -> anyhow::Result<()> {
                 .and_then(|_| std::fs::canonicalize(&cfg.tools.workspace))
         })
         .context("cannot resolve tools workspace directory")?;
+
+    let mut memory_extensions: Vec<mcp::extensions::RegisteredExtension> = Vec::new();
     for mut ext in extensions {
-        // Runtime contract: extensions see the run workspace via env, so
-        // they resolve relative paths the same way the reference tools do.
-        ext.env.push((
-            "KELTER_WORKSPACE".into(),
-            workspace_abs.to_string_lossy().into_owned(),
-        ));
-        tracing::info!("extension registered: {} ({})", ext.name, ext.command);
-        servers.push(ext);
+        tracing::info!(
+            "registry: extension '{}' capability={:?} permissions={:?}",
+            ext.name,
+            ext.capability,
+            ext.permissions
+        );
+        // Permission scoping: the run workspace is handed over only when
+        // the manifest asked for it.
+        if ext.permissions.workspace_write {
+            ext.spec.env.push((
+                "KELTER_WORKSPACE".into(),
+                workspace_abs.to_string_lossy().into_owned(),
+            ));
+        }
+        if ext.permissions.network {
+            tracing::warn!(
+                "registry: extension '{}' requests network access — recorded; transport-level \
+                 enforcement is a later slice",
+                ext.name
+            );
+        }
+        match ext.capability {
+            mcp::extensions::Capability::Tools => servers.push(ext.spec),
+            mcp::extensions::Capability::Memory => memory_extensions.push(ext),
+            // load_manifest refuses agent/model-provider before this point.
+            other => anyhow::bail!("registry routed an unimplemented capability: {other:?}"),
+        }
     }
 
     let tools = mcp::McpToolSource::connect(servers)
@@ -120,30 +141,66 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to start MCP tool servers")?;
     tracing::info!("mcp tools online: {}", tools.tool_names().join(", "));
 
-    // Storage: durable SQLite by default; runs, journal and memory share
-    // one database file and survive restarts.
-    let (store, memory): (Arc<dyn RunStore>, Arc<dyn MemoryProvider>) =
-        match cfg.storage.backend.as_str() {
-            "sqlite" => {
-                let db = storage::Db::open(&cfg.storage.path)
-                    .with_context(|| format!("cannot open database '{}'", cfg.storage.path))?;
-                tracing::info!("storage: sqlite at {}", cfg.storage.path);
-                (
-                    Arc::new(storage::SqliteRunStore::new(db.clone())),
-                    Arc::new(storage::SqliteMemoryProvider::new(db)),
-                )
-            }
-            "memory" => {
-                tracing::warn!("storage: in-memory backend — nothing survives a restart");
-                (
-                    Arc::new(kernel_core::InMemoryRunStore::new()),
-                    Arc::new(InMemoryProvider::new()),
-                )
-            }
-            other => anyhow::bail!(
-                "unknown storage backend '{other}' (expected \"sqlite\" or \"memory\")"
-            ),
+    // Storage for runs + journal: durable SQLite by default.
+    let store: Arc<dyn RunStore> = match cfg.storage.backend.as_str() {
+        "sqlite" => {
+            let db = storage::Db::open(&cfg.storage.path)
+                .with_context(|| format!("cannot open database '{}'", cfg.storage.path))?;
+            tracing::info!("storage: sqlite at {}", cfg.storage.path);
+            Arc::new(storage::SqliteRunStore::new(db))
+        }
+        "memory" => {
+            tracing::warn!("storage: in-memory backend — nothing survives a restart");
+            Arc::new(kernel_core::InMemoryRunStore::new())
+        }
+        other => {
+            anyhow::bail!("unknown storage backend '{other}' (expected \"sqlite\" or \"memory\")")
+        }
+    };
+
+    // Memory: always a registered extension over the reserved MCP tools
+    // (ADR 0008). An external memory extension overrides the built-in one;
+    // the built-in durable memory is itself dogfooded through the same
+    // registry seam (spawned `memory-server`, no in-process shortcut).
+    if memory_extensions.len() > 1 {
+        anyhow::bail!(
+            "multiple memory extensions registered ({:?}) — exactly one memory backend is \
+             supported",
+            memory_extensions
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+    let memory: Arc<dyn MemoryProvider> = if let Some(ext) = memory_extensions.pop() {
+        tracing::info!("memory: extension '{}' (external backend)", ext.name);
+        Arc::new(
+            mcp::McpMemoryProvider::connect(ext.spec)
+                .await
+                .context("failed to start the registered memory extension")?,
+        )
+    } else if cfg.storage.backend == "sqlite" {
+        let exe_dir = std::env::current_exe()?
+            .parent()
+            .map(|p| p.to_path_buf())
+            .context("executable has no parent dir")?;
+        let spec = mcp::ServerSpec {
+            name: "builtin-memory".into(),
+            command: exe_dir.join("memory-server").to_string_lossy().into_owned(),
+            args: vec!["--db".into(), cfg.storage.path.clone()],
+            cwd: None,
+            env: Vec::new(),
         };
+        tracing::info!("memory: builtin durable extension (dogfooded via the registry seam)");
+        Arc::new(
+            mcp::McpMemoryProvider::connect(spec)
+                .await
+                .context("failed to start the builtin memory extension")?,
+        )
+    } else {
+        tracing::warn!("memory: in-memory provider (test backend)");
+        Arc::new(InMemoryProvider::new())
+    };
 
     let kernel = Arc::new(Kernel::new(
         oracle,

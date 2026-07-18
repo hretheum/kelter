@@ -1,0 +1,11 @@
+# A memory-capability extension: the kernel routes it to the MemoryProvider
+# seam (never into the model's action space) and validates every response
+# against the memory interface schema.
+
+[extension]
+name = "memstore"
+description = "Example memory backend in ~30 lines of Python (write/retrieve/upsert over MCP)"
+provides = ["memory"]
+
+[server]
+command = "./run.sh"

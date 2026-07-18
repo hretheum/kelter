@@ -5,7 +5,10 @@
 
 pub mod client;
 pub mod extensions;
+pub mod memory_client;
+pub mod memory_server;
 pub mod server;
 pub mod tools;
 
 pub use client::{McpToolSource, ServerSpec};
+pub use memory_client::McpMemoryProvider;

@@ -286,12 +286,25 @@ impl Kernel {
         let latitude = self.config.latitude;
         let mut seq: u64 = 1;
 
-        let memory_context: Vec<String> = self
-            .memory
-            .retrieve(&run.task, 3)
-            .await
-            .map(|hits| hits.into_iter().map(|h| h.summary).collect())
-            .unwrap_or_default();
+        let memory_context: Vec<String> = match self.memory.retrieve(&run.task, 3).await {
+            Ok(hits) => {
+                if !hits.is_empty() {
+                    tracing::info!(
+                        %run_id,
+                        hits = hits.len(),
+                        top_score = hits[0].score,
+                        "memory: retrieved context from the registered provider"
+                    );
+                }
+                hits.into_iter().map(|h| h.summary).collect()
+            }
+            Err(e) => {
+                // A failing memory backend degrades context quality, never
+                // run integrity — logged, not fatal.
+                tracing::warn!(%run_id, "memory retrieve failed: {e}");
+                Vec::new()
+            }
+        };
 
         let mut last_error: Option<String> = None;
         let mut terminal: Option<(RunStatus, Option<serde_json::Value>, Option<String>)> = None;
