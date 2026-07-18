@@ -1,0 +1,26 @@
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_b6b0b84824beaa 161
+extensions/README.md
+  s_ebdbabe3e659c2::t_b6b0b84824beaa 45
+extensions/wordstats/run.sh
+  s_ebdbabe3e659c2::t_b6b0b84824beaa 21
+docs/evidence/phase2-naming-check.log
+  s_ebdbabe3e659c2::t_ca13508941e536 1
+  s_ebdbabe3e659c2::t_5bf31004a21261 8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "fab8c71695167cd61e955cccaaa1dac94ff68470",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
