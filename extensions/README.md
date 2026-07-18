@@ -134,6 +134,56 @@ Things to know:
   "relation", …}`) — a KG-backed memory implements ranking however it
   likes, as long as results come back in the contract shape.
 
+## WASM extensions — bring your own logic, sandboxed by construction
+
+Some extensions should run *inside* the kernel with **no ambient authority
+at all** — no network, no disk, nothing you didn't grant. That's the WASM
+mechanism (ADR 0011): compile your logic to WebAssembly in any language, and
+the kernel runs it in-process through wasmtime with a capability sandbox.
+
+This is a trust posture, not a detail: **you bring the logic; the kernel
+decides what it can touch.** A pure-compute WASM module imports nothing, so
+it *structurally cannot* reach the network or filesystem — not "we check and
+block it", but "the capability isn't there to reach". A module that tries to
+import a capability it wasn't granted simply fails to instantiate.
+
+```toml
+[extension]
+name = "wordcount-wasm"
+description = "Word statistics, compiled to WASM"
+provides = ["tools"]
+mechanism = "wasm"          # in-process, sandboxed — not a subprocess
+
+# No [permissions] → no network, no disk. Pure compute.
+
+[wasm]
+module = "wordcount_wasm.wasm"   # relative to this directory
+tool = "word_count"
+```
+
+The guest ABI is a minimal byte protocol over linear memory (core WASM, no
+WASI, no component model): export `alloc(len) -> ptr`, `run(ptr, len) -> i64`
+(result packed as `ptr<<32 | len`), and `memory`. The host writes the input
+string in, calls `run`, reads a JSON result out. A WASM tool takes one
+string argument `input` and returns a JSON object.
+
+Complete working example: [`examples/wasm-tools/wordcount/`](../examples/wasm-tools/wordcount/)
+(the Rust source) → compiled to [`examples/extensions/wordcount-wasm/`](../examples/extensions/wordcount-wasm/)
+(manifest + `.wasm`). Rebuild the modules with `scripts/build-wasm-demo.sh`.
+Smoke: `scripts/smoke-wasm.sh` proves the tool runs in-process AND that an
+ungranted network capability is structurally blocked.
+
+Because a WASM tool is a `tools`-capability action like any other, it also
+works as a `tool` node in [plan mode](../docs/adr/0010-plan-mode.md) with no
+extra work.
+
+**Honest boundary:** WASM sandboxes the *WASM* mechanism. Subprocess
+extensions (the MCP tool/memory/agent examples above) still run as OS
+processes with OS-level network/disk access — WASM is a sandboxed
+*alternative*, not a fix for the subprocess mechanism. Pick WASM when you
+want the sandbox; pick subprocess when you want any language/binary and full
+OS access.
+
 ## Remote agents (outbound A2A)
 
 An `agent` extension is a **remote** agent Kelter delegates sub-tasks to

@@ -72,8 +72,20 @@ pub struct Manifest {
     /// as an A2A client — nothing is spawned.
     #[serde(default)]
     pub agent: Option<AgentSection>,
+    /// WASM extensions: the in-process, capability-sandboxed module.
+    #[serde(default)]
+    pub wasm: Option<WasmSection>,
     #[serde(default)]
     pub permissions: Permissions,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WasmSection {
+    /// Path to the `.wasm` module (relative to the extension directory).
+    pub module: String,
+    /// The action name the module exposes.
+    pub tool: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +105,14 @@ pub struct ExtensionSection {
     pub description: String,
     /// Exactly one capability per manifest.
     pub provides: Vec<String>,
+    /// How the extension runs: `"subprocess"` (default, MCP stdio / remote
+    /// A2A) or `"wasm"` (in-process, capability-sandboxed via wasmtime).
+    #[serde(default = "default_mechanism")]
+    pub mechanism: String,
+}
+
+fn default_mechanism() -> String {
+    "subprocess".into()
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,11 +132,22 @@ pub enum ExtensionKind {
     Server(ServerSpec),
     /// A remote A2A agent the kernel dials as a client (never spawned).
     RemoteAgent(RemoteAgentEndpoint),
+    /// An in-process, capability-sandboxed WASM module (ADR 0011).
+    Wasm(WasmEndpoint),
 }
 
 #[derive(Debug, Clone)]
 pub struct RemoteAgentEndpoint {
     pub card_url: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct WasmEndpoint {
+    /// Absolute path to the `.wasm` module.
+    pub module_path: String,
+    /// The action name the module exposes.
+    pub tool: String,
+    pub description: String,
 }
 
 /// A manifest the registry accepted, routed by capability.
@@ -154,6 +185,15 @@ pub enum ManifestError {
     NetworkRequired(String),
     #[error("agent extension '{0}' card_url must be http(s), got '{1}'")]
     BadCardUrl(String, String),
+    #[error(
+        "extension '{0}' declares unknown mechanism '{1}' (expected \"subprocess\" or \"wasm\")"
+    )]
+    UnknownMechanism(String, String),
+    #[error(
+        "extension '{0}' capability '{1}' does not support mechanism '{2}' in this runtime slice — \
+         WASM currently supports only the `tools` capability"
+    )]
+    UnsupportedMechanism(String, &'static str, &'static str),
 }
 
 /// Parse one manifest file into a registered extension.
@@ -174,6 +214,23 @@ pub fn load_manifest(manifest_path: &Path) -> Result<RegisteredExtension, Manife
     let declared = &manifest.extension.provides[0];
     let capability = Capability::parse(declared)
         .ok_or_else(|| ManifestError::UnknownCapability(name.clone(), declared.clone()))?;
+
+    let mechanism = manifest.extension.mechanism.as_str();
+    if mechanism != "subprocess" && mechanism != "wasm" {
+        return Err(ManifestError::UnknownMechanism(name, mechanism.to_string()));
+    }
+    // WASM is a tools-only mechanism in this slice; anything else with
+    // mechanism = "wasm" fails loudly (memory/agent/model-provider deferred).
+    if mechanism == "wasm" && capability != Capability::Tools {
+        let cap = match capability {
+            Capability::Memory => "memory",
+            Capability::Agent => "agent",
+            Capability::ModelProvider => "model-provider",
+            Capability::Tools => unreachable!(),
+        };
+        return Err(ManifestError::UnsupportedMechanism(name, cap, "wasm"));
+    }
+
     let kind = match capability {
         Capability::ModelProvider => {
             return Err(ManifestError::UnimplementedCapability(
@@ -193,6 +250,18 @@ pub fn load_manifest(manifest_path: &Path) -> Result<RegisteredExtension, Manife
             }
             ExtensionKind::RemoteAgent(RemoteAgentEndpoint {
                 card_url: agent.card_url,
+            })
+        }
+        Capability::Tools if manifest.extension.mechanism == "wasm" => {
+            let wasm = manifest
+                .wasm
+                .ok_or_else(|| ManifestError::MissingSection(name.clone(), "wasm", "wasm"))?;
+            let dir = manifest_path.parent().unwrap_or(Path::new("."));
+            let module_path = dir.join(&wasm.module).to_string_lossy().into_owned();
+            ExtensionKind::Wasm(WasmEndpoint {
+                module_path,
+                tool: wasm.tool,
+                description: manifest.extension.description.clone(),
             })
         }
         Capability::Tools | Capability::Memory => {
@@ -323,6 +392,64 @@ mod tests {
             ExtensionKind::RemoteAgent(a) => assert_eq!(a.card_url, "http://127.0.0.1:9999"),
             other => panic!("expected remote agent, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn wasm_tool_extension_routes_to_wasm_kind() {
+        let root = tmp();
+        write_ext(
+            &root,
+            "wc",
+            "[extension]\nname = \"wc\"\nprovides = [\"tools\"]\nmechanism = \"wasm\"\n\n[wasm]\nmodule = \"m.wasm\"\ntool = \"word_count\"\n",
+        );
+        let (exts, errors) = discover(&[root.to_string_lossy().into_owned()]);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(exts.len(), 1);
+        match &exts[0].kind {
+            ExtensionKind::Wasm(w) => {
+                assert!(w.module_path.ends_with("m.wasm"));
+                assert_eq!(w.tool, "word_count");
+            }
+            other => panic!("expected wasm kind, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wasm_needs_wasm_section() {
+        let root = tmp();
+        write_ext(
+            &root,
+            "nowasm",
+            "[extension]\nname = \"nowasm\"\nprovides = [\"tools\"]\nmechanism = \"wasm\"\n\n[server]\ncommand = \"x\"\n",
+        );
+        let (_, errors) = discover(&[root.to_string_lossy().into_owned()]);
+        assert!(errors[0].to_string().contains("[wasm] section"));
+    }
+
+    #[test]
+    fn wasm_only_supports_tools_capability() {
+        let root = tmp();
+        write_ext(
+            &root,
+            "wmem",
+            "[extension]\nname = \"wmem\"\nprovides = [\"memory\"]\nmechanism = \"wasm\"\n\n[wasm]\nmodule = \"m.wasm\"\ntool = \"t\"\n",
+        );
+        let (_, errors) = discover(&[root.to_string_lossy().into_owned()]);
+        assert!(errors[0]
+            .to_string()
+            .contains("does not support mechanism 'wasm'"));
+    }
+
+    #[test]
+    fn unknown_mechanism_fails_loudly() {
+        let root = tmp();
+        write_ext(
+            &root,
+            "weird-mech",
+            "[extension]\nname = \"weird-mech\"\nprovides = [\"tools\"]\nmechanism = \"telepathy\"\n\n[server]\ncommand = \"x\"\n",
+        );
+        let (_, errors) = discover(&[root.to_string_lossy().into_owned()]);
+        assert!(errors[0].to_string().contains("unknown mechanism"));
     }
 
     #[test]

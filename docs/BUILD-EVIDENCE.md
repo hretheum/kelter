@@ -509,3 +509,76 @@ kernel validating and rejecting bad plans before execution.
 
 No new dependencies. rmcp 2.2.0 · rusqlite 0.40.1 · reqwest 0.12 —
 unchanged. Plan mode is entirely in `kernel-core` (+ config plumbing).
+
+## Phase 5A — WASM extension mechanism (in-process, capability-sandboxed)
+
+Date: 2026-07-18/19. Precondition verified: Phase 3 + 4a + 4b on origin
+(registry ADR 0008 — WASM is a new mechanism in it; egress deferral ADR 0009
+— this closes it for WASM; journal/governance Phase 3). 4c is orthogonal
+(WASM tools also work as plan nodes, for free).
+
+### 1. Sources verified live (Phase 5A)
+
+| Area | What was verified | How |
+|---|---|---|
+| wasmtime | latest stable **46.0.1**; core embedding API (`Engine`/`Module`/`Store`/`Linker::func_wrap`/`Instance::get_typed_func`/`Memory::write`+`data`), fuel bounding (`Config::consume_fuel` + `Store::set_fuel`); a core module with unsatisfied imports has NO ambient I/O — the host grants capabilities only by defining host functions; pure-compute needs no `wasmtime-wasi` | crates.io JSON + docs.rs; **then compiled and run against 46.0.1 in this repo** |
+| WASI preview 2 / component model | richer but still moving — kept OUT of the trust path per the interface decision | ecosystem status |
+
+### 2. The key design decision: host↔guest interface
+
+**Core WASM + a minimal byte ABI, not the component model / WASI preview 2.**
+The guest exports `alloc`/`run`/`memory`; the host passes the input string
+through linear memory and reads a JSON result. Rationale: the ABI is tiny,
+stable across wasmtime releases, and easy to keep in the trust path — the
+same dep-light / stability-over-richness call as the A2A client in 4b. A
+pure-compute module needs no WASI at all. Full rationale in ADR 0011.
+
+### 3. Decision log (Phase 5A)
+
+| Decision | Rationale |
+|---|---|
+| `mechanism = "wasm"` in the manifest, routed by the registry to a WASM host (not a subprocess) | Extends ADR 0008 with a second mechanism without a new capability axis; `tools`-only in this slice (memory/agent/model-provider with wasm fail loudly). |
+| Capability sandbox = absence of host imports (structural) | A core module has no ambient authority; the host defines a capability's host function ONLY if granted. Ungranted → the module can't be instantiated (unknown import). This is *structural*, not a runtime check — exactly the property the whole thesis needs. |
+| Default grants: nothing (no network, no disk) | Least authority by default; a manifest opts in via `[permissions]`. |
+| Fresh `Store`/instance per call + fuel bound | Stateless, deterministic guest execution; fuel caps runaway loops. |
+| Shallow tool schema (single `input` string → JSON) | Same constrained-decoding reason as ADR 0010 (a deep object grammar is pathologically slow on a 0.5B). |
+| wasmtime features: `cranelift` + `runtime` only (no `gc`, no `wasi`) | Minimal surface for pure-compute core modules; `gc` requires a collector feature and isn't needed. |
+| Demo `.wasm` checked in + `scripts/build-wasm-demo.sh` | Reproducible from source (`examples/wasm-tools/*`, own workspaces so `cargo build --workspace` never compiles wasm with the host toolchain); the small binaries are committed for a zero-setup smoke. |
+| Daemon action space made source-agnostic | MCP source is now optional; WASM-only (or A2A-only) deployments work (`no action sources` fails loudly). |
+
+### 4. Definition-of-done evidence (Phase 5A)
+
+| Gate | Result | Raw log |
+|---|---|---|
+| build/test/clippy/fmt (incl. `.wasm` build) | PASS — **92 tests, 0 failures (28 suites)** incl. 3 wasmhost tests + 4 registry wasm-routing tests; demo modules build to `wasm32-unknown-unknown` | `evidence/phase5a-gates.log` |
+| Naming | codename grep = 0; `agentkernel` only in historical evidence + notes | `evidence/phase5a-naming-check.log` |
+| WASM mechanism routing; ungranted capability refused; MCP no regression | PASS — `mechanism = "wasm"` routes to the WASM host (registry test + live registration log); memory/agent+wasm and unknown mechanism fail loudly (unit tests); tool/memory/a2a subprocess smokes green | `evidence/wasm-registration.log`; `scripts/smoke-extension.sh`, `smoke-a2a.sh`, `smoke-memory-extension.sh` |
+| **WASM tool runs in-process** | **PASS** — `word_count` (Rust→WASM) registered `mechanism = "wasm"`, appeared in `GET /api/v1/tools`, and was used by the local 0.5B in a real run returning `{words, chars, lines}` — no subprocess spawned | `evidence/wasm-tool-run.json`, `evidence/wasm-registration.log` |
+| **Sandbox money shot** | **PASS** — a WASM module importing `kelter:net` with NO network grant is **structurally blocked**: wasmtime refuses to instantiate it (`unknown import`), the step fails, no network touched; the unit tests also show the SAME module instantiates WHEN the grant is present (proving the gate is the only thing between the module and the capability) | `evidence/wasm-sandbox-run.json`, `crates/wasmhost/src/lib.rs` tests |
+| Governance | PASS — the WASM tool's output flows into the run through kernel-side schema validation like any tool; provenance/journal unchanged | code + wasm-tool run |
+| No secrets / no push | PASS | — |
+
+### 5. Uncertainties / TODO for human review (Phase 5A)
+
+- **Honest boundary (unchanged and important):** WASM sandboxes the WASM
+  mechanism only. Subprocess (MCP) tool/memory/agent extensions STILL have
+  OS-level egress — WASM is a sandboxed *alternative*, not a fix for the
+  subprocess mechanism. Do not read this as "subprocess egress is now
+  closed".
+- The granted `kelter:net` host function is a STUB (returns a sentinel) —
+  the point of this slice is the *gate*, not a real network implementation.
+  A real network capability behind the gate is follow-up work.
+- WASM is `tools`-only here; WASM memory/agent/policy are deferred.
+- The byte ABI takes a single string input and returns JSON; richer typed
+  I/O (or the component model) is deferred.
+- The demo `.wasm` is checked in; a supply-chain-conscious deployment would
+  build from source in CI (the `build-wasm-demo.sh` path) and verify.
+- No `wasmtime-wasi` dependency (pure compute); adding filesystem/clock
+  capabilities later would introduce WASI (preview 1 or, when mature,
+  preview 2) behind the same grant model.
+
+### 6. Version pins observed (Phase 5A)
+
+wasmtime 46.0.1 (features `cranelift`, `runtime`) · rustc 1.95 with target
+`wasm32-unknown-unknown` · rmcp 2.2.0 / rusqlite 0.40.1 / reqwest 0.12
+unchanged.

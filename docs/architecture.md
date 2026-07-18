@@ -82,7 +82,7 @@ the kernel dials them as a governed A2A client — origin-pinned egress
 (SSRF allowlist), validated responses, and durable delegation (the remote
 task id is journaled at creation so a crash-resume reconnects via `GetTask`
 instead of re-delegating). `model-provider` is reserved and refuses to load
-until implemented.
+until implemented. **WASM tool extensions** (`mechanism = "wasm"`, ADR 0011) run in-process through wasmtime with a capability sandbox — the host grants only the permissions the manifest declares (default: none), so an ungranted network/disk capability is structurally unreachable; a WASM tool is an action-space `tool` like any other (works as a plan node too).
 Unknown capabilities or permission keys fail startup loudly. The built-in
 durable memory is dogfooded through this same seam (spawned
 `memory-server`, no in-process shortcut); an external memory extension
@@ -180,6 +180,7 @@ explicitly v2+.
 | `api` | HTTP+WS contract | `router`, `serve`, `serve_listener` |
 | `storage` | durable persistence | `Db`, `SqliteRunStore`, `SqliteMemoryProvider` |
 | `a2a` | outbound A2A client (ADR 0009) | `A2aActionSource`, `A2aClient`, `RemoteAgent` |
+| `wasmhost` | in-process WASM tool mechanism (ADR 0011) | `WasmToolSource`, `Grants` |
 | `kernel-core::plan` | plan validation (DAG/cycles/types) + durable DAG execution | `Plan`, `PlanNode`, `validate`, `ValidatedPlan` |
 | `daemon` | headless assembly, resume-on-startup, OTel init, composite action source | bin `kelter` |
 | `apps/desktop` | Tauri shell | commands `start_standalone`, `open_ui` |

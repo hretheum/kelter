@@ -1,0 +1,17 @@
+# A WASM tool extension: runs IN-PROCESS through wasmtime, capability-
+# sandboxed. Unlike subprocess (MCP) or remote (A2A) extensions, nothing is
+# spawned and nothing is dialed — the module executes inside the kernel with
+# ONLY the capabilities this manifest grants. With no [permissions], it has
+# no network and no disk: it is pure compute, sandboxed by construction.
+
+[extension]
+name = "wordcount-wasm"
+description = "Word statistics, compiled to WASM (in-process, sandboxed)"
+provides = ["tools"]
+mechanism = "wasm"
+
+[wasm]
+# Built from examples/wasm-tools/wordcount (checked in; rebuild with
+# scripts/build-wasm-demo.sh).
+module = "wordcount_wasm.wasm"
+tool = "word_count"

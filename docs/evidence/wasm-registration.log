@@ -1,0 +1,3 @@
+[2m2026-07-18T22:08:44.218363Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m registry: extension 'wordcount-wasm' capability=Tools permissions=Permissions { network: false, workspace_write: false }
+[2m2026-07-18T22:08:44.218393Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m registry: WASM extension 'wordcount-wasm' (in-process, sandboxed; grants: Grants { network: false })
+[2m2026-07-18T22:08:44.457436Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m wasm tools online: word_count

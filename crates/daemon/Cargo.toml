@@ -17,6 +17,7 @@ memory.workspace = true
 api.workspace = true
 storage.workspace = true
 a2a.workspace = true
+wasmhost.workspace = true
 tokio = { workspace = true, features = ["full"] }
 serde.workspace = true
 serde_json.workspace = true

@@ -108,6 +108,7 @@ async fn main() -> anyhow::Result<()> {
     let mut memory_extensions: Vec<mcp::ServerSpec> = Vec::new();
     let mut memory_extension_names: Vec<String> = Vec::new();
     let mut remote_agents: Vec<a2a::RemoteAgent> = Vec::new();
+    let mut wasm_sources: Vec<Arc<dyn kernel_core::ActionSource>> = Vec::new();
     for ext in extensions {
         tracing::info!(
             "registry: extension '{}' capability={:?} permissions={:?}",
@@ -162,22 +163,65 @@ async fn main() -> anyhow::Result<()> {
                     card_url: endpoint.card_url,
                 });
             }
+            (
+                mcp::extensions::Capability::Tools,
+                mcp::extensions::ExtensionKind::Wasm(endpoint),
+            ) => {
+                // In-process, capability-sandboxed (ADR 0011). The host
+                // grants ONLY the capabilities the manifest declared —
+                // default: no network, no disk. A module importing an
+                // ungranted capability cannot be instantiated.
+                let grants = wasmhost::Grants {
+                    network: ext.permissions.network,
+                };
+                tracing::info!(
+                    "registry: WASM extension '{}' (in-process, sandboxed; grants: {:?})",
+                    ext.name,
+                    grants
+                );
+                let source = wasmhost::WasmToolSource::load(
+                    ext.name.clone(),
+                    &endpoint.module_path,
+                    endpoint.tool,
+                    endpoint.description,
+                    grants,
+                )
+                .with_context(|| format!("failed to load WASM extension '{}'", ext.name))?;
+                wasm_sources.push(wasmhost::arc(source));
+            }
             (capability, kind) => {
                 anyhow::bail!("registry mis-routed capability {capability:?} with kind {kind:?}")
             }
         }
     }
 
-    let tools = mcp::McpToolSource::connect(servers)
-        .await
-        .context("failed to start MCP tool servers")?;
-    tracing::info!("mcp tools online: {}", tools.tool_names().join(", "));
-
-    // Remote agents join the action space as delegate_to_<name> actions;
-    // the kernel dials them as an A2A client (governed egress, ADR 0009).
-    let action_source: Arc<dyn kernel_core::ActionSource> = if remote_agents.is_empty() {
-        Arc::new(tools)
-    } else {
+    // Assemble the action space from every mechanism: MCP tools, WASM
+    // tools (in-process, sandboxed), and A2A delegations — all merged into
+    // one governed action space. The MCP source is only built when there
+    // are servers (a WASM-only or A2A-only deployment has none).
+    let mut sources: Vec<Arc<dyn kernel_core::ActionSource>> = Vec::new();
+    if !servers.is_empty() {
+        let tools = mcp::McpToolSource::connect(servers)
+            .await
+            .context("failed to start MCP tool servers")?;
+        tracing::info!("mcp tools online: {}", tools.tool_names().join(", "));
+        sources.push(Arc::new(tools));
+    }
+    for source in &wasm_sources {
+        if let Ok(schema) = source.action_schema(latitude).await {
+            tracing::info!(
+                "wasm tools online: {}",
+                schema
+                    .actions
+                    .iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+    sources.extend(wasm_sources);
+    if !remote_agents.is_empty() {
         for agent in &remote_agents {
             tracing::info!(
                 "a2a: remote agent '{}' registered (card: {})",
@@ -187,10 +231,15 @@ async fn main() -> anyhow::Result<()> {
         }
         let delegations = a2a::A2aActionSource::new(remote_agents.clone())
             .context("failed to configure the A2A delegation client")?;
-        Arc::new(kernel_core::CompositeActionSource::new(vec![
-            Arc::new(tools),
-            Arc::new(delegations),
-        ]))
+        sources.push(Arc::new(delegations));
+    }
+    let action_source: Arc<dyn kernel_core::ActionSource> = match sources.len() {
+        0 => anyhow::bail!(
+            "no action sources configured — enable tools, a WASM or memory \
+                            extension, or a remote agent"
+        ),
+        1 => sources.pop().unwrap(),
+        _ => Arc::new(kernel_core::CompositeActionSource::new(sources)),
     };
 
     // Storage for runs + journal: durable SQLite by default.

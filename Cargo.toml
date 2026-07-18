@@ -8,9 +8,10 @@ members = [
     "crates/api",
     "crates/storage",
     "crates/a2a",
+    "crates/wasmhost",
     "crates/daemon",
 ]
-exclude = ["apps/desktop/src-tauri"]
+exclude = ["apps/desktop/src-tauri", "examples/wasm-tools/wordcount", "examples/wasm-tools/netpeek"]
 # The desktop app (apps/desktop/src-tauri) is intentionally excluded from the
 # default workspace so that `cargo build --workspace` does not require the
 # platform webview toolchain. It is built separately via `cargo tauri build`.
@@ -30,6 +31,7 @@ memory = { path = "crates/memory" }
 api = { path = "crates/api" }
 storage = { path = "crates/storage" }
 a2a = { path = "crates/a2a" }
+wasmhost = { path = "crates/wasmhost" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

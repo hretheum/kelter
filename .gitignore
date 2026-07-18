@@ -7,6 +7,7 @@ extensions/*/.venv
 examples/extensions/*/.venv
 examples/extensions/*/memstore.json
 examples/a2a-agent/.venv
+examples/wasm-tools/*/target
 /.bootstrap/
 
 # Secrets & local env — never commit keys

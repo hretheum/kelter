@@ -1,0 +1,19 @@
+[package]
+name = "wasmhost"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+kernel-core.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["sync", "rt"] }
+uuid.workspace = true
+wasmtime = { version = "46", default-features = false, features = ["cranelift", "runtime"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
