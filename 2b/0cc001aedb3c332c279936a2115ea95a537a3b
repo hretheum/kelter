@@ -1,0 +1,65 @@
+crates/kernel-core/src/journal.rs
+  s_ebdbabe3e659c2::t_a294de44195032 72
+  s_ebdbabe3e659c2::t_428def1b4f568d 90
+  s_ebdbabe3e659c2::t_45ffa72c8cd8bc 67-71
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_f9fd91d76d3c33 268-271
+crates/policy/src/gbnf.rs
+  s_ebdbabe3e659c2::t_9fc80ba3609337 75-91
+  s_ebdbabe3e659c2::t_44447847ca2241 98-101
+  s_ebdbabe3e659c2::t_c6b686906ea288 127-130
+docs/adr/0010-plan-mode.md
+  s_ebdbabe3e659c2::t_419b6392be3372 1-97
+crates/kernel-core/src/plan.rs
+  s_ebdbabe3e659c2::t_39b30fd982346e 412,415
+  s_ebdbabe3e659c2::t_de0f953ea4c9c2 1-70,74-202,206-250,256-411,413-414,416-425
+  s_ebdbabe3e659c2::t_f6a84e0ecb6907 251-255
+  s_ebdbabe3e659c2::t_a294de44195032 71-73,203-205
+crates/kernel-core/src/lib.rs
+  s_ebdbabe3e659c2::t_91e89dccbc9828 24-26
+  s_ebdbabe3e659c2::t_a294de44195032 17,30
+docs/evidence/plan-validation.log
+  s_ebdbabe3e659c2::t_9094ff7ccc4bac 1-6
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_be27bb080fc21d 438-511
+scripts/smoke-plan.sh
+  s_ebdbabe3e659c2::t_a5ae2487710daa 1-125
+crates/kernel-core/src/engine.rs
+  s_ebdbabe3e659c2::t_976d7adda0aeae 858-873,891
+  s_ebdbabe3e659c2::t_a3ceae67e50643 934-986,993-1011,1014-1020,1031-1082,1085-1215,1219-1278,1291-1346,1349-1351
+  s_ebdbabe3e659c2::t_392086d601986e 244-254,262,271,276-281
+  s_ebdbabe3e659c2::t_40206e283f38fe 987-992
+  s_ebdbabe3e659c2::t_a294de44195032 1012-1013,1021-1030,1083-1084,1216-1218,1279-1290,1347-1348
+  s_ebdbabe3e659c2::t_8335b007dd4d43 434-437
+  s_ebdbabe3e659c2::t_9208ef0a665281 282
+crates/kernel-core/tests/plan_test.rs
+  s_ebdbabe3e659c2::t_2f7e00cec6303b 162-163
+  s_ebdbabe3e659c2::t_38d07b89c4c47b 1-115,120-123,125-161,164-241,247-265
+  s_ebdbabe3e659c2::t_a294de44195032 116-119,124,242-246
+crates/daemon/src/config.rs
+  s_ebdbabe3e659c2::t_7c98f9883a5eef 72-74,82
+docs/evidence/phase4c-naming-check.log
+  s_ebdbabe3e659c2::t_7a02be87516ae9 1-12
+config.example.toml
+  s_ebdbabe3e659c2::t_03a0a8fc722f97 26
+docs/architecture.md
+  s_ebdbabe3e659c2::t_03a0a8fc722f97 119-134,183
+docs/evidence/phase4c-gates.log
+  s_ebdbabe3e659c2::t_be27bb080fc21d 1-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "2b0cc001aedb3c332c279936a2115ea95a537a3b",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
