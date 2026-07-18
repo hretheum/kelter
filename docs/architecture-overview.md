@@ -16,9 +16,10 @@ constrained policy oracle.** The model *proposes* actions; the kernel
 the model — so the same orchestration runs on a 0.5B local model or a frontier
 model and stays trustworthy either way.
 
-This document synthesises the accepted ADRs (0001–0009) into one picture. The
-governed-multi-agent work (Phase 4b) is delivered; plan mode (Phase 4c) is
-planned. Each section cites its ADR; see the index at the end.
+This document synthesises the accepted ADRs (0001–0010) into one picture. The
+governed durable multi-agent work (Phase 4b) and plan mode (Phase 4c) are
+delivered; a second extension mechanism, WASM (Phase 5, ADR 0011), is in
+progress. Each section cites its ADR; see the index at the end.
 
 ---
 
@@ -383,13 +384,28 @@ trivially wrappable in that origin-pin gate.
 
 ---
 
-## 11. Planned — plan mode (Phase 4c)
+## 11. Plan mode — validated, durable DAG (ADR 0010, Phase 4c)
 
-The model proposes a plan as a DAG of steps with dependencies; the kernel
-validates it (schema, allowed actions, no cycles) and executes it durably, so
-plans inherit resume and idempotency. A plan node can be a tool call, an A2A
-sub-agent delegation, or a review step — planning composes the rest of the
-layer, and schema-constrained plans stay reliable even on a small local model.
+Step mode picks one action at a time; plan mode lets the model propose the
+whole shape up front. A single `propose_plan` action carries a DAG of typed
+nodes (schema-constrained via GBNF, so even a small model emits a structurally
+valid plan — a one-node plan is valid). The kernel validates the plan **before
+any execution** — unique ids, dependencies that resolve, no cycles (a Kahn
+topological sort that also fixes the deterministic order), allowed node types,
+and each `tool` / `a2a` node referencing an action that actually exists — so an
+invalid plan fails before it is journaled and before any side effect. A node is
+a tool call, an A2A delegation (inheriting Phase 4b egress governance), or a
+kernel-owned review.
+
+The plan is a **memoized decision**: the Phase 3 replay law generalised from a
+linear sequence to a DAG. The validated plan is journaled once and never
+re-queried on resume; each node reuses the per-action machinery (Intent →
+Receipt, idempotency keys, A2A reconnect) keyed by node index, so a completed
+node is skipped and a review verdict is memoised. The model is consulted at
+most once for the plan plus once per review node — tool and A2A nodes involve
+no model call. Governance is not bypassed: every node still passes kernel-side
+validation and journaling. Adaptive re-planning is deferred — a node failure
+fails the plan explicitly, never a silent re-plan.
 
 ```mermaid
 flowchart LR
@@ -402,7 +418,36 @@ flowchart LR
 
 ---
 
-## 12. Cross-cutting — the trust boundary
+## 12. Second extension mechanism — WASM (ADR 0011, Phase 5, in progress)
+
+MCP subprocesses are one extension mechanism; WASM is the second. A manifest can
+declare `mechanism = "wasm"`, and the registry routes it to an in-process,
+capability-sandboxed host (wasmtime) instead of spawning a subprocess. A WASM
+module can do **nothing it is not explicitly granted** — no network, no
+filesystem by default — so the kernel governs every capability rather than
+trusting a process.
+
+```mermaid
+flowchart LR
+    MAN["manifest · mechanism = wasm"] --> REG{"registry routes by mechanism"}
+    REG -->|"wasm"| HOST["wasmtime host<br/>grants only declared capabilities"]
+    REG -->|"mcp"| SUB["stdio subprocess (as before)"]
+    HOST --> RUN["in-process, sandboxed<br/>no network/fs unless granted"]
+    RUN -->|"result"| KVA["kernel-validated action"]
+    RUN -.->|"ungranted egress"| BLK["structurally blocked"]
+```
+
+This is also the structural close of the one honest gap Phase 4b left open: a
+spawned extension can still make its own network calls — an OS-level egress the
+kernel does not intercept — whereas a WASM extension simply cannot reach what it
+was not granted. The two coexist: WASM is the sandboxed alternative for
+hot-path, untrusted logic (validators, policies, distillers), not a fix to the
+subprocess mechanism. And because a WASM tool is an ordinary `tool` in the
+action space, it composes with plan mode for free.
+
+---
+
+## 13. Cross-cutting — the trust boundary
 
 The single invariant under every ADR: nothing the model or an extension
 produces is trusted; the kernel is the only thing that validates, executes,
@@ -431,3 +476,5 @@ journals and attributes.
 | 0007 | Durable execution — journal & replay | 8 |
 | 0008 | The capability registry — one manifest, many kernel seams | 7 |
 | 0009 | Governed, durable outbound A2A | 10 |
+| 0010 | Plan mode — validated, durable DAG | 11 |
+| 0011 | WASM — the second extension mechanism *(in progress, Phase 5)* | 12 |

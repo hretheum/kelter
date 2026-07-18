@@ -16,10 +16,22 @@ swappable policy engine, and it stays reliable even on small local models.
   manifest), launch assets. Done.
 - **Phase 3 — durable, operable runtime.** Persistent run store + memory,
   crash-resume from the journal, idempotent tool boundaries (a side effect
-  happens exactly once across a resume), real retrieval, OpenTelemetry.
-  In progress.
+  happens exactly once across a resume), real retrieval, OpenTelemetry. Done.
+- **Phase 4 — governed extension platform + multi-agent & planning.** The
+  capability registry with memory as a runtime-registered extension (4a, ADR
+  0008), governed durable outbound A2A (4b, ADR 0009), and validated durable
+  plans / plan mode (4c, ADR 0010). Done.
+- **Phase 5 — WASM as the second extension mechanism.** In-process,
+  capability-sandboxed extensions; structurally closes the subprocess network
+  egress left open by 4b (ADR 0011). In progress.
 
-## Phase 4 — the governed extension platform (planned)
+## Phase 4 — the governed extension platform (delivered)
+
+<!-- Shipped across 4a (registry + memory-as-extension, ADR 0008), 4b (governed
+durable A2A, ADR 0009) and 4c (plan mode, ADR 0010). The embeddings retrieval
+switch and the extension SDK + gallery remain open; WASM became Phase 5. The
+prose below is the original vision; components not yet built are the ones not
+listed as Done in "Where we are". -->
 
 Realizes ADR-0006 in full. The moat is an extension ecosystem on stable
 protocols — the VS Code shape, where the value is the extension API and
@@ -88,7 +100,7 @@ multi-agent and planning layer — the next moves are a menu, not a fixed
 sequence: each is large enough to be its own phase when chosen, and not all
 will be built. In rough priority.
 
-- **A · WASM as the second extension mechanism.** In-process,
+- **A · WASM as the second extension mechanism** — *now Phase 5, in progress.* In-process,
   capability-sandboxed extensions for the hot path (validators, latitude
   policies, learning distillers) — and, structurally, the close of the one
   honest gap Phase 4b left open: a spawned extension's arbitrary network
