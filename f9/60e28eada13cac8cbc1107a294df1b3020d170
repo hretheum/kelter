@@ -1,0 +1,21 @@
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_e09323bc812ff4 57
+docs/evidence/docker-buildx.log
+  s_ebdbabe3e659c2::t_0bf3315386ccc3 1-51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "f960e28eada13cac8cbc1107a294df1b3020d170",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
