@@ -52,8 +52,8 @@ assumptions is not implemented in Phase 1 (listed in §5).
 | `cargo clippy --workspace --all-targets -- -D warnings` | PASS — no issues | same |
 | `cargo fmt --all --check` | PASS | same |
 | Smoke, local leg (mandatory) | **PASS e2e** — run `completed`, 3 tool steps + finish on `local:qwen2.5-0.5b-instruct` (GBNF), report produced; live WS stream captured | `evidence/smoke-local-run.json`, `evidence/smoke-local-report.md`, `evidence/smoke-local-events.ndjson`, `evidence/smoke-local-daemon.log` |
-| Smoke, OpenRouter leg | Unit test on mocked HTTP: PASS (asserts bearer header, `tools` payload, arguments-as-string parsing, kernel validation round-trip). **Live leg: SKIPPED — `OPENROUTER_API_KEY` not present in this run's environment.** Runnable via `OPENROUTER_API_KEY=... scripts/smoke-openrouter.sh` | `crates/policy/tests/openrouter_mock_test.rs` (in `build-test-clippy-fmt.log`), `evidence/smoke-openrouter-SKIPPED.log` |
-| One-line adapter swap | Config diff shows exactly one `engine =` line differing (plus comments); same task ran through the local leg live and through the OpenRouter adapter on mocked HTTP | `evidence/config-swap.diff` |
+| Smoke, OpenRouter leg | Unit test on mocked HTTP: PASS (asserts bearer header, `tools` payload, arguments-as-string parsing, kernel validation round-trip). **Live leg: PASS e2e** — same wedge task on `openrouter:anthropic/claude-sonnet-5`, run `completed` in 3 tool steps + finish (executed later the same day once the key was provided via env) | `crates/policy/tests/openrouter_mock_test.rs` (in `build-test-clippy-fmt.log`), `evidence/smoke-openrouter-run.json`, `evidence/smoke-openrouter-report.md` |
+| One-line adapter swap | Config diff shows exactly one `engine =` line differing (plus comments); **the same task ran live through both legs** — local 0.5B + GBNF and OpenRouter frontier — completing identically (compare the two run.json files) | `evidence/config-swap.diff`, `evidence/smoke-local-run.json`, `evidence/smoke-openrouter-run.json` |
 | Container image amd64+arm64 | PASS — `docker buildx build --platform linux/amd64,linux/arm64` exit 0, manifest list exported with both platforms | `evidence/docker-buildx.log` |
 | Quadlet unit | Written per podman-systemd.unit(5) conventions; **not machine-validated** (no podman on this machine) — listed in §5 | `deploy/agentkernel.container` |
 | Desktop build | PASS — release build linking `kernel-core` (standalone topology compiled in) + macOS `.app` bundle; remote topology is runtime config in the same binary | `evidence/desktop-build.log` |
@@ -81,12 +81,9 @@ covered by unit tests. Final smoke: 3 steps + finish, no rejections.
 
 ## 5. Uncertainties / TODO for human review
 
-- **OpenRouter live leg not executed** — no key in this run's environment.
-  The adapter is spec-verified + mock-tested; run
-  `OPENROUTER_API_KEY=... scripts/smoke-openrouter.sh docs/evidence` to
-  produce the live log. Model IDs in examples
-  (`anthropic/claude-sonnet-5`) were sampled from the live models endpoint
-  but should be re-checked at run time.
+- ~~OpenRouter live leg not executed~~ — **resolved**: executed live
+  against `anthropic/claude-sonnet-5`, PASS e2e (see §3). Model IDs in
+  examples remain worth re-checking over time as the catalog moves.
 - **Quadlet unit not machine-validated** — podman is not installed here.
   Validate with `systemd-analyze --user verify` / a podman host before
   relying on it.
