@@ -81,6 +81,36 @@ API keys, and implement constrained decoding, and OpenRouter already covers the
 "new models" demand through configuration. Not every axis needs to be
 runtime-pluggable.
 
+## After Phase 4 — candidate directions
+
+Once Phase 4 lands — the governed extension platform plus the governed durable
+multi-agent and planning layer — the next moves are a menu, not a fixed
+sequence: each is large enough to be its own phase when chosen, and not all
+will be built. In rough priority.
+
+- **A · WASM as the second extension mechanism.** In-process,
+  capability-sandboxed extensions for the hot path (validators, latitude
+  policies, learning distillers) — and, structurally, the close of the one
+  honest gap Phase 4b left open: a spawned extension's arbitrary network
+  egress. A WASM module can do nothing it is not explicitly granted, so the
+  kernel governs every capability instead of trusting a subprocess. This is
+  also a developer-facing story worth documenting as its own selling point:
+  bring your own logic in any language, sandboxed by construction, and the
+  kernel decides what it may touch.
+- **B · A2A inbound and interop.** Kelter as an A2A server — exposing its
+  agents (and plans) via Agent Cards so other systems can delegate to Kelter
+  and inherit its governance and durability. Completes the A2A story, out and
+  in; more completeness than new wedge.
+- **C · Hardening and real deployment.** Close the accumulated honest deferrals
+  — desktop on the durable store, cost in dollars, OpenTelemetry metrics and
+  logs, the embeddings retrieval switch, ledger-dedupe scaling, auth — plus
+  packaging (above) and deployment on real rootless-podman hardware. Necessary
+  for real users; a sweep, not a headline.
+- **D · Governed self-learning.** The runtime distils reusable knowledge and
+  plans from past runs into memory — governed, provenance-tagged, and
+  reversible, so learning can never silently corrupt behaviour. On-brand and
+  ambitious; also the highest-risk.
+
 ## Packaging & distribution
 
 Release hardening, not a capability phase. The Tauri desktop shell currently
