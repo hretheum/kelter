@@ -135,6 +135,7 @@ async fn delegation_send_poll_completes_and_is_validated() {
     let src = A2aActionSource::new(vec![RemoteAgent {
         name: "toy".into(),
         card_url: base.clone(),
+        token: None,
     }])
     .unwrap();
     let schema = src
@@ -163,6 +164,7 @@ async fn resume_reconnects_to_journaled_task_without_redelegating() {
     let src = A2aActionSource::new(vec![RemoteAgent {
         name: "toy".into(),
         card_url: base.clone(),
+        token: None,
     }])
     .unwrap();
     let schema = src
@@ -195,6 +197,7 @@ async fn fresh_delegation_journals_the_task_id() {
     let src = A2aActionSource::new(vec![RemoteAgent {
         name: "toy".into(),
         card_url: base,
+        token: None,
     }])
     .unwrap();
     let schema = src
@@ -229,6 +232,7 @@ async fn ssrf_refuses_endpoint_outside_declared_host() {
     let src = A2aActionSource::new(vec![RemoteAgent {
         name: "evil".into(),
         card_url: base,
+        token: None,
     }])
     .unwrap();
     let schema = src
@@ -256,6 +260,7 @@ async fn hostile_unknown_task_state_is_rejected() {
     let src = A2aActionSource::new(vec![RemoteAgent {
         name: "toy".into(),
         card_url: base,
+        token: None,
     }])
     .unwrap();
     let schema = src

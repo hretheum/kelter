@@ -99,6 +99,36 @@ fn propose(action: &str, args: serde_json::Value) -> ProposedAction {
 }
 
 #[tokio::test]
+async fn cancel_run_marks_pending_run_canceled_durably() {
+    // A created-but-not-executed run is cancellable (A2A tasks/cancel).
+    let oracle = ScriptedOracle::new(vec![propose("finish", json!({"summary": "x"}))]);
+    let (kernel, _) = kernel_with(oracle, KernelConfig::default());
+    let run_id = kernel.create_run("cancel me".into()).await.unwrap();
+
+    let run = kernel.cancel_run(run_id).await.unwrap();
+    assert_eq!(run.status, RunStatus::Canceled);
+    // Durable: the store reflects it and it is excluded from resume.
+    let stored = kernel.store().get(run_id).await.unwrap();
+    assert_eq!(stored.status, RunStatus::Canceled);
+    assert!(kernel.store().unfinished_runs().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn cancel_run_is_a_noop_on_a_terminal_run() {
+    let oracle = ScriptedOracle::new(vec![
+        propose("echo", json!({"message": "hi"})),
+        propose("finish", json!({"summary": "done"})),
+    ]);
+    let (kernel, _) = kernel_with(oracle, KernelConfig::default());
+    let run = kernel.run_task("finish me".into()).await.unwrap();
+    assert_eq!(run.status, RunStatus::Completed);
+
+    // Cancelling a finished task must not rewrite its outcome.
+    let after = kernel.cancel_run(run.id).await.unwrap();
+    assert_eq!(after.status, RunStatus::Completed);
+}
+
+#[tokio::test]
 async fn happy_path_completes_and_reflects() {
     let oracle = ScriptedOracle::new(vec![
         propose("echo", json!({"message": "hello"})),

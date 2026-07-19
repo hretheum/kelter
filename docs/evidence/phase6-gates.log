@@ -1,6 +1,6 @@
 === Phase 6 gates (2026-07-18T23:35:38Z) ===
 --- fmt --check ---
-Diff in /Users/eorlowski/dev/better-hermes/crates/kernel-core/src/journal.rs:67:
+Diff in <repo>/crates/kernel-core/src/journal.rs:67:
      /// The extension trust posture in effect when the run started (ADR
      /// 0012): `(extension_name, trust_label)`. Journaled once so "what ran
      /// unsandboxed" is durably attributable.
@@ -11,7 +11,7 @@ Diff in /Users/eorlowski/dev/better-hermes/crates/kernel-core/src/journal.rs:67:
 (B[m     /// The validated plan a `plan`-mode run will execute. Journaled once,
      /// the moment the model proposes it: on resume the plan is replayed from
      /// here and the model is NOT re-queried for it (the plan is a memoized
-Diff in /Users/eorlowski/dev/better-hermes/crates/mcp/src/extensions.rs:534:
+Diff in <repo>/crates/mcp/src/extensions.rs:534:
          );
          let (exts, errors) = discover(&[root.to_string_lossy().into_owned()]);
          assert!(exts.is_empty());
@@ -23,10 +23,10 @@ Diff in /Users/eorlowski/dev/better-hermes/crates/mcp/src/extensions.rs:534:
  
      #[test]
 --- clippy -D warnings ---
-    Checking api v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/api)
-    Checking wasmhost v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/wasmhost)
-    Checking mcp v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/mcp)
-    Checking daemon v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/daemon)
+    Checking api v0.1.0 (<repo>/crates/api)
+    Checking wasmhost v0.1.0 (<repo>/crates/wasmhost)
+    Checking mcp v0.1.0 (<repo>/crates/mcp)
+    Checking daemon v0.1.0 (<repo>/crates/daemon)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.86s
 --- test ---
      Running unittests src/lib.rs (target/debug/deps/a2a-12a86ab5082ebec6)

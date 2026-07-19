@@ -191,9 +191,28 @@ async fn main() -> anyhow::Result<()> {
                 // A2A egress is kernel-owned: the `network` permission was
                 // already required at load; the client is pinned to the
                 // declared card host (SSRF allowlist).
+                // Optional bearer token for an auth-requiring remote endpoint
+                // (e.g. another Kelter's inbound A2A, ADR 0013). The manifest
+                // names an env var; the token itself is never in the tree.
+                let token = endpoint
+                    .token_env
+                    .as_ref()
+                    .and_then(|var| match std::env::var(var) {
+                        Ok(t) if !t.is_empty() => Some(t),
+                        _ => {
+                            tracing::warn!(
+                                "a2a: agent '{}' declares token_env='{}' but it is unset/empty — \
+                                 dialing without auth",
+                                ext.name,
+                                var
+                            );
+                            None
+                        }
+                    });
                 remote_agents.push(a2a::RemoteAgent {
                     name: ext.name.clone(),
                     card_url: endpoint.card_url,
+                    token,
                 });
             }
             (

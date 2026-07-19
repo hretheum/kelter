@@ -1,0 +1,75 @@
+=== Phase 7 gates (2026-07-19T10:54:59Z) ===
+--- fmt --check ---
+Diff in <repo>/crates/api/src/lib.rs:309:
+         .insert(run_id, handle.abort_handle());
+ 
+     match state.kernel.store().get(run_id).await {
+[31m-        Ok(run) => rpc_ok(id, serde_json::json!({ "task": a2a::server::task_json(&run) })),
+(B[m[32m+        Ok(run) => rpc_ok(
+(B[m[32m+            id,
+(B[m[32m+            serde_json::json!({ "task": a2a::server::task_json(&run) }),
+(B[m[32m+        ),
+(B[m         Err(e) => rpc_error(id, -32000, &format!("run vanished after creation: {e}")),
+     }
+ }
+Diff in <repo>/crates/api/tests/api_test.rs:158:
+ async fn a2a_card_is_public_and_declares_bearer() {
+     let (addr, _) = spawn_server().await;
+     // No auth: card discovery must be reachable so a client learns the scheme.
+[31m-    let card: serde_json::Value = reqwest::get(format!("http://{addr}/.well-known/agent-card.json"))
+(B[m[31m-        .await
+(B[m[31m-        .unwrap()
+(B[m[31m-        .json()
+(B[m[31m-        .await
+(B[m[31m-        .unwrap();
+(B[m[32m+    let card: serde_json::Value =
+(B[m[32m+        reqwest::get(format!("http://{addr}/.well-known/agent-card.json"))
+(B[m[32m+            .await
+(B[m[32m+            .unwrap()
+(B[m[32m+            .json()
+(B[m[32m+            .await
+(B[m[32m+            .unwrap();
+(B[m     assert_eq!(card["securitySchemes"]["bearer"]["scheme"], "bearer");
+     assert_eq!(card["security"][0]["bearer"], json!([]));
+     // The advertised interface points back at this origin's /a2a/rpc, in both
+Diff in <repo>/crates/daemon/src/main.rs:194:
+                 // Optional bearer token for an auth-requiring remote endpoint
+                 // (e.g. another Kelter's inbound A2A, ADR 0013). The manifest
+                 // names an env var; the token itself is never in the tree.
+[31m-                let token = endpoint.token_env.as_ref().and_then(|var| {
+(B[m[31m-                    match std::env::var(var) {
+(B[m[32m+                let token = endpoint
+(B[m[32m+                    .token_env
+(B[m[32m+                    .as_ref()
+(B[m[32m+                    .and_then(|var| match std::env::var(var) {
+(B[m                         Ok(t) if !t.is_empty() => Some(t),
+                         _ => {
+                             tracing::warn!(
+Diff in <repo>/crates/daemon/src/main.rs:206:
+                             );
+                             None
+                         }
+[31m-                    }
+(B[m[31m-                });
+(B[m[32m+                    });
+(B[m                 remote_agents.push(a2a::RemoteAgent {
+                     name: ext.name.clone(),
+                     card_url: endpoint.card_url,
+--- clippy -D warnings ---
+    Checking api v0.1.0 (<repo>/crates/api)
+    Checking daemon v0.1.0 (<repo>/crates/daemon)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.68s
+--- test ---
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+--- build ---
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.72s
+
+=== Phase 7 gates (re-verify after fmt) ===
+--- fmt --check ---
+fmt: OK
+--- clippy -D warnings ---
+cargo clippy: No issues found
+--- test ---
+cargo test: 109 passed (28 suites, 4.60s)

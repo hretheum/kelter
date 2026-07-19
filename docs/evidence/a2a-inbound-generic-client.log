@@ -1,0 +1,6 @@
+card.name: Kelter
+card.securityScheme: bearer
+card.endpoint: http://127.0.0.1:7601/a2a/rpc
+task.id: a564ed74-15ad-485e-a84e-be60bf84e088
+final.state: TASK_STATE_COMPLETED
+final.artifact: {"summary":"append_ledger completed successfully."}

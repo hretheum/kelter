@@ -152,6 +152,120 @@ async fn submit_run_and_poll_to_completion() {
     assert_eq!(status, "completed");
 }
 
+// ---- A2A inbound (ADR 0013) ----------------------------------------------
+
+#[tokio::test]
+async fn a2a_card_is_public_and_declares_bearer() {
+    let (addr, _) = spawn_server().await;
+    // No auth: card discovery must be reachable so a client learns the scheme.
+    let card: serde_json::Value =
+        reqwest::get(format!("http://{addr}/.well-known/agent-card.json"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    assert_eq!(card["securitySchemes"]["bearer"]["scheme"], "bearer");
+    assert_eq!(card["security"][0]["bearer"], json!([]));
+    // The advertised interface points back at this origin's /a2a/rpc, in both
+    // the v1.0 and legacy field names.
+    let rpc = format!("http://{addr}/a2a/rpc");
+    assert_eq!(card["interfaces"][0]["url"], rpc);
+    assert_eq!(card["supportedInterfaces"][0]["url"], rpc);
+}
+
+#[tokio::test]
+async fn a2a_rpc_rejects_anonymous() {
+    let (addr, _) = spawn_server().await;
+    let client = reqwest::Client::new();
+    // Anonymous task call: never reaches a method — the security surface.
+    let res = client
+        .post(format!("http://{addr}/a2a/rpc"))
+        .json(&json!({"jsonrpc":"2.0","id":1,"method":"SendMessage",
+                      "params":{"message":{"parts":[{"text":"hi"}]}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+}
+
+async fn a2a_send(
+    client: &reqwest::Client,
+    addr: &SocketAddr,
+    token: &str,
+    method: &str,
+) -> String {
+    let res: serde_json::Value = client
+        .post(format!("http://{addr}/a2a/rpc"))
+        .bearer_auth(token)
+        .json(&json!({"jsonrpc":"2.0","id":"x","method":method,
+                      "params":{"message":{"parts":[{"text":"echo hi"}]}}}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    res["result"]["task"]["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn a2a_message_send_creates_run_and_get_polls_to_completion() {
+    let (addr, token) = spawn_server().await;
+    let client = reqwest::Client::new();
+
+    // Both the v1.0 (`SendMessage`) and legacy (`message/send`) names work.
+    let id_v1 = a2a_send(&client, &addr, &token, "SendMessage").await;
+    let id_legacy = a2a_send(&client, &addr, &token, "message/send").await;
+    assert_ne!(id_v1, id_legacy);
+
+    for task_id in [id_v1, id_legacy] {
+        let mut state = String::new();
+        for _ in 0..50 {
+            let r: serde_json::Value = client
+                .post(format!("http://{addr}/a2a/rpc"))
+                .bearer_auth(&token)
+                .json(&json!({"jsonrpc":"2.0","id":1,"method":"tasks/get",
+                              "params":{"id": task_id}}))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            state = r["result"]["status"]["state"].as_str().unwrap().to_string();
+            if state == "TASK_STATE_COMPLETED" || state == "TASK_STATE_FAILED" {
+                // A completed task carries its answer as an artifact part.
+                assert!(r["result"]["artifacts"][0]["parts"][0]["text"].is_string());
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(state, "TASK_STATE_COMPLETED");
+    }
+}
+
+#[tokio::test]
+async fn a2a_get_and_cancel_unknown_task_is_not_found() {
+    let (addr, token) = spawn_server().await;
+    let client = reqwest::Client::new();
+    let unknown = uuid::Uuid::new_v4();
+    for method in ["tasks/get", "tasks/cancel"] {
+        let r: serde_json::Value = client
+            .post(format!("http://{addr}/a2a/rpc"))
+            .bearer_auth(&token)
+            .json(&json!({"jsonrpc":"2.0","id":1,"method":method,
+                          "params":{"id": unknown.to_string()}}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(r["error"]["code"], -32001, "method {method}");
+    }
+}
+
 #[tokio::test]
 async fn serves_embedded_ui() {
     let (addr, _) = spawn_server().await;

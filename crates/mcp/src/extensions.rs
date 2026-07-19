@@ -95,6 +95,12 @@ pub struct AgentSection {
     /// becomes the ONLY host the kernel will dial for this agent
     /// (SSRF allowlist).
     pub card_url: String,
+    /// Optional name of an environment variable holding a bearer token for a
+    /// remote agent whose endpoint requires auth (e.g. another Kelter's
+    /// inbound A2A endpoint, ADR 0013). The token itself is NEVER in the
+    /// manifest — only the env var name; the daemon resolves it at startup.
+    #[serde(default)]
+    pub token_env: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,6 +183,9 @@ pub enum ExtensionKind {
 #[derive(Debug, Clone)]
 pub struct RemoteAgentEndpoint {
     pub card_url: String,
+    /// Name of an env var holding the bearer token (secrets stay out of the
+    /// tree). `None` for an open endpoint.
+    pub token_env: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -322,6 +331,7 @@ pub fn load_manifest(manifest_path: &Path) -> Result<RegisteredExtension, Manife
             }
             ExtensionKind::RemoteAgent(RemoteAgentEndpoint {
                 card_url: agent.card_url,
+                token_env: agent.token_env,
             })
         }
         Capability::Tools if manifest.extension.mechanism == "wasm" => {

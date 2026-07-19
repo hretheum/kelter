@@ -1,0 +1,5 @@
+task=a296f923-8e14-4420-937e-542f5c686aaf caller-attribution:
+{"kind":"note","step":0,"key":"a2a_inbound","value":{"caller":"smoke-tester","auth":"bearer","via":"a2a/message-send"}}
+{"kind":"note","step":0,"key":"a2a_inbound","value":{"caller":"anonymous-authenticated","auth":"bearer","via":"a2a/message-send"}}
+{"kind":"note","step":0,"key":"a2a_inbound","value":{"caller":"kelter-a2a-client","auth":"bearer","via":"a2a/message-send"}}
+{"kind":"note","step":0,"key":"a2a_inbound","value":{"caller":"anonymous-authenticated","auth":"bearer","via":"a2a/message-send"}}

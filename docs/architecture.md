@@ -100,6 +100,22 @@ replaces it. Reference examples: a Python tool in ~25 lines
 (`extensions/wordstats/`) and a Python memory backend in ~30 lines
 (`examples/extensions/memstore/`).
 
+**A2A inbound — Kelter as an A2A server (ADR 0013):** the outbound `agent`
+seam has a mirror. Kelter publishes an Agent Card at
+`/.well-known/agent-card.json` and accepts delegated tasks over JSON-RPC
+(`message/send` / `tasks/get` / `tasks/cancel`, canonical v1.0 names plus the
+pre-1.0 spellings). The crux: an inbound A2A **task *is* a durable kernel
+run** — the `task.id` is the `run_id`, so `tasks/get` reads the run store and
+inherits Phase 3 durability for free (a crash mid-task resumes on restart and
+`tasks/get` reconnects to the resumed run, exactly once — no separate task
+store). The task text is untrusted input run through the same kernel
+validation/journal as any run (no bypass), and the endpoint **requires the
+bearer token** — anonymous task calls are refused (`401`); only card discovery
+is public, and it declares the scheme. The caller is attributed in the run
+journal. This closes A2A out+in; both directions are one hand-rolled, dep-light
+pair with no SDK in the trust path. Proof: `scripts/smoke-a2a-inbound.sh` (a
+Kelter↔Kelter loop on localhost + a generic A2A client resolving the card).
+
 ### Executors
 
 Long-running coding work is delegated to headless executors with a typed
@@ -189,7 +205,7 @@ explicitly v2+.
 | `memory` | memory providers | `MemoryProvider`, `InMemoryProvider`, `Episode`, `Provenance` |
 | `api` | HTTP+WS contract | `router`, `serve`, `serve_listener` |
 | `storage` | durable persistence | `Db`, `SqliteRunStore`, `SqliteMemoryProvider` |
-| `a2a` | outbound A2A client (ADR 0009) | `A2aActionSource`, `A2aClient`, `RemoteAgent` |
+| `a2a` | A2A client (outbound, ADR 0009) + server helpers (inbound, ADR 0013) | `A2aActionSource`, `A2aClient`, `RemoteAgent`, `server::{agent_card, task_json, normalize_method}` |
 | `wasmhost` | in-process WASM tool mechanism (ADR 0011) | `WasmToolSource`, `Grants` |
 | `kernel-core::plan` | plan validation (DAG/cycles/types) + durable DAG execution | `Plan`, `PlanNode`, `validate`, `ValidatedPlan` |
 | `daemon` | headless assembly, resume-on-startup, OTel init, composite action source | bin `kelter` |

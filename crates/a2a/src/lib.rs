@@ -37,11 +37,18 @@ pub const A2A_VERSION: &str = "1.0";
 pub const WELL_KNOWN_CARD: &str = "/.well-known/agent-card.json";
 const NOTE_TASK_ID: &str = "a2a_task_id";
 
+pub mod server;
+
 /// A manifest-registered remote agent.
 #[derive(Debug, Clone)]
 pub struct RemoteAgent {
     pub name: String,
     pub card_url: String,
+    /// Optional bearer token for a remote agent whose endpoint requires auth
+    /// (e.g. another Kelter's inbound A2A endpoint, ADR 0013). Read from an
+    /// env var by the daemon — never stored in the manifest/tree. `None` for
+    /// an open endpoint (like the toy target).
+    pub token: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -148,8 +155,16 @@ pub struct A2aClient {
     card_url: String,
     /// scheme://host:port the manifest declared — the ONLY origin dialed.
     allowed_origin: String,
+    /// Optional bearer token sent to an endpoint that requires auth (another
+    /// Kelter's inbound endpoint declares this in its Agent Card).
+    token: Option<String>,
     endpoint: tokio::sync::OnceCell<String>,
 }
+
+/// Identifies these calls as originating from a Kelter A2A client, so an
+/// inbound peer can attribute the caller in its journal (ADR 0013).
+const CALLER_HEADER: &str = "A2A-Caller";
+const CALLER_ID: &str = "kelter-a2a-client";
 
 fn origin_of(url: &str) -> Result<String, String> {
     let parsed = reqwest::Url::parse(url).map_err(|e| e.to_string())?;
@@ -183,8 +198,21 @@ impl A2aClient {
             agent: agent.name.clone(),
             card_url,
             allowed_origin,
+            token: agent.token.clone(),
             endpoint: tokio::sync::OnceCell::new(),
         })
+    }
+
+    /// Attach the common A2A headers (version, caller id) and — when the
+    /// remote requires it — the bearer token.
+    fn with_headers(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let req = req
+            .header("A2A-Version", A2A_VERSION)
+            .header(CALLER_HEADER, CALLER_ID);
+        match &self.token {
+            Some(t) => req.bearer_auth(t),
+            None => req,
+        }
     }
 
     pub fn agent_name(&self) -> &str {
@@ -197,9 +225,7 @@ impl A2aClient {
         self.endpoint
             .get_or_try_init(|| async {
                 let card: AgentCard = self
-                    .http
-                    .get(&self.card_url)
-                    .header("A2A-Version", A2A_VERSION)
+                    .with_headers(self.http.get(&self.card_url))
                     .send()
                     .await
                     .and_then(|r| r.error_for_status())
@@ -264,9 +290,7 @@ impl A2aClient {
             "params": params,
         });
         let response: serde_json::Value = self
-            .http
-            .post(&endpoint)
-            .header("A2A-Version", A2A_VERSION)
+            .with_headers(self.http.post(&endpoint))
             .json(&body)
             .send()
             .await

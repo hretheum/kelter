@@ -659,3 +659,90 @@ Neither half alone lets an unsandboxed subprocess run — that is the money shot
 No new dependencies. serde/toml (config), rmcp 2.2.0, rusqlite 0.40.1,
 wasmtime 46.0.1 — all unchanged. The trust policy is pure kernel/registry/config
 logic plus one new journal variant.
+
+## Phase 7 — A2A inbound (Kelter as an A2A server)
+
+Date: 2026-07-19. Implements ADR 0013. Precondition verified: Phase 3
+(durability — an inbound task maps onto a durable run) + 4b (crate `a2a` +
+outbound client, reused for the Kelter↔Kelter loop) on origin; the bearer-auth
+API (Phase 1/2) that the inbound endpoint is mounted on. This phase completes
+A2A in both directions.
+
+### 1. Sources verified live (Phase 7)
+
+| Area | What was verified | How |
+|---|---|---|
+| A2A server spec (v1.0.x) | Agent Card served at `/.well-known/agent-card.json`; top-level fields incl. `interfaces`/`supportedInterfaces`, and the **security declaration** (`securitySchemes` map of OpenAPI-style schemes + `security` array marking them required); the canonical Task state enum (`TASK_STATE_*`). JSON-RPC core methods are the **proto-derived names `SendMessage`/`GetTask`/`CancelTask`** in the v1.0 spec (the pre-1.0 JSON-RPC spellings `message/send`/`tasks/get`/`tasks/cancel` are the older generation) | `a2a-protocol.org/latest/specification/` (WebFetch, §4.x data structures, §9.4 core methods, §14.3 discovery) |
+| Interop naming reality | Kelter's own 4b outbound client + toy target use `SendMessage`/`GetTask` and read `supportedInterfaces` | `crates/a2a/src/lib.rs`, `examples/a2a-agent/server.py` |
+
+Design response to the naming ambiguity: the inbound server **accepts both
+generations** of method name, and the Agent Card emits **both** `interfaces`
+(v1.0) and `supportedInterfaces` (what the 4b client reads) with identical
+content — so a v1.0 client, a pre-1.0 client, and Kelter's own 4b client all
+interop. The conformance client uses the v1.0 `SendMessage`.
+
+### 2. The design decision: an inbound task IS a durable run
+
+The A2A `task.id` is the Kelter `run_id`. `message/send` → `create_run` (durable
+from creation) + spawn `execute_run`; `tasks/get` → read the run store by id →
+map status to the A2A task state. **There is no separate task store**, so
+`tasks/get` is journal-backed for free and a server crash mid-task is handled
+by the *existing* Phase 3 resume path (`unfinished_runs` → `execute_run` replays
+the journal, exactly-once). This is the crux of ADR 0013 — durability for the
+remote delegate is inherited, not rebuilt. (Escalation path if this had been
+impossible: an inbound task that dies *explicitly* on crash rather than faking
+continuity. Not needed.)
+
+### 3. Decision log (Phase 7)
+
+| Decision | Rationale |
+|---|---|
+| `task.id == run_id`; no separate task store | `tasks/get` reads the durable run store → crash-durability + journal-backing for free (reuses ADR 0007/Phase 3). |
+| Server wire helpers in the existing `a2a` crate (`a2a::server`), HTTP surface in the existing `api` crate | Reuse the 4b types/machinery; no new server, port, or auth mechanism. Transport-agnostic helpers stay unit-testable. |
+| Endpoint requires the API bearer token; only card discovery is public | Auth is the security surface (ADR 0013): an anonymous task-executing server is an RCE footgun. A client must still be able to discover the scheme, so the card is public and declares it. |
+| Caller attributed via a `Note` journal entry at `message/send` time | The inbound mirror of 4b's per-agent outbound accounting — "who delegated, over which authenticated surface" is durable. |
+| Accept both `SendMessage`/… and `message/send`/… ; card emits `interfaces` + `supportedInterfaces` | Interop across A2A naming generations + Kelter's own 4b client, with no client change. |
+| New terminal `RunStatus::Canceled` + cooperative `Kernel::cancel_run` | `tasks/cancel` needs a distinct terminal state (the spec separates CANCELED from FAILED). Cancel aborts the in-flight handle then writes `Terminal{Canceled}` durably; `unfinished_runs` excludes it; terminal runs are a no-op. |
+| Optional per-agent bearer token on the 4b outbound client via `[agent] token_env` | Needed for the Kelter↔Kelter loop (B requires auth). Secrets env-only — the manifest names the env var, never the token. Open endpoints (toy target) unaffected. |
+
+### 4. Definition-of-done evidence (Phase 7)
+
+| Gate | Result | Raw log |
+|---|---|---|
+| build/test/clippy/fmt | PASS — **109 tests, 0 failures (28 suites)**, incl. 6 new `a2a::server` unit tests, 4 new api A2A integration tests, 2 new kernel cancel tests; clippy `-D warnings` clean; fmt clean | `evidence/phase7-gates.log` |
+| Naming | codename grep = 0 over the whole tracked tree; `agentkernel` only in historical evidence + notes | `evidence/phase7-naming-check.log` |
+| **Agent Card + methods** | **PASS** — card resolves at `/.well-known/agent-card.json`, names Kelter, declares the bearer scheme, advertises the `/a2a/rpc` JSON-RPC interface; `message/send`→task, `tasks/get`→status, `tasks/cancel`→CANCELED all shown | `evidence/a2a-inbound-agent-card.json`, `scripts/smoke-a2a-inbound.sh` |
+| **Durable inbound (money shot)** | **PASS** — inbound task crashed mid-run (`KELTER_CRASH_POINT=after_execute:append_ledger`); on restart the run auto-resumed (**"model NOT queried"**, keyed re-dispatch), `tasks/get` by the same id resolved to COMPLETED, and the ledger had exactly **1** line (no double execution) | `evidence/a2a-inbound-durable-resume.log` |
+| **Auth** | **PASS** — anonymous `message/send` refused with `401`; a bearer call accepted; caller attributed in the journal (`smoke-tester`, and `kelter-a2a-client` for the loop) | `evidence/a2a-inbound-attribution.log` |
+| **Interop loop (money shot)** | **PASS** — instance A delegated to instance B's inbound endpoint (authenticated, via 4b outbound + `token_env`); B ran it governed+durable and returned; A completed with a `delegate_to_kelter_b` step | `evidence/a2a-inbound-loop-run.json` |
+| **Conformance** | **PASS** — a generic A2A client (`examples/a2a-generic-client.py`, urllib only, no SDK, no Kelter code) resolved the well-known card and drove a task to `TASK_STATE_COMPLETED` over JSON-RPC — real A2A, not a private protocol | `evidence/a2a-inbound-generic-client.log` |
+| Governance | PASS — the inbound task text is untrusted input run through the same kernel validation/journal as any run; no bypass path | code (`api::a2a_send` → `kernel.create_run`/`execute_run`) |
+| No secrets / no push / localhost-only | PASS — token via env (`token_env`); demo binds 127.0.0.1 only | — |
+
+### 5. Uncertainties / TODO for human review (Phase 7)
+
+- **Scope kept narrow on purpose:** `message/send` + `tasks/get` + `tasks/cancel`
+  + auth. Deferred (honestly, not simulated): SSE streaming (`message/stream`),
+  push notifications/webhooks, per-tool A2A skills, plan-mode over A2A, and
+  interactive inbound states (`input-required`) — an inbound task is
+  fire-and-durably-complete.
+- **`tasks/cancel` is cooperative + best-effort.** It aborts the in-flight
+  handle this process owns, then writes the durable canceled state. A run
+  resumed after a crash (handle not held) is not force-abortable and a cancel
+  may arrive too late — A2A permits this. The durable Canceled write itself is
+  reliable (unit-tested).
+- **Auth is a single shared bearer token** (the API token), not per-caller
+  principals. The caller *label* (`A2A-Caller` header) is attribution, not
+  authentication — a stronger deployment would issue per-caller tokens/mTLS.
+- **Conformance client is hand-rolled** (urllib, spec-following) rather than the
+  `a2a-sdk`, to stay dep-light and offline — the same posture as ADR 0009's
+  hand-rolled client. A future check against `a2a-sdk` is a valid add.
+- The Kelter↔Kelter loop's A-side delegation is model-driven (0.5B); the smoke
+  hard-gates on B receiving the authenticated delegation and logs whether A's
+  small model emitted the delegate step that run.
+
+### 6. Version pins observed (Phase 7)
+
+No new dependencies. The inbound server is `axum` (already in `api`) + the
+existing `a2a`/`kernel-core` crates; the generic client is Python stdlib
+(`urllib`). rmcp 2.2.0 / rusqlite 0.40.1 / reqwest 0.12 unchanged.

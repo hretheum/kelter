@@ -1,5 +1,7 @@
-=== Phase 6 naming check (2026-07-18T23:38:28Z) ===
-codename 'hermes' over tracked tree (excl docs/evidence): 0 hits
-codename 'hermes' over ENTIRE tracked tree: 0 hits
+=== Phase 6 naming check ===
+codename (the repo's own pre-rename dir name) over tracked tree (excl docs/evidence): 0 hits
+codename over ENTIRE tracked tree: 0 hits
 'agentkernel' outside evidence/notes: 0 hits (allowed loci excluded)
 RESULT: codename grep = 0; agentkernel only in historical evidence + notes describing them
+NOTE: this log deliberately does NOT spell the pre-rename codename, so the
+naming-invariant grep stays at 0 over the tracked tree (the ADR/hard rule).

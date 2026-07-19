@@ -160,6 +160,10 @@ pub enum RunStatus {
     Running,
     Completed,
     Failed,
+    /// Terminal: cancellation was requested (e.g. A2A `CancelTask`) and
+    /// honoured before the run reached its own conclusion. A canceled run is
+    /// finished — `unfinished_runs` excludes it, so a restart never resumes it.
+    Canceled,
 }
 
 /// One executed step: which action ran, with what arguments, and how it went.
@@ -386,6 +390,41 @@ impl Kernel {
             },
         );
         Ok(id)
+    }
+
+    /// Request cancellation of a run (A2A `CancelTask`). Cooperative and
+    /// durable: if the run is already terminal it is returned unchanged (a
+    /// finished task cannot be canceled); otherwise a `Terminal { Canceled }`
+    /// entry is journaled and the run record is set to `Canceled`, so the
+    /// decision survives a restart (the resume path finalises from that
+    /// terminal journal entry rather than re-executing).
+    ///
+    /// The caller is responsible for stopping any in-flight execution of this
+    /// run first (e.g. aborting the spawned task); once execution is stopped,
+    /// this write is the single authoritative terminal record.
+    pub async fn cancel_run(&self, run_id: Uuid) -> Result<Run, KernelError> {
+        let mut run = self.store.get(run_id).await?;
+        if matches!(
+            run.status,
+            RunStatus::Completed | RunStatus::Failed | RunStatus::Canceled
+        ) {
+            return Ok(run);
+        }
+        self.store
+            .append_journal(
+                run_id,
+                JournalEntry::Terminal {
+                    status: RunStatus::Canceled,
+                    output: None,
+                    error: Some("canceled via A2A tasks/cancel".into()),
+                },
+            )
+            .await?;
+        run.status = RunStatus::Canceled;
+        run.error = Some("canceled via A2A tasks/cancel".into());
+        self.store.put(run.clone()).await?;
+        tracing::info!(%run_id, "run canceled (A2A tasks/cancel)");
+        Ok(run)
     }
 
     fn emit(&self, run_id: Uuid, seq: u64, event: RunEvent) {

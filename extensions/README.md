@@ -259,8 +259,44 @@ Complete working target: [`examples/a2a-agent/`](../examples/a2a-agent/)
 (a ~90-line Starlette A2A agent) with its manifest at
 [`examples/extensions/toy-agent/`](../examples/extensions/toy-agent/). Smoke:
 `scripts/smoke-a2a.sh` (delegate → validate → kill-mid-poll → reconnect,
-plus the network-refusal check). This is **outbound only** — Kelter as an
-A2A *server* (inbound) is a later increment.
+plus the network-refusal check).
+
+**Delegating to an authenticated agent.** If the remote endpoint requires a
+bearer token (e.g. another Kelter's inbound endpoint, below), name an env var
+holding it in the manifest — the token itself never goes in the tree:
+
+```toml
+[agent]
+card_url  = "http://127.0.0.1:7601"
+token_env = "KELTER_B_TOKEN"   # daemon reads the token from this env var
+```
+
+## Kelter as an A2A server (inbound)
+
+The `agent` seam runs both ways. A Kelter daemon is itself an **A2A agent**:
+it publishes an Agent Card and accepts delegated tasks (ADR 0013) — no config
+needed beyond the API bearer token it already has.
+
+- **Discover:** `GET /.well-known/agent-card.json` (public) returns the card —
+  it names Kelter, lists the JSON-RPC interface (`…/a2a/rpc`), and **declares
+  the bearer security scheme** so a client knows auth is required.
+- **Delegate:** `POST /a2a/rpc` (JSON-RPC 2.0, **bearer required**) with
+  `message/send` (or the v1.0 name `SendMessage`) starts a task; `tasks/get`
+  polls it; `tasks/cancel` cancels it. An anonymous call is refused (`401`).
+- **The task is a durable, governed run.** The A2A `task.id` *is* the kernel
+  `run_id`: the delegated text runs through the full kernel (every action
+  validated + journaled), and because the run is durable, the task **survives a
+  server crash** — restart resumes it and `tasks/get` reconnects to the same
+  id, with side effects applied exactly once. The caller is attributed in the
+  run journal.
+
+Because this is real A2A, any conformant client interops — a generic client
+resolving the well-known card, or another Kelter delegating to it. Smoke:
+`scripts/smoke-a2a-inbound.sh` (card + auth-refusal, `message/send`→durable
+run, `tasks/get`/`tasks/cancel`, crash-mid-task reconnect, a **Kelter↔Kelter
+loop** on localhost, and a generic A2A client — [`examples/a2a-generic-client.py`](../examples/a2a-generic-client.py),
+urllib only, no SDK). Deferred: SSE streaming, push/webhooks, per-tool A2A
+skills, plan-mode over A2A.
 
 ## Try it
 
