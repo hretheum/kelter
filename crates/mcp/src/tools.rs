@@ -5,7 +5,11 @@
 //! information → write a report file. Deterministic, so the same task can be
 //! compared across policy engines.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
@@ -417,6 +421,16 @@ mod tests {
     }
 }
 
+/// An in-memory, per-ledger index of the idempotency keys already written,
+/// so dedupe is an O(1) set lookup instead of re-reading and scanning the
+/// whole ledger file on every append (which was O(n) per append → O(n²) over
+/// a run). The file line remains the durable source of truth: the set is a
+/// cache **rebuilt from the file** the first time a process touches a ledger
+/// (one scan per file per process), so exactly-once survives a restart
+/// unchanged — a crash between the file write and the set insert just means
+/// the next process reloads the key from the file.
+pub type LedgerIndex = Arc<Mutex<HashMap<PathBuf, HashSet<String>>>>;
+
 /// Tool D: append an entry to a ledger file — a REAL side effect (appending
 /// twice is observable), used to prove exactly-once resume. The idempotency
 /// contract: the appended line carries the key, and a second call with the
@@ -428,43 +442,65 @@ pub async fn append_ledger(
     entry: &str,
     ledger: &str,
     idempotency_key: Option<&str>,
+    index: &LedgerIndex,
 ) -> Result<serde_json::Value, ToolError> {
     let path = ws.resolve(ledger)?;
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
 
+    // Keyed appends serialize through the index: the check, the write, and the
+    // set insert happen under one lock so two concurrent same-key calls can't
+    // both write. The set is lazily loaded from the file on first touch.
     if let Some(key) = idempotency_key {
-        if path.is_file() {
-            let existing = tokio::fs::read_to_string(&path).await?;
-            if existing.lines().any(|l| l.split('\t').next() == Some(key)) {
-                return Ok(serde_json::json!({
-                    "deduped": true,
-                    "idempotency_key": key,
-                    "ledger": ledger,
-                }));
+        let mut guard = index.lock().await;
+        if !guard.contains_key(&path) {
+            let mut seen = HashSet::new();
+            if path.is_file() {
+                let existing = tokio::fs::read_to_string(&path).await?;
+                for line in existing.lines() {
+                    if let Some(k) = line.split('\t').next() {
+                        seen.insert(k.to_string());
+                    }
+                }
             }
+            guard.insert(path.clone(), seen);
         }
+        let seen = guard.get_mut(&path).expect("just inserted");
+        if seen.contains(key) {
+            return Ok(serde_json::json!({
+                "deduped": true,
+                "idempotency_key": key,
+                "ledger": ledger,
+            }));
+        }
+        write_ledger_line(&path, &format!("{key}\t{entry}\n")).await?;
+        seen.insert(key.to_string());
+        return Ok(serde_json::json!({
+            "appended": true,
+            "entry": entry,
+            "ledger": ledger,
+        }));
     }
 
-    let line = match idempotency_key {
-        Some(key) => format!("{key}\t{entry}\n"),
-        None => format!("-\t{entry}\n"),
-    };
-    use tokio::io::AsyncWriteExt;
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .await?;
-    file.write_all(line.as_bytes()).await?;
-    file.flush().await?;
-
+    write_ledger_line(&path, &format!("-\t{entry}\n")).await?;
     Ok(serde_json::json!({
         "appended": true,
         "entry": entry,
         "ledger": ledger,
     }))
+}
+
+async fn write_ledger_line(path: &std::path::Path, line: &str) -> Result<(), ToolError> {
+    use tokio::io::AsyncWriteExt;
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await?;
+    file.write_all(line.as_bytes()).await?;
+    file.flush().await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -479,21 +515,42 @@ mod ledger_tests {
     #[tokio::test]
     async fn same_key_appends_exactly_once() {
         let ws = temp_ws();
-        let r1 = append_ledger(&ws, "hello", "ledger.txt", Some("k1"))
+        let idx = LedgerIndex::default();
+        let r1 = append_ledger(&ws, "hello", "ledger.txt", Some("k1"), &idx)
             .await
             .unwrap();
         assert_eq!(r1["appended"], true);
-        let r2 = append_ledger(&ws, "hello", "ledger.txt", Some("k1"))
+        let r2 = append_ledger(&ws, "hello", "ledger.txt", Some("k1"), &idx)
             .await
             .unwrap();
         assert_eq!(r2["deduped"], true);
         let content = std::fs::read_to_string(ws.root().join("ledger.txt")).unwrap();
         assert_eq!(content.lines().count(), 1);
         // Different key appends again.
-        append_ledger(&ws, "hello", "ledger.txt", Some("k2"))
+        append_ledger(&ws, "hello", "ledger.txt", Some("k2"), &idx)
             .await
             .unwrap();
         let content = std::fs::read_to_string(ws.root().join("ledger.txt")).unwrap();
         assert_eq!(content.lines().count(), 2);
+    }
+
+    #[tokio::test]
+    async fn dedupe_is_rebuilt_from_file_by_a_fresh_index() {
+        // Simulates a process restart: a brand-new index (empty cache) must
+        // still dedupe a key that only exists in the file — proving the file
+        // stays the durable source of truth (exactly-once across restart).
+        let ws = temp_ws();
+        let idx1 = LedgerIndex::default();
+        append_ledger(&ws, "durable", "ledger.txt", Some("k1"), &idx1)
+            .await
+            .unwrap();
+
+        let idx2 = LedgerIndex::default(); // "new process": cache is cold
+        let r = append_ledger(&ws, "durable", "ledger.txt", Some("k1"), &idx2)
+            .await
+            .unwrap();
+        assert_eq!(r["deduped"], true);
+        let content = std::fs::read_to_string(ws.root().join("ledger.txt")).unwrap();
+        assert_eq!(content.lines().count(), 1);
     }
 }

@@ -56,12 +56,14 @@ pub struct LedgerParams {
 #[derive(Clone)]
 pub struct ToolServer {
     ws: Workspace,
+    ledger_index: tools::LedgerIndex,
 }
 
 impl ToolServer {
     pub fn new(workspace: impl Into<std::path::PathBuf>) -> std::io::Result<Self> {
         Ok(Self {
             ws: Workspace::new(workspace)?,
+            ledger_index: Default::default(),
         })
     }
 }
@@ -111,7 +113,15 @@ impl ToolServer {
     )]
     async fn append_ledger(&self, Parameters(p): Parameters<LedgerParams>) -> CallToolResult {
         let ledger = p.ledger.as_deref().unwrap_or("ledger.txt");
-        match tools::append_ledger(&self.ws, &p.entry, ledger, p.idempotency_key.as_deref()).await {
+        match tools::append_ledger(
+            &self.ws,
+            &p.entry,
+            ledger,
+            p.idempotency_key.as_deref(),
+            &self.ledger_index,
+        )
+        .await
+        {
             Ok(v) => ok(v),
             Err(e) => fail(e),
         }
@@ -124,12 +134,14 @@ impl ToolServer {
 #[derive(Clone)]
 pub struct LedgerServer {
     ws: Workspace,
+    ledger_index: tools::LedgerIndex,
 }
 
 impl LedgerServer {
     pub fn new(workspace: impl Into<std::path::PathBuf>) -> std::io::Result<Self> {
         Ok(Self {
             ws: Workspace::new(workspace)?,
+            ledger_index: Default::default(),
         })
     }
 }
@@ -141,7 +153,15 @@ impl LedgerServer {
     )]
     async fn append_ledger(&self, Parameters(p): Parameters<LedgerParams>) -> CallToolResult {
         let ledger = p.ledger.as_deref().unwrap_or("ledger.txt");
-        match tools::append_ledger(&self.ws, &p.entry, ledger, p.idempotency_key.as_deref()).await {
+        match tools::append_ledger(
+            &self.ws,
+            &p.entry,
+            ledger,
+            p.idempotency_key.as_deref(),
+            &self.ledger_index,
+        )
+        .await
+        {
             Ok(v) => ok(v),
             Err(e) => fail(e),
         }
