@@ -76,7 +76,15 @@ impl OpenRouterAdapter {
     ) -> Self {
         Self {
             client: reqwest::Client::new(),
-            base_url: base_url.into().trim_end_matches('/').to_string(),
+            // The request path below appends `/v1/chat/completions`. OpenRouter's
+            // documented base is `.../api/v1`, so a base that already carries a
+            // trailing `/v1` would yield `/v1/v1/...` → 404 on every model. Strip
+            // it here so both `.../api` and `.../api/v1` resolve identically.
+            base_url: {
+                let raw = base_url.into();
+                let b = raw.trim_end_matches('/');
+                b.strip_suffix("/v1").unwrap_or(b).to_string()
+            },
             model: model.into(),
             api_key: api_key.into(),
         }

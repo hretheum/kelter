@@ -251,7 +251,13 @@ impl ModelConfigController for DaemonModelConfig {
                 let root = base.strip_suffix("/v1").unwrap_or(base);
                 format!("{root}/api/version")
             }
-            "openrouter" => format!("{base}/models"),
+            "openrouter" => {
+                // The models list lives at /api/v1/models regardless of whether
+                // base was written with or without a trailing /v1 (mirrors the
+                // adapter's own base normalization).
+                let root = base.strip_suffix("/v1").unwrap_or(base);
+                format!("{root}/v1/models")
+            }
             other => {
                 return ModelTestResult {
                     ok: false,

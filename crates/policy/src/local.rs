@@ -49,7 +49,15 @@ impl LocalAdapter {
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
             client: reqwest::Client::new(),
-            base_url: base_url.into().trim_end_matches('/').to_string(),
+            // The request path appends `/v1/chat/completions`; a base that already
+            // ends in `/v1` (e.g. Ollama's `.../11434/v1`) would double it →
+            // `/v1/v1/...` → 404. Strip a trailing `/v1` so `.../8080` and
+            // `.../11434/v1` both resolve correctly.
+            base_url: {
+                let raw = base_url.into();
+                let b = raw.trim_end_matches('/');
+                b.strip_suffix("/v1").unwrap_or(b).to_string()
+            },
             model: model.into(),
         }
     }
