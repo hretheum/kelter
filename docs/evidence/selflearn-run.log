@@ -1,0 +1,8 @@
+=== governed self-learning (Phase 10) ===
+distilled: 1 fact(s), batch f2f80848-274f-4322-aa04-b0b5559132a5 from run 565d337e-80fe-4c63-96f8-071bcdf43975
+--- learned list (provenance) ---
+[]
+--- learned injected as context (log) ---
+[2m2026-07-19T12:45:17.558881Z[0m [32m INFO[0m [1mkelter.run[0m[1m{[0m[3mrun_id[0m[2m=[0m24468e27-f618-4c30-84b0-f2430da43ab8 [3mpolicy[0m[2m=[0mlocal:qwen2.5-0.5b-instruct[1m}[0m[2m:[0m [2mkernel_core::engine[0m[2m:[0m learned: injected distilled facts as context (validated like any context) [3mrun_id[0m[2m=[0m24468e27-f618-4c30-84b0-f2430da43ab8 [3mlearned[0m[2m=[0m1
+--- forget → no residue ---
+list after forget-batch: empty; later run shows no learned injection

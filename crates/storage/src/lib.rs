@@ -53,6 +53,18 @@ const MIGRATIONS: &[&str] = &[
          to_name TEXT NOT NULL,
          label TEXT NOT NULL
      );",
+    // v2 — governed self-learning (ADR 0016): a DISTINCT, reversible layer of
+    // distilled facts, kept separate from `episodes` so `forget` is complete
+    // (delete the rows → gone; ranking is recomputed per retrieval, so there
+    // is no residual index).
+    "CREATE TABLE learned_facts (
+         id TEXT PRIMARY KEY,
+         task_context TEXT NOT NULL,
+         batch_id TEXT NOT NULL,
+         data TEXT NOT NULL,
+         created_at INTEGER NOT NULL
+     );
+     CREATE INDEX learned_batch ON learned_facts(batch_id);",
 ];
 
 /// A shared handle to one SQLite database file.
@@ -325,6 +337,98 @@ impl MemoryProvider for SqliteMemoryProvider {
     }
 }
 
+// ---- LearnedStore (governed self-learning, ADR 0016) ----------------------
+
+use kernel_core::{LearnedFact, LearnedStore};
+
+/// SQLite-backed learned-fact layer. A DISTINCT table from `episodes`; ranking
+/// reuses the shared BM25 contract, recomputed per retrieval, so `forget`
+/// (a row delete) leaves zero residue.
+pub struct SqliteLearnedStore {
+    db: Db,
+}
+
+impl SqliteLearnedStore {
+    pub fn new(db: Db) -> Self {
+        Self { db }
+    }
+
+    async fn load_all(&self) -> Result<Vec<LearnedFact>, StoreError> {
+        let conn = self.db.conn.lock().await;
+        let mut stmt = conn
+            .prepare("SELECT data FROM learned_facts ORDER BY created_at DESC, id ASC")
+            .map_err(backend_err)?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(backend_err)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let raw = row.map_err(backend_err)?;
+            out.push(serde_json::from_str(&raw).map_err(backend_err)?);
+        }
+        Ok(out)
+    }
+}
+
+#[async_trait]
+impl LearnedStore for SqliteLearnedStore {
+    async fn put(&self, fact: LearnedFact) -> Result<(), StoreError> {
+        let conn = self.db.conn.lock().await;
+        let data = serde_json::to_string(&fact).map_err(backend_err)?;
+        conn.execute(
+            "INSERT INTO learned_facts (id, task_context, batch_id, data, created_at)
+             VALUES (?1, ?2, ?3, ?4, strftime('%s','now'))
+             ON CONFLICT(id) DO UPDATE SET data = ?4",
+            params![
+                fact.id.to_string(),
+                fact.task_context,
+                fact.provenance.batch_id.to_string(),
+                data
+            ],
+        )
+        .map_err(backend_err)?;
+        Ok(())
+    }
+
+    async fn retrieve(&self, task: &str, limit: usize) -> Result<Vec<LearnedFact>, StoreError> {
+        let facts = self.load_all().await?;
+        if facts.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Rank fresh over task_context — no persistent index, so a forgotten
+        // fact leaves nothing behind.
+        let docs: Vec<String> = facts.iter().map(|f| f.task_context.clone()).collect();
+        let ranked = memory::retrieval::rank_bm25(task, &docs, limit);
+        Ok(ranked.into_iter().map(|(i, _)| facts[i].clone()).collect())
+    }
+
+    async fn list(&self) -> Result<Vec<LearnedFact>, StoreError> {
+        self.load_all().await
+    }
+
+    async fn forget(&self, id: uuid::Uuid) -> Result<bool, StoreError> {
+        let conn = self.db.conn.lock().await;
+        let n = conn
+            .execute(
+                "DELETE FROM learned_facts WHERE id = ?1",
+                params![id.to_string()],
+            )
+            .map_err(backend_err)?;
+        Ok(n > 0)
+    }
+
+    async fn forget_batch(&self, batch_id: uuid::Uuid) -> Result<u64, StoreError> {
+        let conn = self.db.conn.lock().await;
+        let n = conn
+            .execute(
+                "DELETE FROM learned_facts WHERE batch_id = ?1",
+                params![batch_id.to_string()],
+            )
+            .map_err(backend_err)?;
+        Ok(n as u64)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,5 +547,48 @@ mod tests {
         // Re-opening runs migrate() again over an up-to-date schema —
         // must be a no-op, not an error. (Safe to run repeatedly.)
         let _ = Db::open(&path).unwrap();
+    }
+
+    fn fact(task: &str, batch: Uuid) -> LearnedFact {
+        LearnedFact {
+            id: Uuid::new_v4(),
+            fact: format!("approach for {task}"),
+            task_context: task.into(),
+            provenance: kernel_core::LearnedProvenance {
+                source_run_ids: vec![Uuid::new_v4()],
+                distilled_at: 0,
+                model: "mock".into(),
+                level: kernel_core::LEARNED_LEVEL.into(),
+                human_validated: false,
+                batch_id: batch,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_learned_store_ranks_and_forgets_without_residue() {
+        let store = SqliteLearnedStore::new(Db::open_in_memory().unwrap());
+        let batch = Uuid::new_v4();
+        let a = fact("extract links from a webpage", batch);
+        let a_id = a.id;
+        store.put(a).await.unwrap();
+        store
+            .put(fact("summarise the quarterly sales report", batch))
+            .await
+            .unwrap();
+
+        // BM25 over task_context ranks the relevant fact first.
+        let hits = store.retrieve("webpage links extraction", 5).await.unwrap();
+        assert_eq!(hits[0].task_context, "extract links from a webpage");
+
+        // forget one → gone from retrieval (no residue), the other remains.
+        assert!(store.forget(a_id).await.unwrap());
+        let hits = store.retrieve("webpage links extraction", 5).await.unwrap();
+        assert!(hits.iter().all(|f| f.id != a_id));
+        assert_eq!(store.list().await.unwrap().len(), 1);
+
+        // forget the batch → the layer is empty.
+        assert_eq!(store.forget_batch(batch).await.unwrap(), 1);
+        assert!(store.list().await.unwrap().is_empty());
     }
 }

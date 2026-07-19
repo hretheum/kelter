@@ -106,6 +106,20 @@ replaces it. Reference examples: a Python tool in ~25 lines
 (`extensions/wordstats/`) and a Python memory backend in ~30 lines
 (`examples/extensions/memstore/`).
 
+**Governed self-learning (ADR 0016):** the runtime can distil reusable
+**facts** from completed runs into a **distinct, provenance-tagged, reversible**
+learned layer (`LearnedStore` / the `learned_facts` table) — separate from
+episodes so `forget` is complete (delete the rows; ranking is recomputed per
+retrieval → zero residue). A bearer-gated `Kernel::distill` extracts facts
+(each tagged `ai_extracted`, `human_validated:false`, with its source run ids);
+`GET /api/v1/learn` lists them; `forget`/`forget_batch` undo them entirely. Two
+invariants keep it safe: a learned fact enters **only** as retrieved context
+(the `[learned]`-tagged `PolicyContext.memory` seam) so the kernel still
+validates every action (the ADR 0001 floor is unchanged — even a poisoned fact
+cannot trigger an unvalidated action), and forgetting leaves no residue. First
+slice is facts; plans, background distillation and sharing are deferred. Proof:
+`scripts/smoke-selflearn.sh` + `crates/kernel-core/tests/learned_test.rs`.
+
 **A2A inbound — Kelter as an A2A server (ADR 0013):** the outbound `agent`
 seam has a mirror. Kelter publishes an Agent Card at
 `/.well-known/agent-card.json` and accepts delegated tasks over JSON-RPC

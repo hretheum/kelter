@@ -14,6 +14,7 @@ pub mod action;
 pub mod cost;
 pub mod engine;
 pub mod journal;
+pub mod learned;
 pub mod oracle;
 pub mod plan;
 pub mod store;
@@ -28,6 +29,10 @@ pub use engine::{
     RunStatus, StepRecord, FINISH_ACTION,
 };
 pub use journal::{JournalEntry, Usage};
+pub use learned::{
+    DistillReport, InMemoryLearnedStore, LearnedFact, LearnedProvenance, LearnedStore,
+    LEARNED_LEVEL,
+};
 pub use oracle::{Latitude, PolicyContext, PolicyError, PolicyOracle, Proposal};
 pub use plan::{Plan, PlanNode, ValidatedPlan};
 pub use store::{InMemoryRunStore, RunStore, StoreError};

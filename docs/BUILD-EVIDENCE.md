@@ -873,3 +873,59 @@ No new dependencies beyond wiring: `reqwest` + `async-trait` added to `daemon`
 (health-check + the controller trait); `async-trait` added to `api` (the
 `ModelConfigController` trait). Web UI stays dependency-free vanilla JS. Kernel
 untouched.
+
+## Phase 10 — governed, reversible self-learning
+
+Date: 2026-07-19. Implements ADR 0016 — the runtime distils reusable **facts**
+from past runs into a distinct, provenance-tagged, reversible memory layer that
+informs proposals but never bypasses validation. Precondition: Phase 3
+(journal/episodes — the distillation source) + 4a (memory-as-extension) on
+origin. First slice = facts; plans / background distillation / sharing deferred.
+
+### 1. Cruxes / decisions (Phase 10)
+
+- **Reversibility is complete (crux #1).** Learned facts are a DISTINCT tagged
+  layer (`LearnedStore` / the `learned_facts` table), never merged into
+  `episodes` or a persistent ranking index — ranking is recomputed per
+  retrieval (BM25 over `task_context`), so `forget` (a row delete) leaves **zero
+  residue**. Keeping learned facts distinct is what makes forgetting complete.
+- **Learning informs, never bypasses validation (crux #2).** A learned fact
+  enters ONLY as retrieved *context* on the model's prompt (the tagged
+  `[learned]` `PolicyContext.memory` seam), so the kernel still validates every
+  proposed action (ADR 0001 floor unchanged). Even a poisoned fact cannot
+  trigger an unvalidated action.
+- **Governed + provenance.** `Kernel::distill` is a bearer-gated, logged,
+  command-driven operation (never silent background); every fact carries
+  `ai_extracted` + `human_validated:false` + source run ids; runs already
+  distilled are skipped (no duplication).
+
+### 2. Definition-of-done evidence (Phase 10)
+
+| Gate | Result | Raw evidence |
+|---|---|---|
+| build/test/clippy/fmt | PASS — **127 workspace tests, 0 failures**; clippy `-D warnings` clean; fmt clean | `evidence/phase10-gates.log` |
+| Naming | codename grep = 0 over the tracked tree; `agentkernel` only historical | `evidence/phase10-naming-check.log` |
+| **Distillation + provenance** | **PASS** — a completed run distils into a learned fact tagged `level=ai_extracted`, `human_validated=false`, `source_run_ids=[the run]`; listed via `GET /api/v1/learn` (inspectable) | `evidence/selflearn-run.log`; unit test `distillation_tags_provenance_and_forget_batch_reverses_it` |
+| **Learning informs, not bypasses (money-shot #1)** | **PASS** — a later similar run retrieves the fact as context ("learned: injected distilled facts as context" in the log) yet still validates + completes; and a **poisoned** learned fact (suggesting the tool `nuke`) reaches the model but the proposed `nuke` is REJECTED and never executes — the floor is unchanged | smoke leg 3; unit test `poisoned_learned_fact_cannot_trigger_an_unvalidated_action` |
+| **Reversibility (money-shot #2)** | **PASS** — `forget_batch` → `GET /learn` empty AND a later run shows **no** learned context ("+0" injections) — the influence is completely gone, zero residue | smoke leg 4; unit tests `forget_is_complete_no_residue`, `sqlite_learned_store_ranks_and_forgets_without_residue` |
+| Governance | PASS — distill/list/forget bearer-gated (anonymous `GET /learn` → 401); learned = `human_validated:false` lower-trust; no path bypasses the kernel | smoke leg 0 |
+| No regression | PASS — migration v2 (`learned_facts`) is additive; durability exactly-once + a2a/tool/wasm smokes green | `scripts/smoke-durability.sh` |
+| No secrets / no push | PASS | — |
+
+### 3. Uncertainties / TODO for human review (Phase 10)
+
+- **Extraction is deterministic** (task + ordered successful actions), not
+  model-assisted — honest and reproducible for this first slice; a
+  model-summarised fact is a future refinement (still governed + reversible).
+- **Plan-mode runs do not yet receive learned context** (step-mode only) —
+  consistent with plan-template distillation being the deferred second slice.
+- Deferred, explicit: plan distillation, background/auto distillation, and
+  cross-user sharing. The core discipline holds: learning here is
+  reversible, governed and inspectable — never a silent behaviour mutation.
+
+### 4. Version pins observed (Phase 10)
+
+No new dependencies. The learned layer is `kernel-core` types + a `storage`
+SQLite table (migration v2) reusing `memory::retrieval` BM25; the API adds four
+bearer-gated routes. Kernel `Kernel::new` signature unchanged (learned attaches
+via the `with_learned` builder).

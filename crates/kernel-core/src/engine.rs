@@ -317,6 +317,9 @@ pub struct Kernel {
     tools: Arc<dyn ActionSource>,
     memory: Arc<dyn MemoryProvider>,
     store: Arc<dyn RunStore>,
+    /// Distinct, reversible learned-fact layer (Phase 10, ADR 0016). Optional:
+    /// absent → no self-learning, retrieval is episodic memory only.
+    learned: Option<Arc<dyn crate::learned::LearnedStore>>,
     events: broadcast::Sender<RunEventEnvelope>,
     config: KernelConfig,
 }
@@ -342,13 +345,130 @@ impl Kernel {
             tools,
             memory,
             store,
+            learned: None,
             events,
             config,
         }
     }
 
+    /// Attach a learned-fact store, enabling governed self-learning (Phase 10).
+    /// Builder-style so `Kernel::new` stays unchanged for every other caller.
+    pub fn with_learned(mut self, learned: Arc<dyn crate::learned::LearnedStore>) -> Self {
+        self.learned = Some(learned);
+        self
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<RunEventEnvelope> {
         self.events.subscribe()
+    }
+
+    // ---- governed self-learning (Phase 10, ADR 0016) --------------------
+
+    fn learned_store(&self) -> Result<&Arc<dyn crate::learned::LearnedStore>, KernelError> {
+        self.learned.as_ref().ok_or_else(|| {
+            KernelError::Execution(ExecutionError::Tool(
+                "self-learning is not enabled (no learned store configured)".into(),
+            ))
+        })
+    }
+
+    /// Governed distillation: read completed runs and extract reusable facts
+    /// into the learned layer, each provenance-tagged (`ai_extracted`,
+    /// `human_validated: false`, source run ids). Runs already distilled are
+    /// skipped, so repeated calls do not duplicate. This is a kernel operation
+    /// — logged and durably recorded as the learned artifacts themselves.
+    pub async fn distill(
+        &self,
+        limit: usize,
+    ) -> Result<crate::learned::DistillReport, KernelError> {
+        use crate::learned::{LearnedFact, LearnedProvenance};
+
+        let learned = self.learned_store()?;
+        // Don't re-distil a run we already learned from.
+        let already: std::collections::HashSet<Uuid> = learned
+            .list()
+            .await?
+            .into_iter()
+            .flat_map(|f| f.provenance.source_run_ids)
+            .collect();
+
+        let batch_id = Uuid::new_v4();
+        let now = now_secs();
+        let mut source_run_ids = Vec::new();
+        let mut created = 0usize;
+
+        // Newest runs first, cap at `limit` new facts.
+        let mut runs = self.store.list().await?;
+        runs.reverse();
+        for run in runs {
+            if created >= limit {
+                break;
+            }
+            if run.status != RunStatus::Completed || already.contains(&run.id) {
+                continue;
+            }
+            let actions: Vec<String> = run
+                .steps
+                .iter()
+                .filter(|s| s.ok && s.action != FINISH_ACTION)
+                .map(|s| s.action.clone())
+                .collect();
+            if actions.is_empty() {
+                continue; // nothing reusable to learn
+            }
+            let fact = format!(
+                "For a task like \"{}\", a successful approach used these actions in order: {}.",
+                run.task,
+                actions.join(" → ")
+            );
+            learned
+                .put(LearnedFact {
+                    id: Uuid::new_v4(),
+                    fact,
+                    task_context: run.task.clone(),
+                    provenance: LearnedProvenance {
+                        source_run_ids: vec![run.id],
+                        distilled_at: now,
+                        model: run.policy.clone(),
+                        level: crate::learned::LEARNED_LEVEL.to_string(),
+                        human_validated: false,
+                        batch_id,
+                    },
+                })
+                .await?;
+            source_run_ids.push(run.id);
+            created += 1;
+        }
+
+        tracing::info!(
+            %batch_id,
+            facts_created = created,
+            "distill: extracted reusable facts into the learned layer (ai_extracted, human_validated=false)"
+        );
+        Ok(crate::learned::DistillReport {
+            batch_id,
+            facts_created: created,
+            source_run_ids,
+        })
+    }
+
+    /// All learned facts, for inspection (what the system learned + why).
+    pub async fn list_learned(&self) -> Result<Vec<crate::learned::LearnedFact>, KernelError> {
+        Ok(self.learned_store()?.list().await?)
+    }
+
+    /// Completely forget one learned fact — the next run will not see it.
+    pub async fn forget_learned(&self, id: Uuid) -> Result<bool, KernelError> {
+        let removed = self.learned_store()?.forget(id).await?;
+        tracing::info!(%id, removed, "forget: learned fact removed (no residue)");
+        Ok(removed)
+    }
+
+    /// Completely forget a whole distillation batch.
+    pub async fn forget_learned_batch(&self, batch_id: Uuid) -> Result<u64, KernelError> {
+        let n = self.learned_store()?.forget_batch(batch_id).await?;
+        tracing::info!(%batch_id, removed = n, "forget: learned batch removed (no residue)");
+        Ok(n)
     }
 
     pub fn store(&self) -> Arc<dyn RunStore> {
@@ -526,7 +646,7 @@ impl Kernel {
         let latitude = self.config.latitude;
         let mut seq: u64 = 1;
 
-        let memory_context: Vec<String> = match self.memory.retrieve(&run.task, 3).await {
+        let mut memory_context: Vec<String> = match self.memory.retrieve(&run.task, 3).await {
             Ok(hits) => {
                 if !hits.is_empty() {
                     tracing::info!(
@@ -545,6 +665,27 @@ impl Kernel {
                 Vec::new()
             }
         };
+
+        // Governed self-learning (Phase 10, ADR 0016): distilled facts enter
+        // ONLY here, as retrieved *context* — the same seam as episodic memory,
+        // tagged `[learned]` (lower-trust). The model may be informed by them,
+        // but every proposed action is still validated against the schema
+        // below; a learned fact is never an unvalidated authority.
+        if let Some(learned) = &self.learned {
+            match learned.retrieve(&run.task, 3).await {
+                Ok(facts) if !facts.is_empty() => {
+                    tracing::info!(
+                        %run_id,
+                        learned = facts.len(),
+                        "learned: injected distilled facts as context (validated like any context)"
+                    );
+                    memory_context
+                        .extend(facts.iter().map(crate::learned::LearnedFact::as_context));
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(%run_id, "learned retrieve failed: {e}"),
+            }
+        }
 
         let mut last_error: Option<String> = None;
         let mut terminal: Option<(RunStatus, Option<serde_json::Value>, Option<String>)> = None;

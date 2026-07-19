@@ -1,0 +1,176 @@
+=== Phase 10 gates (2026-07-19T12:46:15Z) ===
+--- fmt ---
+Diff in <repo>/crates/api/src/lib.rs:125:
+         .route("/api/v1/learn", get(list_learned))
+         .route("/api/v1/learn/distill", post(distill_learned))
+         .route("/api/v1/learn/{id}", delete(forget_learned))
+[31m-        .route("/api/v1/learn/batch/{batch_id}", delete(forget_learned_batch))
+(B[m[32m+        .route(
+(B[m[32m+            "/api/v1/learn/batch/{batch_id}",
+(B[m[32m+            delete(forget_learned_batch),
+(B[m[32m+        )
+(B[m         // A2A inbound (ADR 0013): Kelter as an A2A server. Card discovery is
+         // public; the JSON-RPC task methods require the bearer token.
+         .route("/.well-known/agent-card.json", get(a2a_agent_card))
+Diff in <repo>/crates/daemon/src/main.rs:497:
+     // Governed self-learning (Phase 10, ADR 0016): a DISTINCT, reversible
+     // learned-fact layer on the same durable database (a second handle, like
+     // the desktop store). Only for the sqlite backend — the layer must persist.
+[31m-    let learned: Option<Arc<dyn kernel_core::LearnedStore>> =
+(B[m[31m-        if cfg.storage.backend == "sqlite" {
+(B[m[31m-            let db = storage::Db::open(&cfg.storage.path)
+(B[m[31m-                .with_context(|| format!("cannot open database '{}'", cfg.storage.path))?;
+(B[m[31m-            Some(Arc::new(storage::SqliteLearnedStore::new(db)))
+(B[m[31m-        } else {
+(B[m[31m-            None
+(B[m[31m-        };
+(B[m[32m+    let learned: Option<Arc<dyn kernel_core::LearnedStore>> = if cfg.storage.backend == "sqlite" {
+(B[m[32m+        let db = storage::Db::open(&cfg.storage.path)
+(B[m[32m+            .with_context(|| format!("cannot open database '{}'", cfg.storage.path))?;
+(B[m[32m+        Some(Arc::new(storage::SqliteLearnedStore::new(db)))
+(B[m[32m+    } else {
+(B[m[32m+        None
+(B[m[32m+    };
+(B[m 
+     // Memory: always a registered extension over the reserved MCP tools
+     // (ADR 0008). An external memory extension overrides the built-in one;
+Diff in <repo>/crates/kernel-core/src/engine.rs:377:
+     /// `human_validated: false`, source run ids). Runs already distilled are
+     /// skipped, so repeated calls do not duplicate. This is a kernel operation
+     /// — logged and durably recorded as the learned artifacts themselves.
+[31m-    pub async fn distill(&self, limit: usize) -> Result<crate::learned::DistillReport, KernelError> {
+(B[m[32m+    pub async fn distill(
+(B[m[32m+        &self,
+(B[m[32m+        limit: usize,
+(B[m[32m+    ) -> Result<crate::learned::DistillReport, KernelError> {
+(B[m         use crate::learned::{LearnedFact, LearnedProvenance};
+ 
+         let learned = self.learned_store()?;
+Diff in <repo>/crates/kernel-core/src/engine.rs:676:
+                         learned = facts.len(),
+                         "learned: injected distilled facts as context (validated like any context)"
+                     );
+[31m-                    memory_context.extend(facts.iter().map(crate::learned::LearnedFact::as_context));
+(B[m[32m+                    memory_context
+(B[m[32m+                        .extend(facts.iter().map(crate::learned::LearnedFact::as_context));
+(B[m                 }
+                 Ok(_) => {}
+                 Err(e) => tracing::warn!(%run_id, "learned retrieve failed: {e}"),
+Diff in <repo>/crates/kernel-core/src/learned.rs:108:
+ }
+ 
+ fn overlap(a: &str, b: &str) -> usize {
+[31m-    let words: std::collections::HashSet<String> =
+(B[m[31m-        a.to_lowercase().split_whitespace().map(String::from).collect();
+(B[m[32m+    let words: std::collections::HashSet<String> = a
+(B[m[32m+        .to_lowercase()
+(B[m[32m+        .split_whitespace()
+(B[m[32m+        .map(String::from)
+(B[m[32m+        .collect();
+(B[m     b.to_lowercase()
+         .split_whitespace()
+         .filter(|w| words.contains(*w))
+Diff in <repo>/crates/kernel-core/tests/learned_test.rs:17:
+ 
+ use kernel_core::{
+     ActionSchema, ActionSource, ActionSpec, ExecutionContext, ExecutionError, InMemoryLearnedStore,
+[31m-    Kernel, KernelConfig, LearnedFact, LearnedProvenance, LearnedStore, Latitude, PolicyContext,
+(B[m[32m+    Kernel, KernelConfig, Latitude, LearnedFact, LearnedProvenance, LearnedStore, PolicyContext,
+(B[m     PolicyError, PolicyOracle, Proposal, ProposedAction, RunStatus, ValidatedAction, LEARNED_LEVEL,
+ };
+ use memory::{InMemoryProvider, MemoryProvider};
+Diff in <repo>/crates/kernel-core/tests/learned_test.rs:79:
+             .lock()
+             .unwrap()
+             .extend(context.memory.iter().cloned());
+[31m-        let i = self.cursor.fetch_add(1, Ordering::SeqCst).min(self.script.len() - 1);
+(B[m[32m+        let i = self
+(B[m[32m+            .cursor
+(B[m[32m+            .fetch_add(1, Ordering::SeqCst)
+(B[m[32m+            .min(self.script.len() - 1);
+(B[m         Ok(self.script[i].clone().into())
+     }
+     fn describe(&self) -> String {
+Diff in <repo>/crates/kernel-core/tests/learned_test.rs:140:
+         propose("finish", json!({"summary": "done"})),
+     ]);
+     let kernel = kernel_with(oracle.clone(), learned);
+[31m-    kernel.run_task("greet the user politely".into()).await.unwrap();
+(B[m[32m+    kernel
+(B[m[32m+        .run_task("greet the user politely".into())
+(B[m[32m+        .await
+(B[m[32m+        .unwrap();
+(B[m 
+     let ctx = oracle.seen_context.lock().unwrap().clone();
+     assert!(
+Diff in <repo>/crates/kernel-core/tests/learned_test.rs:165:
+         .unwrap();
+ 
+     let oracle = RecordingOracle::new(vec![
+[31m-        propose("nuke", json!({})),          // influenced by the poisoned fact
+(B[m[32m+        propose("nuke", json!({})), // influenced by the poisoned fact
+(B[m         propose("echo", json!({"message": "safe"})),
+         propose("finish", json!({"summary": "done"})),
+     ]);
+Diff in <repo>/crates/kernel-core/tests/learned_test.rs:196:
+     let id = fact.id;
+     learned.put(fact).await.unwrap();
+ 
+[31m-    assert_eq!(learned.retrieve("some recurring task", 5).await.unwrap().len(), 1);
+(B[m[32m+    assert_eq!(
+(B[m[32m+        learned
+(B[m[32m+            .retrieve("some recurring task", 5)
+(B[m[32m+            .await
+(B[m[32m+            .unwrap()
+(B[m[32m+            .len(),
+(B[m[32m+        1
+(B[m[32m+    );
+(B[m     assert!(learned.forget(id).await.unwrap());
+     assert!(
+[31m-        learned.retrieve("some recurring task", 5).await.unwrap().is_empty(),
+(B[m[32m+        learned
+(B[m[32m+            .retrieve("some recurring task", 5)
+(B[m[32m+            .await
+(B[m[32m+            .unwrap()
+(B[m[32m+            .is_empty(),
+(B[m         "a forgotten fact must leave zero residue in retrieval"
+     );
+     assert!(learned.list().await.unwrap().is_empty());
+Diff in <repo>/crates/kernel-core/tests/learned_test.rs:215:
+         propose("finish", json!({"summary": "done"})),
+     ]);
+     let kernel = kernel_with(oracle, learned.clone());
+[31m-    let run = kernel.run_task("summarise the sales report".into()).await.unwrap();
+(B[m[32m+    let run = kernel
+(B[m[32m+        .run_task("summarise the sales report".into())
+(B[m[32m+        .await
+(B[m[32m+        .unwrap();
+(B[m     assert_eq!(run.status, RunStatus::Completed);
+ 
+     let report = kernel.distill(10).await.unwrap();
+Diff in <repo>/crates/kernel-core/tests/learned_test.rs:226:
+     let p = &facts[0].provenance;
+     assert_eq!(p.level, "ai_extracted");
+     assert!(!p.human_validated);
+[31m-    assert!(p.source_run_ids.contains(&run.id), "fact must cite its source run");
+(B[m[32m+    assert!(
+(B[m[32m+        p.source_run_ids.contains(&run.id),
+(B[m[32m+        "fact must cite its source run"
+(B[m[32m+    );
+(B[m 
+     // Repeated distillation does not duplicate (the run is already learned).
+     assert_eq!(kernel.distill(10).await.unwrap().facts_created, 0);
+fmt: NEEDS FIX
+--- clippy ---
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `kernel-core` (lib test) due to 1 previous error
+--- test ---
+
+
+=== Phase 10 gates (re-verify) ===
+--- fmt ---
+fmt: OK
+--- clippy ---
+cargo clippy: No issues found
+--- test ---
+cargo test: 127 passed (30 suites, 3.82s)

@@ -494,6 +494,17 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Governed self-learning (Phase 10, ADR 0016): a DISTINCT, reversible
+    // learned-fact layer on the same durable database (a second handle, like
+    // the desktop store). Only for the sqlite backend — the layer must persist.
+    let learned: Option<Arc<dyn kernel_core::LearnedStore>> = if cfg.storage.backend == "sqlite" {
+        let db = storage::Db::open(&cfg.storage.path)
+            .with_context(|| format!("cannot open database '{}'", cfg.storage.path))?;
+        Some(Arc::new(storage::SqliteLearnedStore::new(db)))
+    } else {
+        None
+    };
+
     // Memory: always a registered extension over the reserved MCP tools
     // (ADR 0008). An external memory extension overrides the built-in one;
     // the built-in durable memory is itself dogfooded through the same
@@ -555,7 +566,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(InMemoryProvider::new())
     };
 
-    let kernel = Arc::new(Kernel::new(
+    let mut kernel_built = Kernel::new(
         swappable.clone(),
         action_source,
         memory,
@@ -572,7 +583,12 @@ async fn main() -> anyhow::Result<()> {
             // Built-in dated prices, extended/overridden by [pricing] config.
             pricing: kernel_core::PricingTable::builtin().merged_with(cfg.pricing.clone()),
         },
-    ));
+    );
+    if let Some(learned) = learned {
+        kernel_built = kernel_built.with_learned(learned);
+        tracing::info!("self-learning: governed distillation enabled (ADR 0016)");
+    }
+    let kernel = Arc::new(kernel_built);
 
     // Metrics recorder (Phase 8, item C): translate the kernel's run-event
     // stream into OTLP metrics. Only when observability is enabled.

@@ -1,0 +1,5 @@
+=== Phase 10 naming check (2026-07-19) ===
+codename (the repo's own pre-rename dir name) over ENTIRE tracked tree: 0 hits
+'agentkernel' outside evidence/notes: 0 hits (allowed loci excluded)
+RESULT: codename grep = 0; agentkernel only in historical evidence + notes.
+NOTE: does not spell the codename; phase10-gates.log scrubbed of the repo path.

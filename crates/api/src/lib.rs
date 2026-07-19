@@ -12,7 +12,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
@@ -120,6 +120,15 @@ pub fn router_with(
         )
         .route("/api/v1/config/model/test", post(test_model_connection))
         .route("/api/v1/config/model/key", post(set_model_key))
+        // Governed self-learning (Phase 10, ADR 0016): distil facts from past
+        // runs, inspect what was learned, and completely forget it. Bearer.
+        .route("/api/v1/learn", get(list_learned))
+        .route("/api/v1/learn/distill", post(distill_learned))
+        .route("/api/v1/learn/{id}", delete(forget_learned))
+        .route(
+            "/api/v1/learn/batch/{batch_id}",
+            delete(forget_learned_batch),
+        )
         // A2A inbound (ADR 0013): Kelter as an A2A server. Card discovery is
         // public; the JSON-RPC task methods require the bearer token.
         .route("/.well-known/agent-card.json", get(a2a_agent_card))
@@ -419,6 +428,71 @@ async fn set_model_key(
     match cfg.set_key(body.api_key).await {
         Ok(()) => (StatusCode::NO_CONTENT, "").into_response(),
         Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
+    }
+}
+
+// ---- governed self-learning (Phase 10, ADR 0016) -------------------------
+
+#[derive(Deserialize)]
+struct DistillBody {
+    #[serde(default = "default_distill_limit")]
+    limit: usize,
+}
+
+fn default_distill_limit() -> usize {
+    50
+}
+
+async fn distill_learned(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Option<Json<DistillBody>>,
+) -> Response {
+    if let Some(rejection) = auth_gate(&state, &headers) {
+        return rejection;
+    }
+    let limit = body.map(|b| b.limit).unwrap_or_else(default_distill_limit);
+    match state.kernel.distill(limit).await {
+        Ok(report) => Json(report).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn list_learned(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(rejection) = auth_gate(&state, &headers) {
+        return rejection;
+    }
+    match state.kernel.list_learned().await {
+        Ok(facts) => Json(facts).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn forget_learned(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    if let Some(rejection) = auth_gate(&state, &headers) {
+        return rejection;
+    }
+    match state.kernel.forget_learned(id).await {
+        Ok(removed) => Json(serde_json::json!({ "removed": removed })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn forget_learned_batch(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(batch_id): Path<Uuid>,
+) -> Response {
+    if let Some(rejection) = auth_gate(&state, &headers) {
+        return rejection;
+    }
+    match state.kernel.forget_learned_batch(batch_id).await {
+        Ok(n) => Json(serde_json::json!({ "removed": n })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
