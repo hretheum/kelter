@@ -289,6 +289,122 @@ async fn a2a_get_and_cancel_unknown_task_is_not_found() {
     }
 }
 
+// ---- Phase 11 security: principals + WS auth -----------------------------
+
+async fn spawn_with_principals() -> (SocketAddr, String, String, Arc<dyn kernel_core::RunStore>) {
+    let store: Arc<dyn kernel_core::RunStore> = Arc::new(kernel_core::InMemoryRunStore::new());
+    let kernel = Arc::new(Kernel::new(
+        Arc::new(OneShotOracle),
+        Arc::new(EchoTools),
+        Arc::new(InMemoryProvider::new()),
+        store.clone(),
+        KernelConfig::default(),
+    ));
+    let default_token = "default-token".to_string();
+    let alice_token = "alice-token".to_string();
+    let principals = api::Principals::with_named(
+        default_token.clone(),
+        vec![("alice".to_string(), alice_token.clone())],
+    );
+    let app = api::router_with_principals(kernel, principals, None);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (addr, default_token, alice_token, store)
+}
+
+async fn submit_and_wait_journal(
+    addr: &SocketAddr,
+    token: &str,
+    store: &Arc<dyn kernel_core::RunStore>,
+) -> String {
+    let client = reqwest::Client::new();
+    let run_id = client
+        .post(format!("http://{addr}/api/v1/runs"))
+        .bearer_auth(token)
+        .json(&json!({"task": "echo hi"}))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The principal Note is journaled synchronously in create_run; give the
+    // spawned journal write a moment.
+    let id = uuid::Uuid::parse_str(&run_id).unwrap();
+    for _ in 0..50 {
+        let j = store.journal(id).await.unwrap();
+        if j.iter()
+            .any(|e| serde_json::to_value(e).unwrap()["key"] == "principal")
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    run_id
+}
+
+fn journal_principal(entries: &[kernel_core::JournalEntry]) -> Option<String> {
+    for e in entries {
+        let v = serde_json::to_value(e).unwrap();
+        if v["key"] == "principal" {
+            return v["value"]["principal"].as_str().map(String::from);
+        }
+    }
+    None
+}
+
+#[tokio::test]
+async fn two_tokens_get_distinct_per_run_principal_attribution() {
+    let (addr, default_token, alice_token, store) = spawn_with_principals().await;
+
+    let alice_run = submit_and_wait_journal(&addr, &alice_token, &store).await;
+    let default_run = submit_and_wait_journal(&addr, &default_token, &store).await;
+
+    let a = store
+        .journal(uuid::Uuid::parse_str(&alice_run).unwrap())
+        .await
+        .unwrap();
+    let d = store
+        .journal(uuid::Uuid::parse_str(&default_run).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(journal_principal(&a).as_deref(), Some("alice"));
+    assert_eq!(journal_principal(&d).as_deref(), Some("default"));
+
+    // An unknown token is still rejected (no principal).
+    let res = reqwest::Client::new()
+        .post(format!("http://{addr}/api/v1/runs"))
+        .bearer_auth("not-a-principal")
+        .json(&json!({"task": "x"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+}
+
+#[tokio::test]
+async fn ws_events_require_a_valid_token() {
+    let (addr, token) = spawn_server().await;
+
+    // No token → the WebSocket handshake is refused before upgrade.
+    let no_token = tokio_tungstenite::connect_async(format!("ws://{addr}/api/v1/events")).await;
+    assert!(no_token.is_err(), "WS without a token must be refused");
+
+    // A wrong token → refused.
+    let bad =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/v1/events?token=wrong")).await;
+    assert!(bad.is_err(), "WS with a wrong token must be refused");
+
+    // A valid query token → connects.
+    let ok =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/v1/events?token={token}")).await;
+    assert!(ok.is_ok(), "WS with a valid token must connect");
+}
+
 #[tokio::test]
 async fn config_endpoint_is_bearer_gated_and_optional() {
     // Phase 8.5: with no controller wired (the bare `router`), the config

@@ -34,3 +34,7 @@ models/
 # covered by *.key above) and the persisted model overlay. NEVER commit these.
 **/kelter-secret-*.key
 **/model-override.toml
+
+# Phase 11: TLS certs/keys — never commit. Demo certs are generated locally.
+*.pem
+*.crt

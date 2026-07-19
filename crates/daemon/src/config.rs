@@ -35,6 +35,44 @@ pub struct Config {
     pub memory: MemoryConfig,
     #[serde(default)]
     pub retention: RetentionConfig,
+    #[serde(default)]
+    pub auth: AuthConfig,
+    #[serde(default)]
+    pub tls: Option<TlsConfig>,
+}
+
+/// Security surface configuration (Phase 11, ADR 0018). All additive — the
+/// default local/tailnet flow (single bearer token) is unchanged when this is
+/// absent.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct AuthConfig {
+    /// Extra origins the config health-check may probe, on top of the presets
+    /// and the configured base_url (SSRF allowlist — see ADR 0018).
+    pub test_allowlist: Vec<String>,
+    /// Named principals: each names an env var holding that principal's bearer
+    /// token. The token VALUE stays in the environment, never in this file.
+    /// With none configured, the single `[server] token` is principal
+    /// "default" and nothing changes.
+    pub principals: Vec<PrincipalConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PrincipalConfig {
+    /// Principal name attributed per run in the journal (e.g. "alice").
+    pub name: String,
+    /// Env var holding this principal's bearer token (secrets env-only).
+    pub token_env: String,
+}
+
+/// Opt-in TLS termination (Phase 11, ADR 0018). Absent → plain HTTP (the
+/// default; a tailnet provides transport security). mTLS is deferred.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TlsConfig {
+    /// PEM certificate chain file (gitignored; never committed).
+    pub cert: String,
+    /// PEM private key file (gitignored; never committed).
+    pub key: String,
 }
 
 /// Store data-lifecycle policy (ADR 0017, Phase 9). Bounds unbounded growth of

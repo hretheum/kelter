@@ -1,0 +1,7 @@
+=== Phase 11 security surface ===
+TLS: [2m2026-07-19T18:29:17.370693Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m api serving over HTTPS (rustls) on 127.0.0.1:7661
+default flow: bearer→200, anon→401 (unchanged)
+SSRF: metadata IP refused (allowlist); preset allowed; anon→401
+principals: alice run → alice
+            default run → default
+secrets: tokens + PEM absent from logs; *.pem gitignored

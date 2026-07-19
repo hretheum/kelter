@@ -23,6 +23,17 @@ path = "./kelter.db"
 # max_runs = 10000        # keep at most this many terminal runs (0 = unlimited)
 # max_age_days = 30       # optional: also prune terminal runs older than N days
 
+# Security surface (ADR 0018). All optional/additive — the default single-token
+# flow is unchanged. Secrets stay in env / gitignored files, never here.
+# [auth]
+# test_allowlist = ["http://127.0.0.1:9000"]   # extra health-check probe origins
+# [[auth.principals]]                            # named tokens → per-run attribution
+# name = "alice"
+# token_env = "KELTER_TOKEN_ALICE"               # token value lives in the env, not here
+# [tls]                                          # opt-in HTTPS (rustls); default = plain
+# cert = "/etc/kelter/cert.pem"                  # PEM cert (gitignored, never committed)
+# key  = "/etc/kelter/key.pem"                   # PEM private key (gitignored)
+
 # [otel]
 # endpoint = "http://127.0.0.1:4318"   # OTLP/HTTP; absent = tracing export off
 # service_name = "kelter"

@@ -683,11 +683,32 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .with_context(|| format!("invalid bind address '{}'", cfg.server.bind))?;
 
-    println!("ui:  http://{addr}/");
-    println!("api: http://{addr}/api/v1  (Authorization: Bearer <token>)");
+    let scheme = if cfg.tls.is_some() { "https" } else { "http" };
+    println!("ui:  {scheme}://{addr}/");
+    println!("api: {scheme}://{addr}/api/v1  (Authorization: Bearer <token>)");
+
+    // Named principals (Phase 11, ADR 0018): the default token is principal
+    // "default"; named ones resolve their token from env (never the tree). The
+    // single-token flow is unchanged when none are configured.
+    let mut named: Vec<(String, String)> = Vec::new();
+    for p in &cfg.auth.principals {
+        match std::env::var(&p.token_env) {
+            Ok(t) if !t.is_empty() => named.push((p.name.clone(), t)),
+            _ => tracing::warn!(
+                "auth: principal '{}' token_env '{}' unset/empty — skipping",
+                p.name,
+                p.token_env
+            ),
+        }
+    }
+    if !named.is_empty() {
+        tracing::info!("auth: {} named principal(s) + default", named.len());
+    }
+    let principals = api::Principals::with_named(token, named);
 
     // Runtime model-config controller (Phase 8.5): the UI reads/writes the
-    // model here; the key is never held in the exposed state.
+    // model here; the key is never held in the exposed state. The health-check
+    // is SSRF-guarded by the allowlist (Phase 11).
     let controller: Arc<dyn api::ModelConfigController> =
         Arc::new(model_config::DaemonModelConfig::new(
             &config_path,
@@ -696,8 +717,38 @@ async fn main() -> anyhow::Result<()> {
                 api_key: None,
                 ..cfg.policy.clone()
             },
+            cfg.auth.test_allowlist.clone(),
         ));
-    let serve = api::serve_with_config(kernel, token, addr, Some(controller));
+
+    // Opt-in TLS termination (Phase 11, ADR 0018): serve HTTPS with a config
+    // cert; default stays plain (a tailnet provides transport security).
+    let app = api::build_app(kernel, principals, Some(controller));
+    let serve = async {
+        match &cfg.tls {
+            Some(tls) => {
+                // Pin the crypto provider (the tree also has ring via reqwest;
+                // rustls 0.23 panics on an ambiguous default otherwise).
+                let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+                let rustls =
+                    axum_server::tls_rustls::RustlsConfig::from_pem_file(&tls.cert, &tls.key)
+                        .await
+                        .with_context(|| {
+                            format!("cannot load TLS cert '{}' / key '{}'", tls.cert, tls.key)
+                        })?;
+                tracing::info!("api serving over HTTPS (rustls) on {addr}");
+                axum_server::bind_rustls(addr, rustls)
+                    .serve(app.into_make_service())
+                    .await
+                    .map_err(anyhow::Error::from)
+            }
+            None => {
+                let listener = tokio::net::TcpListener::bind(addr).await?;
+                axum::serve(listener, app)
+                    .await
+                    .map_err(anyhow::Error::from)
+            }
+        }
+    };
     tokio::select! {
         res = serve => res?,
         _ = tokio::signal::ctrl_c() => {

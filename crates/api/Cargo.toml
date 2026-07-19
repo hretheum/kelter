@@ -22,5 +22,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 memory.workspace = true
+storage.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true
+tokio-tungstenite = "0.24"

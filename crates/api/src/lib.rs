@@ -74,10 +74,51 @@ pub trait ModelConfigController: Send + Sync {
 #[folder = "../../apps/web-ui"]
 struct WebUi;
 
+/// The default principal name for the single-token flow — nothing changes for a
+/// deployment that never configures named principals.
+pub const DEFAULT_PRINCIPAL: &str = "default";
+
+/// Named bearer tokens → principal identities (Phase 11, ADR 0018). A presented
+/// token resolves to the principal it belongs to, attributed per run. With one
+/// token everything is principal "default"; additive, no behaviour change.
+pub struct Principals {
+    /// (principal name, token value). Token values come from env/secret files
+    /// (never the config tree); this struct only holds them in memory.
+    entries: Vec<(String, String)>,
+}
+
+impl Principals {
+    /// The single-token flow: one token, principal "default".
+    pub fn single(token: String) -> Self {
+        Self {
+            entries: vec![(DEFAULT_PRINCIPAL.to_string(), token)],
+        }
+    }
+
+    /// The default token plus named principals.
+    pub fn with_named(default_token: String, named: Vec<(String, String)>) -> Self {
+        let mut entries = vec![(DEFAULT_PRINCIPAL.to_string(), default_token)];
+        entries.extend(named);
+        Self { entries }
+    }
+
+    /// The principal a presented token belongs to, or `None`. Compares against
+    /// every token in constant time (no early-out timing leak).
+    pub fn resolve(&self, presented: &str) -> Option<&str> {
+        let mut matched: Option<&str> = None;
+        for (name, token) in &self.entries {
+            if constant_time_eq(presented.as_bytes(), token.as_bytes()) {
+                matched = Some(name);
+            }
+        }
+        matched
+    }
+}
+
 #[derive(Clone)]
 pub struct ApiState {
     pub kernel: Arc<Kernel>,
-    pub token: Arc<String>,
+    principals: Arc<Principals>,
     /// In-flight A2A-inbound runs this process spawned, so `tasks/cancel` can
     /// stop execution before writing the durable canceled state (ADR 0013).
     /// Best-effort: a run resumed after a crash is not tracked here (A2A
@@ -99,9 +140,18 @@ pub fn router_with(
     token: String,
     config: Option<Arc<dyn ModelConfigController>>,
 ) -> Router {
+    router_with_principals(kernel, Principals::single(token), config)
+}
+
+/// Router with named principals (Phase 11) + an optional config controller.
+pub fn router_with_principals(
+    kernel: Arc<Kernel>,
+    principals: Principals,
+    config: Option<Arc<dyn ModelConfigController>>,
+) -> Router {
     let state = ApiState {
         kernel,
-        token: Arc::new(token),
+        principals: Arc::new(principals),
         a2a_handles: Arc::new(Mutex::new(HashMap::new())),
         limiter: Arc::new(AuthLimiter::default()),
         config,
@@ -150,8 +200,28 @@ pub async fn serve_with_config(
     addr: SocketAddr,
     config: Option<Arc<dyn ModelConfigController>>,
 ) -> std::io::Result<()> {
+    serve_with_principals(kernel, Principals::single(token), addr, config).await
+}
+
+/// Serve with named principals (Phase 11) + a config controller — the daemon
+/// path when `[auth] principals` are configured. Returns the built router so
+/// the daemon can also serve it over TLS (ADR 0018) instead.
+pub fn build_app(
+    kernel: Arc<Kernel>,
+    principals: Principals,
+    config: Option<Arc<dyn ModelConfigController>>,
+) -> Router {
+    router_with_principals(kernel, principals, config)
+}
+
+pub async fn serve_with_principals(
+    kernel: Arc<Kernel>,
+    principals: Principals,
+    addr: SocketAddr,
+    config: Option<Arc<dyn ModelConfigController>>,
+) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    let app = router_with(kernel, token, config);
+    let app = build_app(kernel, principals, config);
     if let Ok(addr) = listener.local_addr() {
         tracing::info!("api listening on http://{addr}");
     }
@@ -187,12 +257,20 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn authorized(state: &ApiState, headers: &HeaderMap) -> bool {
-    headers
+/// The principal a request's bearer token belongs to, or `None`. Accepts the
+/// token from the `Authorization: Bearer` header (REST/A2A) or, when provided,
+/// a query token (WebSocket — browsers cannot set headers on WS connects).
+fn principal_of(
+    state: &ApiState,
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+) -> Option<String> {
+    let header_token = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .is_some_and(|t| constant_time_eq(t.as_bytes(), state.token.as_bytes()))
+        .and_then(|v| v.strip_prefix("Bearer "));
+    let presented = header_token.or(query_token)?;
+    state.principals.resolve(presented).map(String::from)
 }
 
 fn unauthorized() -> Response {
@@ -238,27 +316,33 @@ impl AuthLimiter {
     }
 }
 
-/// Central auth gate for the REST + A2A endpoints: enforces the rate limiter,
-/// then the bearer check. Returns `Some(response)` when the request must be
-/// rejected (`429` locked out, or `401` bad/missing token), `None` when it may
-/// proceed.
-fn auth_gate(state: &ApiState, headers: &HeaderMap) -> Option<Response> {
+/// Central auth gate (REST + A2A + WS): the rate limiter, then the bearer
+/// check. `Ok(principal)` on success (the authenticated identity — "default"
+/// for the single-token flow), `Err(response)` on rejection (`429` locked out
+/// or `401` bad/missing token).
+#[allow(clippy::result_large_err)]
+fn auth_gate(
+    state: &ApiState,
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+) -> Result<String, Response> {
     if state.limiter.is_locked() {
-        return Some(
-            (
-                StatusCode::TOO_MANY_REQUESTS,
-                [(header::RETRY_AFTER, "30")],
-                "too many failed auth attempts; try again shortly",
-            )
-                .into_response(),
-        );
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, "30")],
+            "too many failed auth attempts; try again shortly",
+        )
+            .into_response());
     }
-    if authorized(state, headers) {
-        state.limiter.record_success();
-        None
-    } else {
-        state.limiter.record_failure();
-        Some(unauthorized())
+    match principal_of(state, headers, query_token) {
+        Some(principal) => {
+            state.limiter.record_success();
+            Ok(principal)
+        }
+        None => {
+            state.limiter.record_failure();
+            Err(unauthorized())
+        }
     }
 }
 
@@ -274,14 +358,30 @@ async fn create_run(
     headers: HeaderMap,
     Json(req): Json<CreateRun>,
 ) -> Response {
-    if let Some(rejection) = auth_gate(&state, &headers) {
-        return rejection;
-    }
+    let principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
     if req.task.trim().is_empty() {
         return (StatusCode::UNPROCESSABLE_ENTITY, "task must not be empty").into_response();
     }
     match state.kernel.create_run(req.task).await {
         Ok(run_id) => {
+            // Attribute the caller (Phase 11, ADR 0018): which principal
+            // created this run — durable in the journal, "default" for the
+            // single-token flow.
+            let _ = state
+                .kernel
+                .store()
+                .append_journal(
+                    run_id,
+                    kernel_core::JournalEntry::Note {
+                        step: 0,
+                        key: "principal".into(),
+                        value: serde_json::json!({ "principal": principal, "via": "api/runs" }),
+                    },
+                )
+                .await;
             let kernel = state.kernel.clone();
             tokio::spawn(async move {
                 if let Err(e) = kernel.execute_run(run_id).await {
@@ -299,9 +399,10 @@ async fn create_run(
 }
 
 async fn list_runs(State(state): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(rejection) = auth_gate(&state, &headers) {
-        return rejection;
-    }
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
     match state.kernel.store().list().await {
         Ok(runs) => Json(runs).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -312,9 +413,10 @@ async fn list_runs(State(state): State<ApiState>, headers: HeaderMap) -> Respons
 /// extensions) are live. Useful for demos and for verifying an extension
 /// registered without recompiling anything.
 async fn list_tools(State(state): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(rejection) = auth_gate(&state, &headers) {
-        return rejection;
-    }
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
     match state.kernel.current_action_schema().await {
         Ok(schema) => {
             let tools: Vec<serde_json::Value> = schema
@@ -338,9 +440,10 @@ async fn get_run(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Response {
-    if let Some(rejection) = auth_gate(&state, &headers) {
-        return rejection;
-    }
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
     match state.kernel.store().get(id).await {
         Ok(run) => Json(run).into_response(),
         Err(kernel_core::StoreError::NotFound(_)) => {
@@ -366,9 +469,10 @@ fn config_controller(state: &ApiState) -> Result<&Arc<dyn ModelConfigController>
 }
 
 async fn get_model_config(State(state): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(rejection) = auth_gate(&state, &headers) {
-        return rejection;
-    }
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
     match config_controller(&state) {
         Ok(cfg) => Json(cfg.get().await).into_response(),
         Err(resp) => resp,
@@ -380,9 +484,10 @@ async fn set_model_config(
     headers: HeaderMap,
     Json(update): Json<ModelConfigUpdate>,
 ) -> Response {
-    if let Some(rejection) = auth_gate(&state, &headers) {
-        return rejection;
-    }
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
     let cfg = match config_controller(&state) {
         Ok(c) => c,
         Err(resp) => return resp,
@@ -398,9 +503,10 @@ async fn test_model_connection(
     headers: HeaderMap,
     Json(req): Json<ModelTestRequest>,
 ) -> Response {
-    if let Some(rejection) = auth_gate(&state, &headers) {
-        return rejection;
-    }
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
     match config_controller(&state) {
         Ok(cfg) => Json(cfg.test(req).await).into_response(),
         Err(resp) => resp,
@@ -417,9 +523,10 @@ async fn set_model_key(
     headers: HeaderMap,
     Json(body): Json<KeyBody>,
 ) -> Response {
-    if let Some(rejection) = auth_gate(&state, &headers) {
-        return rejection;
-    }
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
     let cfg = match config_controller(&state) {
         Ok(c) => c,
         Err(resp) => return resp,
@@ -448,9 +555,10 @@ async fn distill_learned(
     headers: HeaderMap,
     body: Option<Json<DistillBody>>,
 ) -> Response {
-    if let Some(rejection) = auth_gate(&state, &headers) {
-        return rejection;
-    }
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
     let limit = body.map(|b| b.limit).unwrap_or_else(default_distill_limit);
     match state.kernel.distill(limit).await {
         Ok(report) => Json(report).into_response(),
@@ -459,9 +567,10 @@ async fn distill_learned(
 }
 
 async fn list_learned(State(state): State<ApiState>, headers: HeaderMap) -> Response {
-    if let Some(rejection) = auth_gate(&state, &headers) {
-        return rejection;
-    }
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
     match state.kernel.list_learned().await {
         Ok(facts) => Json(facts).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -473,9 +582,10 @@ async fn forget_learned(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Response {
-    if let Some(rejection) = auth_gate(&state, &headers) {
-        return rejection;
-    }
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
     match state.kernel.forget_learned(id).await {
         Ok(removed) => Json(serde_json::json!({ "removed": removed })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -487,9 +597,10 @@ async fn forget_learned_batch(
     headers: HeaderMap,
     Path(batch_id): Path<Uuid>,
 ) -> Response {
-    if let Some(rejection) = auth_gate(&state, &headers) {
-        return rejection;
-    }
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
     match state.kernel.forget_learned_batch(batch_id).await {
         Ok(n) => Json(serde_json::json!({ "removed": n })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -542,15 +653,18 @@ async fn a2a_rpc(
 ) -> Response {
     // Auth is the security surface: reject anonymous task calls loudly. Card
     // discovery is the only unauthenticated A2A route.
-    if let Some(rejection) = auth_gate(&state, &headers) {
-        return rejection;
-    }
+    let principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
     let id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
     let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or(serde_json::json!({}));
 
     match a2a::server::normalize_method(method) {
-        Some(a2a::server::Method::Send) => a2a_send(&state, &headers, id, &params).await,
+        Some(a2a::server::Method::Send) => {
+            a2a_send(&state, &headers, &principal, id, &params).await
+        }
         Some(a2a::server::Method::Get) => a2a_get(&state, id, &params).await,
         Some(a2a::server::Method::Cancel) => a2a_cancel(&state, id, &params).await,
         None => rpc_error(id, -32601, &format!("method not found: {method}")),
@@ -562,6 +676,7 @@ async fn a2a_rpc(
 async fn a2a_send(
     state: &ApiState,
     headers: &HeaderMap,
+    principal: &str,
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> Response {
@@ -574,9 +689,8 @@ async fn a2a_send(
         Err(e) => return rpc_error(id, -32000, &format!("cannot create run: {e}")),
     };
 
-    // Attribute the caller in the run's journal (ADR 0013): who delegated,
-    // over which authenticated surface. The bearer token authorised the call;
-    // the optional A2A-Caller header names the peer.
+    // Attribute the caller in the run's journal (ADR 0013 + 0018): the
+    // authenticated PRINCIPAL, plus the optional A2A-Caller peer label.
     let caller = headers
         .get("a2a-caller")
         .and_then(|v| v.to_str().ok())
@@ -590,6 +704,7 @@ async fn a2a_send(
                 step: 0,
                 key: "a2a_inbound".into(),
                 value: serde_json::json!({
+                    "principal": principal,
                     "caller": caller,
                     "auth": "bearer",
                     "via": "a2a/message-send",
@@ -597,7 +712,7 @@ async fn a2a_send(
             },
         )
         .await;
-    tracing::info!(%run_id, %caller, "a2a inbound: task accepted as a durable run");
+    tracing::info!(%run_id, %principal, %caller, "a2a inbound: task accepted as a durable run");
 
     // Execute durably in the background; track the handle so tasks/cancel can
     // stop it.
@@ -681,13 +796,11 @@ async fn events_ws(
     Query(auth): Query<WsAuth>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let ok = authorized(&state, &headers)
-        || auth
-            .token
-            .as_deref()
-            .is_some_and(|t| constant_time_eq(t.as_bytes(), state.token.as_bytes()));
-    if !ok {
-        return unauthorized();
+    // WS auth (Phase 11): same gate as REST — rate limiter + a valid token via
+    // header OR the query param (browsers can't set WS headers). No token → the
+    // connection is refused before upgrade.
+    if let Err(rejection) = auth_gate(&state, &headers, auth.token.as_deref()) {
+        return rejection;
     }
     let kernel = state.kernel.clone();
     ws.on_upgrade(move |socket| stream_events(socket, kernel))

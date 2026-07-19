@@ -81,6 +81,7 @@ name = "api"
 version = "0.1.0"
 dependencies = [
  "a2a",
+ "async-trait",
  "axum",
  "kernel-core",
  "mime_guess",

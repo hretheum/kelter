@@ -993,3 +993,70 @@ No new runtime dependencies. `tracing-subscriber` added as a `kernel-core`
 **dev**-dependency for the redaction capture test. podman 6.0.1 (quadlet
 generator). rusqlite 0.40.1 unchanged (prune is one transaction over existing
 tables).
+
+## Phase 11 — security-surface hardening
+
+Date: 2026-07-19. Implements ADR 0018 — an auth-surface audit + SSRF fix,
+WS-auth, per-caller principals, and opt-in TLS. Precondition: Phases 1–3 (bearer
+API) + 8.5 (the health-check being fixed) on origin; Phase 9 orthogonal. The
+default single-token local/tailnet flow is **unchanged**; everything else is
+additive/opt-in.
+
+### 1. Auth-surface audit
+
+Public (intentional): `/healthz`, `/.well-known/agent-card.json`, static UI.
+Bearer + rate-limit (`auth_gate`): all `/api/v1/*` command routes + `/a2a/rpc`.
+Gaps found & closed: the config `test` endpoint fetched an **arbitrary** URL
+(SSRF); the WS channel skipped the rate limiter; attribution was a single
+anonymous identity.
+
+### 2. Sources verified live (Phase 11)
+
+| Area | Verified | How |
+|---|---|---|
+| axum-server + rustls | `axum-server 0.8` (`tls-rustls`, aws-lc-rs provider) serves an `axum::Router` via `bind_rustls` + `RustlsConfig::from_pem_file(cert, key)`; must pin the provider (tree also has ring) | context7/docs.rs + compiled & served HTTPS live |
+| SSRF pattern | origin-pin/allowlist reused from ADR 0009 | `crates/a2a` |
+
+### 3. Decisions (Phase 11)
+
+- **SSRF fix (crux #2):** the health-check probe target's origin must be on an
+  allowlist (presets + configured base_url + `[auth] test_allowlist`); redirects
+  disabled; still bearer-gated. Off-allowlist → refused, never fetched.
+- **Principals (crux #1):** `Principals` maps tokens → names; `[auth] principals`
+  names each + the **env var** holding its token (never in the tree). Default
+  `[server] token` = principal "default" → single-token flow unchanged.
+  Attributed per run in the journal.
+- **TLS opt-in:** `[tls] cert/key` → HTTPS via rustls; default plain. mTLS/OAuth
+  deferred.
+
+### 4. Definition-of-done evidence (Phase 11)
+
+| Gate | Result | Raw evidence |
+|---|---|---|
+| build/test/clippy/fmt | PASS — **140 workspace tests, 0 failures**; clippy `-D warnings` clean; fmt clean | `evidence/phase11-gates.log` |
+| Naming | codename grep = 0; **no token/cert/key value in any tracked file** | `evidence/phase11-naming-check.log` |
+| **SSRF-fix (money-shot)** | **PASS** — health-check to a metadata IP (`169.254.169.254`) → refused (`ok:false`, "allowlist"); a preset origin → allowed; anonymous → `401` | `evidence/security-surface.log`; daemon unit tests `ssrf_off_allowlist_target_is_refused` (+2) |
+| **WS-auth** | **PASS** — WS with no token / a wrong token → handshake refused before upgrade; a valid query token → connects (real `tokio-tungstenite` client) | api test `ws_events_require_a_valid_token` |
+| **Per-caller principals** | **PASS** — two tokens (`alice`, default) → **distinct per-run attribution** in the journal (`principal` Note); an unknown token → `401` | `evidence/security-surface.log`; api test `two_tokens_get_distinct_per_run_principal_attribution` |
+| **TLS opt-in** | **PASS** — the daemon serves **HTTPS** with a config cert (rustls); a client connects over TLS ("serving over HTTPS (rustls)" + `curl -k` 200) | `evidence/security-surface.log`; `scripts/smoke-security.sh` |
+| **Default flow unchanged** | **PASS** — the single bearer token still authorises (200), anonymous still `401`; over HTTPS in the smoke; the single-token api tests still green | `scripts/smoke-security.sh`; regression: a2a-inbound/durability/tool green |
+| **Secrets not in tree/logs** | **PASS** — tokens + PEM absent from the daemon log; only a masked token fingerprint logged (ADR 0017); `*.pem`/`*.key` gitignored; principal tokens are env-only | `evidence/security-surface.log` |
+| No secrets / no push | PASS | — |
+
+### 5. Uncertainties / TODO for human review (Phase 11)
+
+- **Principals = identity/attribution, not RBAC** — every principal has the same
+  permissions; per-principal authorization is future work.
+- **TLS demo cert is self-signed** (RSA, via openssl — an EC key tripped a
+  rustls KeyMismatch, RSA is robust); a real cert is a human deployment step. A
+  Custom health-check endpoint must be added to `[auth] test_allowlist` to be
+  pre-probed (its origin isn't a preset).
+- Deferred, explicit: mTLS (client-cert), OAuth/OIDC, OS-level subprocess
+  containment (WASM/ADR 0011 covers that need).
+
+### 6. Version pins observed (Phase 11)
+
+`axum-server 0.8` (feature `tls-rustls`) + `rustls 0.23` (aws-lc-rs) added to
+`daemon`; `axum` promoted to a direct `daemon` dep (TLS/plain serve);
+`tokio-tungstenite 0.24` as an `api` **dev**-dep (WS-auth test). rustls/aws-lc-rs
+were already in the tree via reqwest.

@@ -1,0 +1,134 @@
+=== Phase 11 gates (2026-07-19T18:30:37Z) ===
+--- fmt ---
+Diff in <repo>/crates/api/src/lib.rs:260:
+ /// The principal a request's bearer token belongs to, or `None`. Accepts the
+ /// token from the `Authorization: Bearer` header (REST/A2A) or, when provided,
+ /// a query token (WebSocket — browsers cannot set headers on WS connects).
+[31m-fn principal_of(state: &ApiState, headers: &HeaderMap, query_token: Option<&str>) -> Option<String> {
+(B[m[32m+fn principal_of(
+(B[m[32m+    state: &ApiState,
+(B[m[32m+    headers: &HeaderMap,
+(B[m[32m+    query_token: Option<&str>,
+(B[m[32m+) -> Option<String> {
+(B[m     let header_token = headers
+         .get(header::AUTHORIZATION)
+         .and_then(|v| v.to_str().ok())
+Diff in <repo>/crates/api/src/lib.rs:658:
+     let params = req.get("params").cloned().unwrap_or(serde_json::json!({}));
+ 
+     match a2a::server::normalize_method(method) {
+[31m-        Some(a2a::server::Method::Send) => a2a_send(&state, &headers, &principal, id, &params).await,
+(B[m[32m+        Some(a2a::server::Method::Send) => {
+(B[m[32m+            a2a_send(&state, &headers, &principal, id, &params).await
+(B[m[32m+        }
+(B[m         Some(a2a::server::Method::Get) => a2a_get(&state, id, &params).await,
+         Some(a2a::server::Method::Cancel) => a2a_cancel(&state, id, &params).await,
+         None => rpc_error(id, -32601, &format!("method not found: {method}")),
+Diff in <repo>/crates/api/tests/api_test.rs:337:
+     let id = uuid::Uuid::parse_str(&run_id).unwrap();
+     for _ in 0..50 {
+         let j = store.journal(id).await.unwrap();
+[31m-        if j.iter().any(|e| {
+(B[m[31m-            serde_json::to_value(e).unwrap()["key"] == "principal"
+(B[m[31m-        }) {
+(B[m[32m+        if j.iter()
+(B[m[32m+            .any(|e| serde_json::to_value(e).unwrap()["key"] == "principal")
+(B[m[32m+        {
+(B[m             break;
+         }
+         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+Diff in <repo>/crates/api/tests/api_test.rs:395:
+     assert!(no_token.is_err(), "WS without a token must be refused");
+ 
+     // A wrong token → refused.
+[31m-    let bad = tokio_tungstenite::connect_async(format!("ws://{addr}/api/v1/events?token=wrong"))
+(B[m[31m-        .await;
+(B[m[32m+    let bad =
+(B[m[32m+        tokio_tungstenite::connect_async(format!("ws://{addr}/api/v1/events?token=wrong")).await;
+(B[m     assert!(bad.is_err(), "WS with a wrong token must be refused");
+ 
+     // A valid query token → connects.
+Diff in <repo>/crates/daemon/src/main.rs:729:
+                 // Pin the crypto provider (the tree also has ring via reqwest;
+                 // rustls 0.23 panics on an ambiguous default otherwise).
+                 let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+[31m-                let rustls = axum_server::tls_rustls::RustlsConfig::from_pem_file(
+(B[m[31m-                    &tls.cert, &tls.key,
+(B[m[31m-                )
+(B[m[31m-                .await
+(B[m[31m-                .with_context(|| {
+(B[m[31m-                    format!("cannot load TLS cert '{}' / key '{}'", tls.cert, tls.key)
+(B[m[31m-                })?;
+(B[m[32m+                let rustls =
+(B[m[32m+                    axum_server::tls_rustls::RustlsConfig::from_pem_file(&tls.cert, &tls.key)
+(B[m[32m+                        .await
+(B[m[32m+                        .with_context(|| {
+(B[m[32m+                            format!("cannot load TLS cert '{}' / key '{}'", tls.cert, tls.key)
+(B[m[32m+                        })?;
+(B[m                 tracing::info!("api serving over HTTPS (rustls) on {addr}");
+                 axum_server::bind_rustls(addr, rustls)
+                     .serve(app.into_make_service())
+Diff in <repo>/crates/daemon/src/main.rs:744:
+             }
+             None => {
+                 let listener = tokio::net::TcpListener::bind(addr).await?;
+[31m-                axum::serve(listener, app).await.map_err(anyhow::Error::from)
+(B[m[32m+                axum::serve(listener, app)
+(B[m[32m+                    .await
+(B[m[32m+                    .map_err(anyhow::Error::from)
+(B[m             }
+         }
+     };
+Diff in <repo>/crates/daemon/src/model_config.rs:110:
+ /// able to turn "Test connection" into an SSRF probe of arbitrary hosts (e.g.
+ /// a cloud metadata IP).
+ const PRESET_ORIGINS: &[&str] = &[
+[31m-    "http://127.0.0.1:8080",   // llama.cpp
+(B[m[31m-    "http://127.0.0.1:11434",  // ollama
+(B[m[31m-    "https://openrouter.ai",   // OpenRouter
+(B[m[32m+    "http://127.0.0.1:8080",  // llama.cpp
+(B[m[32m+    "http://127.0.0.1:11434", // ollama
+(B[m[32m+    "https://openrouter.ai",  // OpenRouter
+(B[m ];
+ 
+ /// scheme://host[:port] of a URL, or `None` if unparseable.
+Diff in <repo>/crates/daemon/src/model_config.rs:365:
+                 base_url: "http://127.0.0.1:8080".into(),
+             })
+             .await;
+[31m-        assert!(!r.detail.contains("allowlist"), "preset refused: {}", r.detail);
+(B[m[32m+        assert!(
+(B[m[32m+            !r.detail.contains("allowlist"),
+(B[m[32m+            "preset refused: {}",
+(B[m[32m+            r.detail
+(B[m[32m+        );
+(B[m     }
+ 
+     #[tokio::test]
+Diff in <repo>/crates/daemon/src/model_config.rs:377:
+                 base_url: "http://127.0.0.1:9999".into(),
+             })
+             .await;
+[31m-        assert!(!r.detail.contains("allowlist"), "extra refused: {}", r.detail);
+(B[m[32m+        assert!(
+(B[m[32m+            !r.detail.contains("allowlist"),
+(B[m[32m+            "extra refused: {}",
+(B[m[32m+            r.detail
+(B[m[32m+        );
+(B[m     }
+ }
+ 
+fmt: NEEDS FIX
+--- clippy ---
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `daemon` (bin "kelter" test) due to 1 previous error
+--- test ---
+
+
+=== Phase 11 gates (re-verify) ===
+--- fmt ---
+fmt: OK
+--- clippy ---
+cargo clippy: No issues found
+--- test ---
+cargo test: 140 passed (31 suites, 4.40s)

@@ -206,8 +206,20 @@ stub is gated by config. No silent self-mutation.
 The one stable contract every client uses (ADR 0004): HTTP for commands
 (`POST /api/v1/runs`, `GET /api/v1/runs/{id}`, `GET /api/v1/tools`), WebSocket for event
 streaming (`/api/v1/events`), bearer-token auth, embedded web UI at `/`.
-Designed to sit on localhost or a private network (tailnet); never exposed
-publicly without extra hardening.
+Designed to sit on localhost or a private network (tailnet).
+
+**Security surface (ADR 0018).** Every command endpoint (REST + A2A RPC + the
+WS events channel) is bearer-gated behind one `auth_gate` (constant-time token
+compare + a failed-auth rate limiter); only `/healthz`, the A2A Agent Card, and
+the static UI are public. The default single-token local/tailnet flow is
+unchanged; additive/opt-in on top: **named principals** (`[auth] principals`,
+tokens from env) attributed per run in the journal; an **SSRF-guarded** config
+health-check (probe target restricted to an origin allowlist — presets + the
+configured base_url + operator extras); and **opt-in TLS** (`[tls]` cert/key →
+HTTPS via rustls; default stays plain). Secrets (tokens, the API key, TLS
+cert/key) are env/gitignored, never in the tree or logs (only a masked token
+fingerprint is logged, ADR 0017). mTLS/OAuth deferred; never exposed publicly
+without a real cert.
 
 ### Topologies — config, not code
 
