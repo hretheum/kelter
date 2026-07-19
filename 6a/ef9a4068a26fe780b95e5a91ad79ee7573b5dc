@@ -1,0 +1,85 @@
+apps/web-ui/style.css
+  s_ebdbabe3e659c2::t_98930af0ffffa4 70-101
+apps/web-ui/index.html
+  s_ebdbabe3e659c2::t_80bd855f605da5 16-17
+  s_ebdbabe3e659c2::t_55e17d75866eed 32-73
+scripts/smoke-config-ux.sh
+  s_ebdbabe3e659c2::t_254421640bf943 1-52,58-151
+  s_ebdbabe3e659c2::t_0ea41eae017d66 53-57
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_0fa7c63ca68f02 625-637
+  s_ebdbabe3e659c2::t_c98e65d7228200 253,256-262,266
+  s_ebdbabe3e659c2::t_3031c46cec7770 559
+  s_ebdbabe3e659c2::t_ae60005ce378a3 5
+docs/evidence/config-ux-set-persist-restart.log
+  s_ebdbabe3e659c2::t_83c718ee3f7042 1-14
+apps/web-ui/app.js
+  s_ebdbabe3e659c2::t_e90343a686c77f 139-267
+  s_ebdbabe3e659c2::t_4f993cca58cce1 37
+  s_ebdbabe3e659c2::t_2701a1a11ff1dd 119
+crates/api/src/lib.rs
+  s_ebdbabe3e659c2::t_213cfaaf982caa 344-345,349-424
+  s_ebdbabe3e659c2::t_1fe93461347cc8 10
+  s_ebdbabe3e659c2::t_3fd513bd1dd5cb 137-151
+  s_ebdbabe3e659c2::t_6efae2ed2b8302 346-348
+  s_ebdbabe3e659c2::t_0f940a469d6869 18,25-70
+  s_ebdbabe3e659c2::t_15f3713a1d0fe7 88-89,93-101,107,115-122
+  s_ebdbabe3e659c2::t_5830a3079775a0 71
+crates/daemon/src/model_config.rs
+  s_ebdbabe3e659c2::t_1fe93461347cc8 87-90
+  s_ebdbabe3e659c2::t_8f2265f36e1417 1-86,91-182,189-248
+  s_ebdbabe3e659c2::t_73e2877f689a59 183-188
+crates/daemon/Cargo.toml
+  s_ebdbabe3e659c2::t_52b9317f535252 30-31
+README.md
+  s_ebdbabe3e659c2::t_4772fd0439ad12 132-140
+crates/api/Cargo.toml
+  s_ebdbabe3e659c2::t_2f302a55d0147a 11
+docs/adr/0015-runtime-model-config-and-ui.md
+  s_ebdbabe3e659c2::t_0492b096c0332f 1-102
+docs/evidence/phase85-gates.log
+  s_ebdbabe3e659c2::t_a2d4bd4faccf22 1-61
+  s_ebdbabe3e659c2::t_451496991a1559 71-77
+  s_ebdbabe3e659c2::t_59eb651d08b34d 62-70
+crates/policy/src/lib.rs
+  s_ebdbabe3e659c2::t_81a72d5c4de6b8 87-91
+  s_ebdbabe3e659c2::t_1fe93461347cc8 19,127-131
+  s_ebdbabe3e659c2::t_e87508cb7d7595 16,18,27-68
+  s_ebdbabe3e659c2::t_2281e552e3810e 120-126,132
+  s_ebdbabe3e659c2::t_e522d9eadd317a 157,170
+  s_ebdbabe3e659c2::t_f02c66e90679f0 69
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_a986901328e059 812-875
+.gitignore
+  s_ebdbabe3e659c2::t_c8ca095ba4d86f 32-36
+crates/api/tests/api_test.rs
+  s_ebdbabe3e659c2::t_87f9d45aed6d60 293-315
+  s_ebdbabe3e659c2::t_58a60d061e0b71 292
+docs/architecture.md
+  s_ebdbabe3e659c2::t_3ea6745b59efbe 215
+  s_ebdbabe3e659c2::t_66d1f943af71de 60-66
+apps/desktop/src-tauri/src/lib.rs
+  s_ebdbabe3e659c2::t_e522d9eadd317a 98
+Cargo.lock
+  s_ebdbabe3e659c2::t_670d6b9f907498 579,589
+docs/evidence/config-ux-ui.html
+  s_ebdbabe3e659c2::t_b833b6dfe640c1 1-95
+docs/evidence/phase85-naming-check.log
+  s_ebdbabe3e659c2::t_f89a8ee8ec0bd2 1-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "6aef9a4068a26fe780b95e5a91ad79ee7573b5dc",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
