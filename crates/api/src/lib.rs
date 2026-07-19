@@ -119,11 +119,12 @@ impl Principals {
 pub struct ApiState {
     pub kernel: Arc<Kernel>,
     principals: Arc<Principals>,
-    /// In-flight A2A-inbound runs this process spawned, so `tasks/cancel` can
-    /// stop execution before writing the durable canceled state (ADR 0013).
-    /// Best-effort: a run resumed after a crash is not tracked here (A2A
-    /// permits a cancel to be refused).
-    a2a_handles: Arc<Mutex<HashMap<Uuid, AbortHandle>>>,
+    /// In-flight runs this process spawned — via A2A `message/send` (ADR 0013)
+    /// or `POST /runs` — so a cancel (A2A `tasks/cancel` or the web UI's
+    /// `POST /runs/{id}/cancel`, D-2) can stop execution before writing the
+    /// durable canceled state. Best-effort: a run resumed after a crash is not
+    /// tracked here (a cancel may then only write the terminal state).
+    run_handles: Arc<Mutex<HashMap<Uuid, AbortHandle>>>,
     /// Failed-auth rate limiter (Phase 8, item F).
     limiter: Arc<AuthLimiter>,
     /// Runtime model-config controller (Phase 8.5); `None` in bare setups.
@@ -152,7 +153,7 @@ pub fn router_with_principals(
     let state = ApiState {
         kernel,
         principals: Arc::new(principals),
-        a2a_handles: Arc::new(Mutex::new(HashMap::new())),
+        run_handles: Arc::new(Mutex::new(HashMap::new())),
         limiter: Arc::new(AuthLimiter::default()),
         config,
     };
@@ -160,6 +161,10 @@ pub fn router_with_principals(
         .route("/healthz", get(health))
         .route("/api/v1/runs", get(list_runs).post(create_run))
         .route("/api/v1/runs/{id}", get(get_run))
+        // Web-UI redesign additive endpoints (design/07 D-1 + D-2, bearer):
+        // journal replay for the historical execution axis, and cancel.
+        .route("/api/v1/runs/{id}/events", get(get_run_events))
+        .route("/api/v1/runs/{id}/cancel", post(cancel_run))
         .route("/api/v1/tools", get(list_tools))
         .route("/api/v1/events", get(events_ws))
         // Model configuration (Phase 8.5): read/write the model config, test a
@@ -382,12 +387,22 @@ async fn create_run(
                     },
                 )
                 .await;
+            // Track the in-flight task so `POST /runs/{id}/cancel` (D-2) can
+            // abort execution, exactly as A2A-inbound runs are tracked. The
+            // entry self-cleans when the run finishes; holding the map lock
+            // across spawn+insert makes the task's cleanup strictly ordered
+            // after the insert (no leaked entry on a fast run).
             let kernel = state.kernel.clone();
-            tokio::spawn(async move {
+            let handles = state.run_handles.clone();
+            let mut map = state.run_handles.lock().await;
+            let handle = tokio::spawn(async move {
                 if let Err(e) = kernel.execute_run(run_id).await {
                     tracing::error!(%run_id, "run execution error: {e}");
                 }
+                handles.lock().await.remove(&run_id);
             });
+            map.insert(run_id, handle.abort_handle());
+            drop(map);
             (
                 StatusCode::ACCEPTED,
                 Json(serde_json::json!({ "run_id": run_id })),
@@ -447,6 +462,72 @@ async fn get_run(
     match state.kernel.store().get(id).await {
         Ok(run) => Json(run).into_response(),
         Err(kernel_core::StoreError::NotFound(_)) => {
+            (StatusCode::NOT_FOUND, "run not found").into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// GET /api/v1/runs/{id}/events (D-1, design/06 §1a): the run's full ordered
+/// journal (ADR 0007), replayed for the historical execution axis. Read-only,
+/// bearer-gated, no new storage — this returns exactly what the kernel already
+/// journaled. Honest scope note: `rejected` proposals and rationale are never
+/// journaled (they are live-WS-only), so replay carries decisions
+/// (`proposed`), receipts (`executed`), notes and the terminal record.
+async fn get_run_events(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    // 404 for an unknown run (an empty journal for a real run is a valid []).
+    let run = match state.kernel.store().get(id).await {
+        Ok(run) => run,
+        Err(kernel_core::StoreError::NotFound(_)) => {
+            return (StatusCode::NOT_FOUND, "run not found").into_response()
+        }
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    match state.kernel.store().journal(id).await {
+        Ok(journal) => Json(serde_json::json!({
+            "run_id": id,
+            "task": run.task,
+            "policy": run.policy,
+            "status": run.status,
+            "journal": journal,
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// POST /api/v1/runs/{id}/cancel (D-2, design/06 §1a): stop a live run from
+/// the UI. Reuses the A2A cancel path exactly — abort the in-flight task (if
+/// this process owns it), then write the durable canceled state via the
+/// kernel. A terminal run is returned unchanged. Bearer-gated.
+async fn cancel_run(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    // Stop execution first so the cancel write is the single terminal record.
+    if let Some(handle) = state.run_handles.lock().await.remove(&id) {
+        handle.abort();
+    }
+    match state
+        .kernel
+        .cancel_run_with_reason(id, "canceled from the UI")
+        .await
+    {
+        Ok(run) => Json(run).into_response(),
+        Err(kernel_core::KernelError::Store(kernel_core::StoreError::NotFound(_))) => {
             (StatusCode::NOT_FOUND, "run not found").into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -715,18 +796,19 @@ async fn a2a_send(
     tracing::info!(%run_id, %principal, %caller, "a2a inbound: task accepted as a durable run");
 
     // Execute durably in the background; track the handle so tasks/cancel can
-    // stop it.
+    // stop it. Same spawn+insert-under-lock + self-cleanup pattern as
+    // `create_run` (no leaked entry on a fast run).
     let kernel = state.kernel.clone();
+    let handles = state.run_handles.clone();
+    let mut map = state.run_handles.lock().await;
     let handle = tokio::spawn(async move {
         if let Err(e) = kernel.execute_run(run_id).await {
             tracing::error!(%run_id, "a2a inbound run error: {e}");
         }
+        handles.lock().await.remove(&run_id);
     });
-    state
-        .a2a_handles
-        .lock()
-        .await
-        .insert(run_id, handle.abort_handle());
+    map.insert(run_id, handle.abort_handle());
+    drop(map);
 
     match state.kernel.store().get(run_id).await {
         Ok(run) => rpc_ok(
@@ -769,7 +851,7 @@ async fn a2a_cancel(
         return rpc_error(id, -32602, "invalid params: missing or malformed task id");
     };
     // Stop execution first so the cancel write is the single terminal record.
-    if let Some(handle) = state.a2a_handles.lock().await.remove(&task_id) {
+    if let Some(handle) = state.run_handles.lock().await.remove(&task_id) {
         handle.abort();
     }
     match state.kernel.cancel_run(task_id).await {

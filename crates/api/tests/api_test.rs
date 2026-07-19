@@ -440,3 +440,189 @@ async fn serves_embedded_ui() {
         .unwrap();
     assert!(body.contains("<title>kelter</title>"));
 }
+
+// ---- web-UI redesign additive endpoints (design/07 D-1 + D-2) -------------
+
+/// An oracle that never answers — a run driven by it stays Running until
+/// canceled, which is exactly what the cancel test needs.
+struct HangOracle;
+
+#[async_trait]
+impl PolicyOracle for HangOracle {
+    async fn propose(
+        &self,
+        _context: &PolicyContext,
+        _schema: &ActionSchema,
+    ) -> Result<Proposal, PolicyError> {
+        std::future::pending::<()>().await;
+        unreachable!()
+    }
+    fn describe(&self) -> String {
+        "mock:hang".into()
+    }
+}
+
+async fn spawn_server_with_oracle(
+    oracle: Arc<dyn PolicyOracle>,
+) -> (SocketAddr, String) {
+    let kernel = Arc::new(Kernel::new(
+        oracle,
+        Arc::new(EchoTools),
+        Arc::new(InMemoryProvider::new()),
+        Arc::new(kernel_core::InMemoryRunStore::new()),
+        KernelConfig::default(),
+    ));
+    let token = "test-token-123".to_string();
+    let app = api::router(kernel, token.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (addr, token)
+}
+
+#[tokio::test]
+async fn run_events_replays_the_full_ordered_journal() {
+    let (addr, token) = spawn_server().await;
+    let client = reqwest::Client::new();
+
+    // Both new endpoints are bearer-gated: no token → 401.
+    let res = client
+        .get(format!("http://{addr}/api/v1/runs/00000000-0000-0000-0000-000000000000/events"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+
+    // Unknown run → 404 (authenticated).
+    let res = client
+        .get(format!("http://{addr}/api/v1/runs/00000000-0000-0000-0000-000000000000/events"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+
+    // Run to completion, then replay the journal.
+    let run_id = client
+        .post(format!("http://{addr}/api/v1/runs"))
+        .bearer_auth(&token)
+        .json(&json!({"task": "echo for replay"}))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut body = serde_json::Value::Null;
+    for _ in 0..50 {
+        body = client
+            .get(format!("http://{addr}/api/v1/runs/{run_id}/events"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if body["status"] == "completed" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(body["status"], "completed", "{body}");
+    assert_eq!(body["task"], "echo for replay");
+    let journal = body["journal"].as_array().unwrap();
+    let kinds: Vec<&str> = journal
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    // Append order: the echo step's decision precedes its receipt, and the
+    // terminal record is last.
+    let d = kinds.iter().position(|k| *k == "decision").unwrap();
+    let r = kinds.iter().position(|k| *k == "receipt").unwrap();
+    assert!(d < r, "decision must precede receipt: {kinds:?}");
+    assert_eq!(*kinds.last().unwrap(), "terminal", "{kinds:?}");
+    assert_eq!(journal[d]["action"], "echo");
+    assert_eq!(journal[r]["ok"], true);
+}
+
+#[tokio::test]
+async fn cancel_stops_a_live_run_and_writes_canceled() {
+    let (addr, token) = spawn_server_with_oracle(Arc::new(HangOracle)).await;
+    let client = reqwest::Client::new();
+
+    // Bearer-gated: no token → 401.
+    let res = client
+        .post(format!("http://{addr}/api/v1/runs/00000000-0000-0000-0000-000000000000/cancel"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+
+    // Unknown run → 404.
+    let res = client
+        .post(format!("http://{addr}/api/v1/runs/00000000-0000-0000-0000-000000000000/cancel"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+
+    // A run against the hanging oracle stays live until canceled.
+    let run_id = client
+        .post(format!("http://{addr}/api/v1/runs"))
+        .bearer_auth(&token)
+        .json(&json!({"task": "hang forever"}))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let run: serde_json::Value = client
+        .post(format!("http://{addr}/api/v1/runs/{run_id}/cancel"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(run["status"], "canceled", "{run}");
+    assert_eq!(run["error"], "canceled from the UI");
+
+    // Durable: the store agrees, and the state never flips back (the spawned
+    // task was aborted).
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let run: serde_json::Value = client
+        .get(format!("http://{addr}/api/v1/runs/{run_id}"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(run["status"], "canceled");
+
+    // Canceling a terminal run returns it unchanged (idempotent-style: safe
+    // to call again, same result, no duplicate terminal writes).
+    let again: serde_json::Value = client
+        .post(format!("http://{addr}/api/v1/runs/{run_id}/cancel"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(again["status"], "canceled");
+}

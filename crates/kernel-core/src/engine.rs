@@ -534,6 +534,19 @@ impl Kernel {
     /// run first (e.g. aborting the spawned task); once execution is stopped,
     /// this write is the single authoritative terminal record.
     pub async fn cancel_run(&self, run_id: Uuid) -> Result<Run, KernelError> {
+        self.cancel_run_with_reason(run_id, "canceled via A2A tasks/cancel")
+            .await
+    }
+
+    /// Cancel with an honest, caller-supplied reason label (e.g. the web UI's
+    /// Stop vs A2A `tasks/cancel`). Identical semantics to [`Self::cancel_run`]
+    /// — a terminal run is returned unchanged; otherwise the durable canceled
+    /// state is written. Only the recorded label differs.
+    pub async fn cancel_run_with_reason(
+        &self,
+        run_id: Uuid,
+        reason: &str,
+    ) -> Result<Run, KernelError> {
         let mut run = self.store.get(run_id).await?;
         if matches!(
             run.status,
@@ -547,14 +560,14 @@ impl Kernel {
                 JournalEntry::Terminal {
                     status: RunStatus::Canceled,
                     output: None,
-                    error: Some("canceled via A2A tasks/cancel".into()),
+                    error: Some(reason.to_string()),
                 },
             )
             .await?;
         run.status = RunStatus::Canceled;
-        run.error = Some("canceled via A2A tasks/cancel".into());
+        run.error = Some(reason.to_string());
         self.store.put(run.clone()).await?;
-        tracing::info!(%run_id, "run canceled (A2A tasks/cancel)");
+        tracing::info!(%run_id, %reason, "run canceled");
         Ok(run)
     }
 
