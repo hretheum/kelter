@@ -438,7 +438,9 @@ async fn serves_embedded_ui() {
         .text()
         .await
         .unwrap();
-    assert!(body.contains("<title>kelter</title>"));
+    // The embedded UI is the Vite build (design/06 §5). If this fails with
+    // "web-ui not built", run `pnpm --dir apps/web-ui build` first.
+    assert!(body.contains("<title>Kelter</title>"), "{body}");
 }
 
 // ---- web-UI redesign additive endpoints (design/07 D-1 + D-2) -------------
@@ -462,9 +464,7 @@ impl PolicyOracle for HangOracle {
     }
 }
 
-async fn spawn_server_with_oracle(
-    oracle: Arc<dyn PolicyOracle>,
-) -> (SocketAddr, String) {
+async fn spawn_server_with_oracle(oracle: Arc<dyn PolicyOracle>) -> (SocketAddr, String) {
     let kernel = Arc::new(Kernel::new(
         oracle,
         Arc::new(EchoTools),
@@ -487,7 +487,9 @@ async fn run_events_replays_the_full_ordered_journal() {
 
     // Both new endpoints are bearer-gated: no token → 401.
     let res = client
-        .get(format!("http://{addr}/api/v1/runs/00000000-0000-0000-0000-000000000000/events"))
+        .get(format!(
+            "http://{addr}/api/v1/runs/00000000-0000-0000-0000-000000000000/events"
+        ))
         .send()
         .await
         .unwrap();
@@ -495,7 +497,9 @@ async fn run_events_replays_the_full_ordered_journal() {
 
     // Unknown run → 404 (authenticated).
     let res = client
-        .get(format!("http://{addr}/api/v1/runs/00000000-0000-0000-0000-000000000000/events"))
+        .get(format!(
+            "http://{addr}/api/v1/runs/00000000-0000-0000-0000-000000000000/events"
+        ))
         .bearer_auth(&token)
         .send()
         .await
@@ -556,7 +560,9 @@ async fn cancel_stops_a_live_run_and_writes_canceled() {
 
     // Bearer-gated: no token → 401.
     let res = client
-        .post(format!("http://{addr}/api/v1/runs/00000000-0000-0000-0000-000000000000/cancel"))
+        .post(format!(
+            "http://{addr}/api/v1/runs/00000000-0000-0000-0000-000000000000/cancel"
+        ))
         .send()
         .await
         .unwrap();
@@ -564,7 +570,9 @@ async fn cancel_stops_a_live_run_and_writes_canceled() {
 
     // Unknown run → 404.
     let res = client
-        .post(format!("http://{addr}/api/v1/runs/00000000-0000-0000-0000-000000000000/cancel"))
+        .post(format!(
+            "http://{addr}/api/v1/runs/00000000-0000-0000-0000-000000000000/cancel"
+        ))
         .bearer_auth(&token)
         .send()
         .await

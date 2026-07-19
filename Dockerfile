@@ -1,9 +1,19 @@
-# Build stage
+# Web-UI build stage (design/06 §5): the api crate embeds apps/web-ui/dist
+# via RustEmbed at compile time, so the frontend must be built first.
+FROM node:22-bookworm-slim AS webui
+WORKDIR /src/apps/web-ui
+RUN corepack enable
+COPY apps/web-ui/package.json apps/web-ui/pnpm-lock.yaml apps/web-ui/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY apps/web-ui/ ./
+RUN pnpm build
+
+# Rust build stage
 FROM rust:1.95-bookworm AS builder
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-COPY apps/web-ui ./apps/web-ui
+COPY --from=webui /src/apps/web-ui/dist ./apps/web-ui/dist
 RUN cargo build --release -p daemon -p mcp
 
 # Runtime stage

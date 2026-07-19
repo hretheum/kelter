@@ -1,0 +1,183 @@
+/* R-3 (design/03): the live execution axis. role=log, milestone-throttled
+ * announcements (design/04 §6), auto-scroll that pauses when the user scrolls
+ * up (design/04 §4), Stop (D-2) with an inline confirm. Structurally
+ * not-an-input: no editable field, no primary button. */
+
+import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Badge, Banner } from "@/components/ui/badge";
+import { announce } from "@/lib/announcer";
+import { axisSteps } from "@/lib/events";
+import { formatCost, formatElapsed, shortPolicy } from "@/lib/format";
+import { cancelRun } from "@/store/app";
+import { useAppState, useAxis } from "@/store/hooks";
+import type { Run } from "@/lib/api";
+import { StepCard } from "./StepCard";
+
+const SCROLL_THRESHOLD = 48; // px from bottom = still "pinned" (design/04 §4)
+
+export function Timeline({ run }: { run: Run }) {
+  const s = useAppState();
+  const { axis } = useAxis(run.id);
+  const steps = axisSteps(axis);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pinnedRef = useRef(true);
+  const [showPill, setShowPill] = useState(false);
+  const [stopState, setStopState] = useState<"idle" | "confirm" | "stopping">("idle");
+  const [stopError, setStopError] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const announced = useRef(new Set<string>());
+
+  // Live elapsed timer while running.
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  // Auto-scroll state machine (design/04 §4): scroll only while pinned.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (pinnedRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setShowPill(false);
+    } else {
+      setShowPill(true);
+    }
+  }, [steps.length, axis.terminal]);
+
+  // Milestone announcements only (design/04 §6): rejected + executed + terminal.
+  useEffect(() => {
+    for (const st of steps) {
+      for (const r of st.rejections) {
+        const key = `rej-${st.step}-${r.attempt}`;
+        if (!announced.current.has(key)) {
+          announced.current.add(key);
+          announce(`${st.action} rejected`);
+        }
+      }
+      if (st.executed) {
+        const key = `exec-${st.step}`;
+        if (!announced.current.has(key)) {
+          announced.current.add(key);
+          announce(`${st.action} executed`);
+        }
+      }
+    }
+  }, [steps]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const pinned = dist < SCROLL_THRESHOLD;
+    pinnedRef.current = pinned;
+    if (pinned) setShowPill(false);
+  };
+
+  const jumpToLatest = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    pinnedRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    setShowPill(false);
+  };
+
+  const doStop = async () => {
+    setStopState("stopping");
+    setStopError(null);
+    try {
+      await cancelRun(run.id);
+    } catch (e) {
+      setStopState("idle");
+      setStopError(
+        s.cancelSupported
+          ? `Stop failed: ${(e as Error).message}`
+          : "This daemon doesn't support stopping runs."
+      );
+    }
+  };
+
+  return (
+    <div className="relative flex h-full flex-col">
+      <div className="border-b border-border px-4 py-3">
+        <div className="flex items-start gap-3">
+          <h2 className="flex-1 text-title3 font-semibold">{run.task}</h2>
+          <Badge tone="accent" className="animate-pulse-live shrink-0">
+            ◐ Kelter working…
+          </Badge>
+          {/* Stop (D-2): the only action on the timeline; inline confirm; the
+              capability flag HIDES it on a daemon without the endpoint. */}
+          {s.cancelSupported && stopState === "idle" && (
+            <Button variant="danger" size="sm" aria-label="Stop run" onClick={() => setStopState("confirm")}>
+              Stop
+            </Button>
+          )}
+          {stopState === "confirm" && (
+            <span className="flex items-center gap-1.5 text-caption">
+              Stop this run?
+              <Button variant="danger" size="sm" onClick={() => void doStop()}>
+                Confirm
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setStopState("idle")}>
+                Keep going
+              </Button>
+            </span>
+          )}
+          {stopState === "stopping" && (
+            <Button variant="danger" size="sm" loading disabled>
+              Stopping…
+            </Button>
+          )}
+        </div>
+        <p className="mt-1 flex gap-3 text-caption text-muted-foreground">
+          <span>{shortPolicy(run.policy)}</span>
+          <span className="tnum">{formatElapsed(run.created_at, now)}</span>
+          {run.cost_usd != null && <span className="tnum">{formatCost(run.cost_usd)}</span>}
+        </p>
+        {stopError && (
+          <p role="alert" className="mt-1 text-caption text-danger">
+            {stopError}
+          </p>
+        )}
+        {s.conn !== "connected" && (
+          <Banner tone="warning" className="mt-2">
+            Connection lost — the run keeps running on the kernel. Reconnecting…
+          </Banner>
+        )}
+      </div>
+
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        role="log"
+        aria-label="Execution"
+        aria-busy={!axis.terminal}
+        className="flex-1 space-y-2 overflow-y-auto p-4"
+      >
+        {steps.length === 0 && (
+          <p className="text-body text-muted-foreground">Starting…</p>
+        )}
+        {steps.map((st) => (
+          <StepCard key={st.step} step={st} />
+        ))}
+        {axis.reflections > 0 && (
+          <p className="text-caption2 text-muted-foreground">
+            {axis.reflections} reflection{axis.reflections > 1 ? "s" : ""} written
+          </p>
+        )}
+      </div>
+
+      {showPill && (
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={jumpToLatest}
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 shadow-lg"
+        >
+          ↓ New steps
+        </Button>
+      )}
+    </div>
+  );
+}

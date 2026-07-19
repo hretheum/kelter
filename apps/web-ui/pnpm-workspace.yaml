@@ -1,0 +1,5 @@
+packages:
+  - "."
+# esbuild's postinstall compiles its native binary — required by Vite.
+allowBuilds:
+  esbuild: true

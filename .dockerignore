@@ -8,3 +8,5 @@ docs
 work
 models
 .env*
+apps/web-ui/node_modules
+apps/web-ui/dist

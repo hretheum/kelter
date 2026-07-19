@@ -14,6 +14,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Build the web-ui first: crates/api embeds apps/web-ui/dist via
+      # RustEmbed at compile time (design/07 D-7 — dist/ is gitignored).
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/web-ui/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/web-ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile && pnpm build
+        working-directory: apps/web-ui
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -46,6 +58,17 @@ jobs:
     needs: check
     steps:
       - uses: actions/checkout@v4
+      # The desktop shell links crates/api → needs the built web-ui too.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/web-ui/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/web-ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile && pnpm build
+        working-directory: apps/web-ui
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

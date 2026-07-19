@@ -38,3 +38,8 @@ models/
 # Phase 11: TLS certs/keys — never commit. Demo certs are generated locally.
 *.pem
 *.crt
+
+# Web-UI (Vite): build output is produced by CI / a local `pnpm build`
+# (design/07 D-7) — the api crate embeds apps/web-ui/dist via RustEmbed.
+apps/web-ui/dist/
+apps/web-ui/tsconfig.tsbuildinfo

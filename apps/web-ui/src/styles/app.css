@@ -1,0 +1,150 @@
+/* Kelter design system — HIG-flavored, dark-first (design/05).
+ * Tokens are the Tailwind v4 @theme; dark is the ground truth, .light is the
+ * secondary theme. Deliberately tuned (13px body, macOS control sizes,
+ * OKLCH blue-undertone dark, vibrancy) — not stock defaults. */
+@import "tailwindcss";
+
+@custom-variant light (&:where(.light, .light *));
+
+@theme {
+  /* type — SF Pro system stack, macOS scale (body 13px) */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  --text-caption2: 0.6875rem;
+  --text-caption2--line-height: 0.8125rem;
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1rem;
+  --text-body: 0.8125rem;
+  --text-body--line-height: 1.125rem;
+  --text-callout: 0.875rem;
+  --text-callout--line-height: 1.1875rem;
+  --text-title3: 1rem;
+  --text-title3--line-height: 1.3125rem;
+  --text-title2: 1.25rem;
+  --text-title2--line-height: 1.5625rem;
+
+  /* color — dark ground truth (design/05 §1.2, contrast-verified in 08) */
+  --color-background: oklch(20% 0.012 250);
+  --color-card: oklch(24% 0.014 250);
+  --color-card-raised: oklch(27% 0.015 250);
+  --color-foreground: oklch(93% 0.006 250);
+  --color-muted-foreground: oklch(68% 0.012 250);
+  --color-border: oklch(32% 0.014 250);
+  --color-input: oklch(28% 0.014 250);
+  --color-primary: oklch(62% 0.17 255);
+  --color-primary-foreground: oklch(18% 0.03 255);
+  --color-ring: oklch(70% 0.15 255);
+  --color-success: oklch(72% 0.17 150);
+  --color-danger: oklch(64% 0.2 25);
+  --color-warning: oklch(78% 0.15 75);
+  /* event/status semantic aliases (bound to the RunEvent union) */
+  --color-ev-proposed: var(--color-primary);
+  --color-ev-executed: var(--color-foreground);
+  --color-ev-rejected: var(--color-danger);
+  --color-ev-completed: var(--color-success);
+  --color-ev-failed: var(--color-danger);
+  --color-ev-quiet: var(--color-muted-foreground);
+
+  /* radius */
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+
+  /* motion — macOS ease-out, gated by reduced-motion below */
+  --animate-fade-in: fade-in 120ms ease-out;
+  --animate-slide-in: slide-in 150ms cubic-bezier(0.2, 0, 0, 1);
+  --animate-pulse-live: pulse-live 1.6s ease-in-out infinite;
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes slide-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pulse-live {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+}
+
+.light {
+  --color-background: oklch(98% 0.003 250);
+  --color-card: oklch(100% 0 0);
+  --color-card-raised: oklch(97% 0.004 250);
+  --color-foreground: oklch(22% 0.01 250);
+  --color-muted-foreground: oklch(48% 0.012 250);
+  --color-border: oklch(90% 0.006 250);
+  --color-input: oklch(96% 0.004 250);
+  --color-primary: oklch(55% 0.18 255);
+  --color-primary-foreground: oklch(99% 0.005 255);
+  --color-ring: oklch(55% 0.18 255);
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  .light {
+    color-scheme: light;
+  }
+  * {
+    border-color: var(--color-border);
+  }
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+    background: var(--color-background);
+    color: var(--color-foreground);
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Numeric alignment for timers, cost, step indices (design/05 §1.1). */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Vibrancy material for the top bar / sheets (design/05 §1.5); degrades to
+ * the solid card color where backdrop-filter is unsupported. */
+.vibrancy {
+  background: color-mix(in oklab, var(--color-card) 72%, transparent);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+}
+@supports not (backdrop-filter: blur(1px)) {
+  .vibrancy {
+    background: var(--color-card);
+  }
+}
+
+/* Skip link (design/04 §6a): visually hidden until focused. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  z-index: 100;
+}
+.skip-link:focus-visible {
+  left: 12px;
+  top: 12px;
+  padding: 6px 12px;
+  background: var(--color-card-raised);
+  color: var(--color-foreground);
+  border-radius: var(--radius-md);
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+/* Reduced motion (design/04 §8): no slide/fade/pulse, instant scroll. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

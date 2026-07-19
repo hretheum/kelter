@@ -1,95 +1,16 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>kelter</title>
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <meta name="theme-color" content="#101418">
-  <link rel="stylesheet" href="style.css">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kelter</title>
+  <meta name="description" content="Control panel for the Kelter agent runtime" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <meta name="theme-color" content="#16191d" />
 </head>
 <body>
-  <header>
-    <h1>kelter</h1>
-    <p class="tagline">deterministic kernel · constrained policy · live runs</p>
-    <!-- Toggles the model-config screen; revealed once connected. -->
-    <button id="cfg-toggle" class="link-btn" hidden>⚙ Model</button>
-    <div id="conn" class="pill offline">disconnected</div>
-  </header>
-
-  <main>
-    <section id="setup">
-      <label>Server
-        <input id="server-url" type="text" placeholder="(same origin)" autocomplete="off">
-      </label>
-      <label>API token
-        <input id="token" type="password" placeholder="bearer token" autocomplete="off">
-      </label>
-      <button id="connect">Connect</button>
-    </section>
-
-    <!-- Model configuration. Hidden by default; first-run routing (app.js)
-         reveals it when the configured model is unreachable. -->
-    <section id="config" hidden>
-      <h2>Model configuration</h2>
-
-      <label>Provider
-        <select id="cfg-provider">
-          <option value="local">Local</option>
-          <option value="api">API</option>
-        </select>
-      </label>
-
-      <label>Preset
-        <select id="cfg-preset">
-          <option value="llamacpp">llama.cpp (local)</option>
-          <option value="ollama">Ollama (local)</option>
-          <option value="openrouter">OpenRouter (API)</option>
-          <option value="custom">Custom</option>
-        </select>
-      </label>
-
-      <label>Base URL
-        <input id="cfg-base-url" type="text" placeholder="http://127.0.0.1:8080" autocomplete="off">
-      </label>
-
-      <label>Model
-        <input id="cfg-model" type="text" placeholder="qwen2.5-0.5b-instruct" autocomplete="off">
-      </label>
-
-      <!-- Only shown for API providers. -->
-      <label id="cfg-key-row">API key
-        <input id="cfg-key" type="password" placeholder="sk-..." autocomplete="off">
-        <span id="cfg-key-note" class="note">stored server-side, never committed or logged; or set OPENROUTER_API_KEY env</span>
-      </label>
-
-      <div class="cfg-actions">
-        <button id="cfg-test">Test connection</button>
-        <button id="cfg-save">Save</button>
-      </div>
-      <div id="cfg-result" class="cfg-result"></div>
-    </section>
-
-    <section id="submit-box">
-      <label>Task
-        <textarea id="task" rows="3"
-          placeholder="e.g. Read https://example.com, extract its structure, write a markdown report to out/report.md"></textarea>
-      </label>
-      <button id="submit" disabled>Run</button>
-    </section>
-
-    <section id="runs">
-      <h2>Runs</h2>
-      <ul id="run-list"></ul>
-    </section>
-
-    <section id="events">
-      <h2>Live events</h2>
-      <pre id="event-log"></pre>
-    </section>
-  </main>
-
-  <script src="app.js"></script>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

@@ -1,0 +1,96 @@
+# Web-UI redesign — implementation evidence (2026-07-19)
+# Spec: apps/web-ui/design/ (source of truth). Stack: React 19 + Tailwind v4
+# + shadcn-style CVA components, Vite build embedded via RustEmbed (ADR 0004).
+
+== Review standard (brief §7), point by point ==
+
+1. Screens & flows: all 6 screens (G-1 topbar, G-2 sheet, R-1 list, R-2
+   composer, R-3 timeline, R-4 result, S-1 config) built with empty/loading/
+   error/read-only states. Verified live in Chrome (snapshots + screenshots
+   web-ui-*.png).
+2. Enter contract: plain Enter & Cmd/Ctrl+Enter submit, Shift+Enter newline,
+   isComposing IME guard; Enter submits ONLY in the composer (Composer.tsx
+   onKeyDown; global chords in lib/shortcuts.ts).
+3. WS bucketing: 12-step run + parallel 5-step run — each timeline showed ONLY
+   its own steps (zero leakage; lib/events.ts buckets by run_id, orders by
+   seq). Kernel rejection visible on the axis ("proposed action 'rm_rf_slash'
+   is not in the action space · retry"). Auto-scroll pauses on manual
+   scroll-up with a "↓ New steps" pill (Timeline.tsx pinned-state machine).
+4. a11y: Lighthouse Accessibility = 100 (web-ui-lighthouse.json; the 2
+   non-a11y fails are 401 console noise from the tokenless audit navigation +
+   meta-description, fixed). design/08 fixes present: skip-link first
+   focusable, mandatory focus-ring offset, milestone-throttled role=log
+   announcements, targets >=24px, glyph+text+color everywhere.
+5. Endpoints (curl, ui-demo server):
+     GET  /api/v1/runs/{id}/events  no bearer -> 401; with bearer -> 200,
+          39 ordered journal entries (note, decision, intent, receipt ... terminal)
+     POST /api/v1/runs/{id}/cancel  no bearer -> 401; terminal run -> returned
+          unchanged; live "hang" run -> status=canceled, error="canceled from
+          the UI" (UI Stop -> inline confirm -> Canceled result verified live)
+   History: after a fresh page load, selecting the 12-step run rebuilt the
+   full 13-step axis from the replay (D-1). Contract tests: api_test.rs
+   run_events_replays_the_full_ordered_journal + cancel_stops_a_live_run.
+6. Topologies: 501/read-only (ui-demo, no controller) -> disabled form +
+   "fixed at deploy time" banner (web-ui-settings-readonly-501.png); 200/
+   editable (real daemon + llama.cpp) -> model chip, prefilled form, real
+   Test "✓ Reachable — 200 .../health", SSRF refusal in UI ("✕ Refused —
+   ... allowlist"), real run on qwen2.5-0.5b completed (web-ui-daemon-real-
+   run.png). Token via fragment (launcher contract unchanged); bare-browser
+   sheet works. Reconnection: killed server -> banner "your runs are safe on
+   the kernel" + pill disconnected + rows preserved; restart -> auto-
+   reconnected (backoff). Narrow (<720px): list/detail stack with back nav.
+   smoke-config-ux.sh (daemon path): PASS - no regression.
+7. Bundle: dist/ = 300KB total (index.js 259KB raw / 80.5KB gzip, css 26.7KB)
+   - ~8x under the 2-2.5MB budget. cargo test --workspace: 142 passed
+   (33 suites, incl. 2 new endpoint tests + updated serves_embedded_ui);
+   desktop tests 2 passed (incl. standalone_config end-to-end vs the new
+   embed); cargo tauri build -> Kelter.app (exit 0); clippy -D warnings clean;
+   fmt clean.
+8. Stale-dist: dist/ gitignored; CI builds web-ui (pnpm) before cargo in
+   check+desktop jobs; Dockerfile gained a node:22 webui stage; a binary
+   built without dist serves an explicit "web-ui not built" message instead
+   of a silent 404 (static_asset).
+
+== Changed files (one-line why) ==
+
+apps/web-ui/{package.json,pnpm-lock.yaml,pnpm-workspace.yaml,vite.config.ts,
+  tsconfig.json,index.html}          - Vite+React19+Tailwind v4 scaffold
+apps/web-ui/src/styles/app.css       - design/05 @theme tokens (HIG dark-first)
+apps/web-ui/src/lib/{api,events,cn,format,clipboard,announcer,shortcuts}.ts
+                                     - ported api(); NEW bucketed axis engine;
+                                       keymap; throttled announcer
+apps/web-ui/src/store/{app,hooks}.ts - conn state machine + first-run routing
+apps/web-ui/src/components/ui/*      - owned shadcn-style CVA components
+apps/web-ui/src/features/**          - the 6 screens per design/03
+apps/web-ui/public/{manifest,sw,icon}- PWA assets (runtime-cache SW)
+apps/web-ui/{app.js,style.css,manifest.webmanifest,sw.js} - REMOVED (replaced)
+crates/api/src/lib.rs                - D-1/D-2 routes+handlers; run_handles
+                                       (REST runs now abortable); RustEmbed ->
+                                       dist/; honest missing-dist message
+crates/kernel-core/src/engine.rs     - cancel_run_with_reason (label-only)
+crates/api/tests/api_test.rs         - 2 new contract tests; title assert
+crates/api/examples/ui-demo.rs       - dev harness (scripted paced oracle)
+.github/workflows/ci.yml, Dockerfile, .dockerignore, .gitignore
+                                     - build web-ui before cargo (D-7)
+
+== Deviations from the spec (for Eryk) ==
+
+1. D-1 replay carries NO rejected-proposals/rationale for historical runs:
+   the kernel journals decisions/receipts/terminal only (journal.rs) - the
+   brief itself scopes D-1 to "czyta istniejacy journal, zadnego nowego
+   storage". Live runs show rejections (WS); history shows the executed
+   decisions. Full parity would need new journal writes (kernel change) -
+   escalation-listed, not done. UI states this honestly.
+2. Capability signalling (design/06 §1a "define with the backend"): done via
+   response status (404/405 flips cancelSupported/replaySupported for the
+   session, hiding the affordance) instead of a new /capabilities endpoint -
+   the brief allows exactly two additive endpoints.
+3. Cancel emits no WS event (kernel unchanged): the canceling client updates
+   from the POST response; other clients see Canceled on their next list
+   refresh. Documented, not hidden.
+
+== NOT done (human tasks) ==
+
+- §7.1 five-second test with 3 users (design/09): human evidence task on the
+  built app.
+- git push / release: human gate.

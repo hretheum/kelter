@@ -70,8 +70,12 @@ pub trait ModelConfigController: Send + Sync {
 }
 
 /// The web UI, embedded into the binary so the daemon is a single artifact.
+/// This is the **Vite build output** (design/06 §5): build the frontend first
+/// (`pnpm --dir apps/web-ui install && pnpm --dir apps/web-ui build`), then
+/// `cargo build`. Debug builds read the folder lazily from disk (rust-embed's
+/// default), so the dev loop needs no recompile; release builds embed.
 #[derive(RustEmbed)]
-#[folder = "../../apps/web-ui"]
+#[folder = "../../apps/web-ui/dist"]
 struct WebUi;
 
 /// The default principal name for the single-token flow — nothing changes for a
@@ -921,6 +925,13 @@ async fn static_asset(uri: Uri) -> Response {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
             ([(header::CONTENT_TYPE, mime.as_ref())], file.data).into_response()
         }
+        // Stale-dist honesty (design/07 D-7): a binary built without the
+        // frontend must say so, not serve a silent 404 shell.
+        None if path == "index.html" => (
+            StatusCode::NOT_FOUND,
+            "web-ui not built into this binary — run `pnpm --dir apps/web-ui install && pnpm --dir apps/web-ui build`, then rebuild",
+        )
+            .into_response(),
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
 }

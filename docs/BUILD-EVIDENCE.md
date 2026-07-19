@@ -1121,3 +1121,55 @@ Some(controller))`. The controller lived in the daemon crate, which is bin-only
 New crate `model-config` (no new external deps — it reuses api/policy/reqwest/
 toml). Desktop gains `model-config` + `axum 0.8` deps (+ `reqwest` dev-dep for
 the integration test).
+
+## Web-UI redesign — shadcn/Tailwind/Vite migration + D-1/D-2 endpoints
+
+Implements the full text spec in `apps/web-ui/design/` (source of truth; both
+human gates passed). The vanilla `index.html`/`app.js`/`style.css` is replaced
+by a React 19 + Tailwind v4 + shadcn-style (owned CVA components) app built by
+Vite into `apps/web-ui/dist/`, which `crates/api` embeds via RustEmbed — the
+same single artifact still serves the daemon PWA, the desktop webview and
+remote mode (ADR 0004).
+
+**IA shipped:** two destinations (Runs master–detail: composer → live
+execution axis → result in one pane; Settings off the loop) + connection as
+chrome. The timeline renders the global WS broadcast **bucketed by `run_id`
+and ordered by `seq`** (`src/lib/events.ts`) — the structural fix for the old
+"is this a console?" failure. Kernel rejections are visible on the axis (the
+governance moment), auto-scroll pauses when the user scrolls up ("↓ New
+steps"), and the composer owns the Enter contract (Enter/⌘Enter submit,
+⇧Enter newline, IME guard).
+
+**Additive endpoints (design/07, approved):**
+- `GET /api/v1/runs/{id}/events` (D-1) — bearer-gated journal replay (ADR
+  0007, no new storage) powering the historical axis and reconnect gap-fill.
+  Honest bound: the journal holds decisions/receipts/terminal — rejected
+  proposals and rationale are live-WS-only (full parity would need new
+  journal writes; escalation-listed, not done).
+- `POST /api/v1/runs/{id}/cancel` (D-2) — Stop from the UI; reuses the
+  kernel's cancel path (`cancel_run_with_reason` is a label-only refactor)
+  and the A2A abort-handle map, which now also tracks REST-created runs.
+  The UI hides Stop/replay per-session on 404/405 (older daemon) — no dead
+  affordances.
+
+**Verification (full detail: `docs/evidence/web-ui-redesign.log`):**
+Lighthouse **Accessibility 100** (design/08 fixes in the build: skip link,
+ring offset, throttled `role=log`); live browser run of a 12-step run with a
+deliberate kernel rejection + a **parallel** run with zero cross-run leakage;
+Stop → durable Canceled; fresh-load history rebuilt from replay; both
+topologies (501 read-only demo; real daemon + llama.cpp: editable form, real
+Test, SSRF refusal in UI, a completed qwen-0.5b run); reconnection
+(drop → honest banner, preserved rows → auto-reconnect). Gates: 142 workspace
+tests (2 new contract tests), desktop tests incl. standalone end-to-end,
+clippy `-D warnings`, fmt, `cargo tauri build` → Kelter.app, smoke-config-ux
+PASS (daemon non-regression). Bundle: **300 KB** (~8× under the 2–2.5 MB
+budget).
+
+**Build order (D-7):** `dist/` is gitignored; CI + the Dockerfile build the
+frontend (pnpm) before cargo; a binary built without `dist/` serves an
+explicit "web-ui not built" message. Local: `pnpm --dir apps/web-ui install &&
+pnpm --dir apps/web-ui build`, then cargo. Debug builds read `dist/` from
+disk (no recompile in the dev loop).
+
+**Human tasks left:** the §7.1 five-second test (3 users) on the built app;
+push/release at the human gate.
