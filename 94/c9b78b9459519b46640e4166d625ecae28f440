@@ -1,0 +1,51 @@
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_561d4f09add5c4 1063-1123
+crates/daemon/Cargo.toml
+  s_ebdbabe3e659c2::t_7e676c3f971946 15
+crates/model-config/Cargo.toml
+  s_ebdbabe3e659c2::t_97db12453ed9fd 1-24
+docs/evidence/desktop-tauri-build.log
+  s_ebdbabe3e659c2::t_4b5fbb9a79838c 3-14
+  s_ebdbabe3e659c2::t_8cf8a65bacfff5 1-2
+docs/evidence/faza-desktop-config-gates.log
+  s_ebdbabe3e659c2::t_4b5fbb9a79838c 5
+  s_ebdbabe3e659c2::t_dd59d501fe4f5a 1-4,6-8
+Cargo.toml
+  s_ebdbabe3e659c2::t_c300b5e9219f06 13,33
+apps/desktop/src-tauri/tests/standalone_config.rs
+  s_ebdbabe3e659c2::t_199784b95bcd56 1-193
+apps/web-ui/app.js
+  s_ebdbabe3e659c2::t_c48d60b4673d01 36-40
+  s_ebdbabe3e659c2::t_e29736a1309468 205-220,225-245
+docs/ROADMAP.md
+  s_ebdbabe3e659c2::t_8ebc1e74c5be74 44-48
+apps/desktop/src-tauri/src/lib.rs
+  s_ebdbabe3e659c2::t_4bc33725d4f748 166-180,182
+  s_ebdbabe3e659c2::t_aa8e9299535b6e 137
+  s_ebdbabe3e659c2::t_3aa2722bd03d7c 94-106,111-116
+apps/desktop/src-tauri/Cargo.toml
+  s_ebdbabe3e659c2::t_4dcebb3298bac0 19
+  s_ebdbabe3e659c2::t_a3ed2b97b4c59a 38-39
+docs/evidence/desktop-standalone-config.log
+  s_ebdbabe3e659c2::t_19a4e3ebbad956 1-36
+Cargo.lock
+  s_ebdbabe3e659c2::t_e5560547eb6f73 624,1622-1636
+apps/desktop/src-tauri/Cargo.lock
+  s_ebdbabe3e659c2::t_bf946a3b868482 729,733,736,2194-2208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "94c9b78b9459519b46640e4166d625ecae28f440",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
