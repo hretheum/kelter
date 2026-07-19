@@ -129,6 +129,15 @@ scripts/bootstrap.sh
 #   warm runs ≈ under a minute.
 ```
 
+**Choose your model in the UI.** You don't have to edit `config.toml`: open the
+UI, click **⚙ Model**, and pick a provider — a local model (llama.cpp `:8080` or
+Ollama `:11434`) or an API model (OpenRouter, paste a key). Hit **Test
+connection** to check it's reachable, then **Save** — the daemon swaps the model
+live and remembers the choice across restarts. On a fresh install with no
+reachable model, the app opens straight to this screen. (API keys are stored
+server-side in a `0600` file or read from `OPENROUTER_API_KEY` — never committed
+or logged.)
+
 <details>
 <summary>Manual path / other topologies</summary>
 

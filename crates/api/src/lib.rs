@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode, Uri};
@@ -14,12 +15,59 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use rust_embed::RustEmbed;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio::task::AbortHandle;
 use uuid::Uuid;
 
 use kernel_core::Kernel;
+
+// ---- model config control (Phase 8.5) ------------------------------------
+
+/// The current model config, safe to return to a client — **never** the API
+/// key (only whether one is set).
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelConfigView {
+    pub engine: String,
+    pub base_url: Option<String>,
+    pub provider: String,
+    pub model: String,
+    pub api_key_set: bool,
+}
+
+/// A requested model-config change from the UI.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelConfigUpdate {
+    pub engine: String,
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+/// A "Test connection" request: a provider + its base URL to health-check.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelTestRequest {
+    pub provider: String,
+    pub base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelTestResult {
+    pub ok: bool,
+    pub detail: String,
+}
+
+/// Runtime model configuration, implemented by the daemon. The API exposes it
+/// behind bearer auth; the daemon owns persistence, the oracle swap, the live
+/// health-check, and secure key storage. Absent (`None`) → the config
+/// endpoints report "not supported" (e.g. in tests with no controller).
+#[async_trait]
+pub trait ModelConfigController: Send + Sync {
+    async fn get(&self) -> ModelConfigView;
+    async fn set(&self, update: ModelConfigUpdate) -> Result<ModelConfigView, String>;
+    async fn test(&self, req: ModelTestRequest) -> ModelTestResult;
+    /// Store the API key securely (never logged, never in the tree).
+    async fn set_key(&self, key: String) -> Result<(), String>;
+}
 
 /// The web UI, embedded into the binary so the daemon is a single artifact.
 #[derive(RustEmbed)]
@@ -37,14 +85,26 @@ pub struct ApiState {
     a2a_handles: Arc<Mutex<HashMap<Uuid, AbortHandle>>>,
     /// Failed-auth rate limiter (Phase 8, item F).
     limiter: Arc<AuthLimiter>,
+    /// Runtime model-config controller (Phase 8.5); `None` in bare setups.
+    config: Option<Arc<dyn ModelConfigController>>,
 }
 
 pub fn router(kernel: Arc<Kernel>, token: String) -> Router {
+    router_with(kernel, token, None)
+}
+
+/// Router with an optional runtime model-config controller (Phase 8.5).
+pub fn router_with(
+    kernel: Arc<Kernel>,
+    token: String,
+    config: Option<Arc<dyn ModelConfigController>>,
+) -> Router {
     let state = ApiState {
         kernel,
         token: Arc::new(token),
         a2a_handles: Arc::new(Mutex::new(HashMap::new())),
         limiter: Arc::new(AuthLimiter::default()),
+        config,
     };
     Router::new()
         .route("/healthz", get(health))
@@ -52,6 +112,14 @@ pub fn router(kernel: Arc<Kernel>, token: String) -> Router {
         .route("/api/v1/runs/{id}", get(get_run))
         .route("/api/v1/tools", get(list_tools))
         .route("/api/v1/events", get(events_ws))
+        // Model configuration (Phase 8.5): read/write the model config, test a
+        // provider connection, and store the API key — all bearer-gated.
+        .route(
+            "/api/v1/config/model",
+            get(get_model_config).post(set_model_config),
+        )
+        .route("/api/v1/config/model/test", post(test_model_connection))
+        .route("/api/v1/config/model/key", post(set_model_key))
         // A2A inbound (ADR 0013): Kelter as an A2A server. Card discovery is
         // public; the JSON-RPC task methods require the bearer token.
         .route("/.well-known/agent-card.json", get(a2a_agent_card))
@@ -64,6 +132,21 @@ pub fn router(kernel: Arc<Kernel>, token: String) -> Router {
 pub async fn serve(kernel: Arc<Kernel>, token: String, addr: SocketAddr) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     serve_listener(kernel, token, listener).await
+}
+
+/// Serve with a runtime model-config controller (Phase 8.5) — the daemon path.
+pub async fn serve_with_config(
+    kernel: Arc<Kernel>,
+    token: String,
+    addr: SocketAddr,
+    config: Option<Arc<dyn ModelConfigController>>,
+) -> std::io::Result<()> {
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let app = router_with(kernel, token, config);
+    if let Ok(addr) = listener.local_addr() {
+        tracing::info!("api listening on http://{addr}");
+    }
+    axum::serve(listener, app).await
 }
 
 /// Serve on an already-bound listener (used by the standalone desktop
@@ -255,6 +338,87 @@ async fn get_run(
             (StatusCode::NOT_FOUND, "run not found").into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ---- model config (Phase 8.5) --------------------------------------------
+
+// The Err branch is an axum `Response` (intentionally large) returned straight
+// to the client — the idiomatic early-return pattern, not a hot path.
+#[allow(clippy::result_large_err)]
+fn config_controller(state: &ApiState) -> Result<&Arc<dyn ModelConfigController>, Response> {
+    state.config.as_ref().ok_or_else(|| {
+        (
+            StatusCode::NOT_IMPLEMENTED,
+            "model config is not runtime-mutable in this deployment",
+        )
+            .into_response()
+    })
+}
+
+async fn get_model_config(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    if let Some(rejection) = auth_gate(&state, &headers) {
+        return rejection;
+    }
+    match config_controller(&state) {
+        Ok(cfg) => Json(cfg.get().await).into_response(),
+        Err(resp) => resp,
+    }
+}
+
+async fn set_model_config(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(update): Json<ModelConfigUpdate>,
+) -> Response {
+    if let Some(rejection) = auth_gate(&state, &headers) {
+        return rejection;
+    }
+    let cfg = match config_controller(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match cfg.set(update).await {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
+    }
+}
+
+async fn test_model_connection(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(req): Json<ModelTestRequest>,
+) -> Response {
+    if let Some(rejection) = auth_gate(&state, &headers) {
+        return rejection;
+    }
+    match config_controller(&state) {
+        Ok(cfg) => Json(cfg.test(req).await).into_response(),
+        Err(resp) => resp,
+    }
+}
+
+#[derive(Deserialize)]
+struct KeyBody {
+    api_key: String,
+}
+
+async fn set_model_key(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(body): Json<KeyBody>,
+) -> Response {
+    if let Some(rejection) = auth_gate(&state, &headers) {
+        return rejection;
+    }
+    let cfg = match config_controller(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    // The key value is never logged here or below — only success/failure.
+    match cfg.set_key(body.api_key).await {
+        Ok(()) => (StatusCode::NO_CONTENT, "").into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
     }
 }
 

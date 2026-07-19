@@ -95,6 +95,7 @@ async fn start_standalone(
         engine,
         base_url: None,
         latitude: None,
+        api_key: None,
     })
     .map_err(|e| e.to_string())?;
 

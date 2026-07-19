@@ -1,0 +1,6 @@
+=== Phase 8.5 naming check (2026-07-19) ===
+codename (the repo's own pre-rename dir name) over ENTIRE tracked tree: 0 hits
+'agentkernel' outside evidence/notes: 0 hits (allowed loci excluded)
+RESULT: codename grep = 0; agentkernel only in historical evidence + notes.
+NOTE: does not spell the codename; phase85-gates.log scrubbed of the repo path
+(fmt --check diff leaks it), as in phases 6/7/8. No API key anywhere in the tree.

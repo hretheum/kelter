@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 kernel-core.workspace = true
 a2a.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync"] }
 serde.workspace = true

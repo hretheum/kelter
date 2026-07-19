@@ -34,6 +34,7 @@ async function api(path, opts = {}) {
     },
   });
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  if (res.status === 204) return null; // no body (e.g. key stored)
   return res.json();
 }
 
@@ -115,6 +116,7 @@ async function connect() {
     await api("/api/v1/runs");
     connectWs();
     refreshRuns();
+    routeByModelHealth(); // first-run routing: config screen vs run view
   } catch (e) {
     setConn(false);
     alert(`Cannot connect: ${e.message}`);
@@ -133,6 +135,135 @@ $("submit").onclick = async () => {
     alert(`Submit failed: ${e.message}`);
   }
 };
+
+// ---- Model configuration (Phase 8.5) ----------------------------------------
+// Presets pre-fill the form. `scheme` builds the engine string (`scheme:model`);
+// `test` is the provider name sent to the /test health-check endpoint.
+const CFG_PRESETS = {
+  llamacpp:   { base_url: "http://127.0.0.1:8080",       model: "qwen2.5-0.5b-instruct",     api: false },
+  ollama:     { base_url: "http://127.0.0.1:11434/v1",   model: "qwen2.5:0.5b",              api: false },
+  openrouter: { base_url: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-5", api: true },
+};
+
+// Which provider (as the /test endpoint names them: local | ollama | openrouter)
+// the current form describes. For "Custom", derive it from the Local/API picker.
+function currentKind() {
+  const preset = $("cfg-preset").value;
+  if (preset === "custom") return $("cfg-provider").value === "api" ? "openrouter" : "local";
+  if (preset === "llamacpp") return "local";
+  return preset; // "ollama" | "openrouter"
+}
+
+// engine = `${scheme}:${model}` — "local" for llama.cpp/ollama, "openrouter" for the API.
+const schemeOf = (kind) => (kind === "openrouter" ? "openrouter" : "local");
+
+// Show the API-key input only for API providers.
+function applyProviderVisibility() {
+  $("cfg-key-row").style.display = $("cfg-provider").value === "api" ? "block" : "none";
+}
+
+function applyPreset() {
+  const p = $("cfg-preset").value;
+  if (p !== "custom") {
+    const c = CFG_PRESETS[p];
+    $("cfg-base-url").value = c.base_url;
+    $("cfg-model").value = c.model;
+    $("cfg-provider").value = c.api ? "api" : "local";
+  }
+  applyProviderVisibility();
+}
+
+// Fill the form from GET /api/v1/config/model. `provider` is local | ollama | openrouter.
+function prefillConfig(cfg) {
+  const kind = cfg.provider || "local";
+  $("cfg-preset").value = { local: "llamacpp", ollama: "ollama", openrouter: "openrouter" }[kind] || "custom";
+  $("cfg-provider").value = kind === "openrouter" ? "api" : "local";
+  $("cfg-base-url").value = cfg.base_url || "";
+  $("cfg-model").value = cfg.model || "";
+  $("cfg-key-note").textContent = cfg.api_key_set
+    ? "A key is already stored server-side. Leave blank to keep it."
+    : "stored server-side, never committed or logged; or set OPENROUTER_API_KEY env";
+  applyProviderVisibility();
+}
+
+function setCfgResult(text, kind) {
+  const el = $("cfg-result");
+  el.textContent = text;
+  el.className = "cfg-result" + (kind ? " " + kind : "");
+}
+
+// Toggle between the config screen and the normal run/submit view.
+function showConfig(show) {
+  $("config").hidden = !show;
+  for (const id of ["submit-box", "runs", "events"]) $(id).hidden = show;
+}
+
+// First-run routing: after connecting, check the configured model is reachable.
+// If GET fails or the /test says not-ok, land on the config screen instead of a
+// dead run view. Never fakes the check — it hits the real /test endpoint.
+async function routeByModelHealth() {
+  let reachable = false;
+  try {
+    const cfg = await api("/api/v1/config/model");
+    prefillConfig(cfg);
+    const res = await api("/api/v1/config/model/test", {
+      method: "POST",
+      body: JSON.stringify({ provider: cfg.provider || "local", base_url: cfg.base_url }),
+    });
+    reachable = !!res.ok;
+  } catch (e) {
+    console.warn("model health:", e);
+  }
+  showConfig(!reachable);          // unreachable → show config, hide run view
+  $("cfg-toggle").hidden = false;  // reveal the header toggle once connected
+}
+
+$("cfg-provider").onchange = applyProviderVisibility;
+$("cfg-preset").onchange = applyPreset;
+$("cfg-toggle").onclick = () => showConfig($("config").hidden);
+
+// Test connection: real health check against the selected provider + base_url.
+$("cfg-test").onclick = async () => {
+  const provider = currentKind();
+  const base_url = $("cfg-base-url").value.trim();
+  setCfgResult("Testing…", "");
+  try {
+    const res = await api("/api/v1/config/model/test", {
+      method: "POST",
+      body: JSON.stringify({ provider, base_url }),
+    });
+    setCfgResult(res.detail || (res.ok ? "ok" : "failed"), res.ok ? "ok" : "err");
+  } catch (e) {
+    setCfgResult(e.message, "err");
+  }
+};
+
+// Save: store the key first (if entered), then set the model. 422 → show the error.
+$("cfg-save").onclick = async () => {
+  const base_url = $("cfg-base-url").value.trim();
+  const model = $("cfg-model").value.trim();
+  const engine = `${schemeOf(currentKind())}:${model}`;
+  const key = $("cfg-key").value;
+  setCfgResult("Saving…", "");
+  try {
+    if (key) {
+      // Stored securely server-side; the response never echoes it back.
+      await api("/api/v1/config/model/key", { method: "POST", body: JSON.stringify({ api_key: key }) });
+      $("cfg-key").value = "";
+    }
+    const view = await api("/api/v1/config/model", {
+      method: "POST",
+      body: JSON.stringify({ engine, base_url }),
+    });
+    prefillConfig(view);
+    setCfgResult("Saved. Model configured.", "ok");
+    showConfig(false); // reveal the normal run view
+  } catch (e) {
+    setCfgResult(e.message, "err");
+  }
+};
+
+applyPreset(); // sensible defaults before any GET prefill
 
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   navigator.serviceWorker.register("sw.js").catch(() => {});

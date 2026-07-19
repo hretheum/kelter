@@ -290,6 +290,30 @@ async fn a2a_get_and_cancel_unknown_task_is_not_found() {
 }
 
 #[tokio::test]
+async fn config_endpoint_is_bearer_gated_and_optional() {
+    // Phase 8.5: with no controller wired (the bare `router`), the config
+    // endpoint reports "not implemented" for an authed caller, and still
+    // rejects an anonymous one first.
+    let (addr, token) = spawn_server().await;
+    let client = reqwest::Client::new();
+
+    let anon = client
+        .get(format!("http://{addr}/api/v1/config/model"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), 401);
+
+    let authed = client
+        .get(format!("http://{addr}/api/v1/config/model"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(authed.status(), 501);
+}
+
+#[tokio::test]
 async fn serves_embedded_ui() {
     let (addr, _) = spawn_server().await;
     let body = reqwest::get(format!("http://{addr}/"))

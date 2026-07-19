@@ -29,3 +29,8 @@ models/
 
 # Raw local evidence logs are kept, but scratch dirs are not
 /tmp/
+
+# Phase 8.5: model config runtime state — the API key secret file (also
+# covered by *.key above) and the persisted model overlay. NEVER commit these.
+**/kelter-secret-*.key
+**/model-override.toml

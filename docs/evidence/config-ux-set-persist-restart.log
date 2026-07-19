@@ -1,0 +1,14 @@
+=== set→persist→restart survival (Phase 8.5) ===
+initial engine:  local:qwen2.5-0.5b-instruct
+after set:       local:swapped-model  (applied to a live run; override persisted)
+after restart:   local:swapped-model  (overlay re-applied, no config.toml edit)
+--- persisted overlay (model-override.toml) ---
+[policy]
+engine = "local:swapped-model"
+base_url = "http://127.0.0.1:8080"
+--- restart log line ---
+[2m2026-07-19T12:19:10.439403Z[0m [32m INFO[0m [2mkelter::model_config[0m[2m:[0m config: applying persisted model overlay (local:swapped-model)
+=== health check (real) ===
+test :8080 → ok=true ; test :59999 → ok=false
+=== key handling ===
+secret file perms: 600 (0600); key absent from config.toml, logs, and the API

@@ -809,3 +809,67 @@ opentelemetry / opentelemetry_sdk / opentelemetry-otlp 0.32 (features `metrics`,
 `logs`; **blocking** reqwest client) · opentelemetry-appender-tracing 0.32 ·
 tauri 2.11.5 / tauri-cli 2.11.4 · rusqlite 0.40.1 · reqwest 0.12 (now also a
 `memory` dep for the embedding client) — otherwise unchanged.
+
+## Phase 8.5 — runtime model config + UI onboarding
+
+Date: 2026-07-19. Implements ADR 0015 — choose + configure the model from the
+UI (no `config.toml` edit). Precondition: Phases 1–3 + Phase 8 (this builds on
+Phase 8's `config.rs`).
+
+### 1. Sources verified live (Phase 8.5)
+
+| Area | What was verified | How |
+|---|---|---|
+| Health endpoints | llama.cpp `/health` → `{"status":"ok"}`; OpenRouter `GET /api/v1/models` public + reachable; ollama `/api/version` (docs — not running here) | live `curl` to :8080 / openrouter.ai; ollama per docs |
+| Policy seam | `build_oracle`, `LOCAL_DEFAULT_BASE_URL` = `:8080`, key from `OPENROUTER_API_KEY`; kernel holds `Arc<dyn PolicyOracle>` (immutable) | `crates/policy/src/lib.rs` |
+
+### 2. Cruxes / decisions (Phase 8.5)
+
+- **Runtime-mutable policy:** the kernel now holds a `policy::SwappableOracle`
+  (an `RwLock<Arc<dyn PolicyOracle>>` wrapper implementing `PolicyOracle`), so
+  the kernel is **unchanged** while the daemon swaps the inner adapter on a
+  config change. A change applies live (`swap`) **and** persists to
+  `model-override.toml` beside the config, applied over `[policy]` on startup →
+  restart-survival. Honest scope: `latitude` is fixed at build time; a
+  local↔frontier change re-derives it only on the next restart (the overlay
+  makes that correct) — a deliberate small scope, not a faked hot-reload.
+- **Key handling:** env-guided primary + a `0600`, gitignored secret file
+  fallback. `PolicyConfig.api_key` is `#[serde(skip)]` so a key can never come
+  from `config.toml`; the daemon injects env-or-file at build time. The key is
+  never returned by the API, never logged (only "stored, at <path>").
+
+### 3. Definition-of-done evidence (Phase 8.5)
+
+| Gate | Result | Raw evidence |
+|---|---|---|
+| build/test/clippy/fmt | PASS — **122 workspace tests, 0 failures**; clippy `-D warnings` clean; fmt clean | `evidence/phase85-gates.log` |
+| Naming | codename grep = 0 over the tracked tree; **no API key anywhere in the tree** | `evidence/phase85-naming-check.log` |
+| **Config API + runtime-mutable** | **PASS** — `POST /config/model` swaps the model live (a subsequent run's `policy` = the new engine) AND persists `model-override.toml`; a daemon **restart keeps the UI-chosen model** ("applying persisted model overlay" in the log), no `config.toml` edit | `evidence/config-ux-set-persist-restart.log` |
+| **UI config view** | **PASS** — the daemon serves the config screen: `id="config"`, provider/preset pickers, "Test connection", Save; `app.js` calls `/api/v1/config/model{,/test,/key}` (6×); presets pre-fill `:8080` / `:11434` / OpenRouter | `evidence/config-ux-ui.html` |
+| **Health-check (real)** | **PASS** — `POST /config/model/test` to `:8080` → `ok=true`; to a dead `:59999` → `ok=false` (a real GET, never faked) | `config-ux` smoke leg 2 |
+| **First-run routing** | **PASS** — on connect the UI health-checks the current model; unreachable/absent → shows the config screen and hides the run view (`routeByModelHealth` in `app.js`) | `apps/web-ui/app.js` |
+| **Key handling (no leak)** | **PASS** — key stored in a `0600` gitignored secret file; asserted **absent** from `config.toml`, from every daemon log, and from the API response; `GET` returns only `api_key_set` | `config-ux` smoke leg 5 |
+| Governance | PASS — every config endpoint bearer-gated (anonymous → 401, via the same gate + rate limiter); a config change goes through the daemon, not around the kernel | api test `config_endpoint_is_bearer_gated_and_optional` |
+| No secrets / no push | PASS — `.gitignore` covers `**/kelter-secret-*.key` + `**/model-override.toml`; `git grep` for the dummy smoke key = 0 | — |
+
+### 4. Uncertainties / TODO for human review (Phase 8.5)
+
+- **Live API leg needs the maintainer's OpenRouter key** (never committed) — the
+  local leg is proven live here; the OpenRouter leg is a documented human step
+  (paste the key in the UI, or set `OPENROUTER_API_KEY`).
+- **Latitude on model-class change** re-derives on restart, not live (documented
+  above) — the persisted overlay makes it correct after a restart.
+- **First-run health probe** uses the stored `provider` (`local`/`openrouter`);
+  a model configured as the local adapter pointed at ollama is probed via
+  `/health` rather than `/api/version` — a heuristic edge, not a correctness
+  issue.
+- Deferred (explicit): multi-profile configs, an OS-keychain/vault, configuring
+  anything beyond the model. Deep **log redaction** is Phase 9 — this phase
+  introduces no key leak but does not yet scrub all possible logging paths.
+
+### 5. Version pins observed (Phase 8.5)
+
+No new dependencies beyond wiring: `reqwest` + `async-trait` added to `daemon`
+(health-check + the controller trait); `async-trait` added to `api` (the
+`ModelConfigController` trait). Web UI stays dependency-free vanilla JS. Kernel
+untouched.

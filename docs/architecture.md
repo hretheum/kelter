@@ -57,7 +57,13 @@ loudly.* Two working adapters:
 The **latitude** knob (`constrained | standard | wide`) maps engine
 capability to action-space treatment: guidance injection, retry budget,
 space narrowing, duplicate policy. Selection is one config line:
-`engine = "<adapter>:<model>"`.
+`engine = "<adapter>:<model>"` — and, as of ADR 0015, **runtime-mutable from
+the UI**: the kernel holds a `policy::SwappableOracle`, so a bearer-gated
+`POST /api/v1/config/model` rebuilds the adapter and swaps it live, persisting
+the choice to an overlay that survives a restart. The UI config screen (with a
+real per-provider health check and first-run routing) drives it; the OpenRouter
+key is env-guided or a `0600` gitignored secret file — never in `config.toml` or
+logs.
 
 ### Tool substrate — `crates/mcp`
 
@@ -206,7 +212,7 @@ explicitly v2+.
 | Crate | Role | Key public items |
 |---|---|---|
 | `kernel-core` | state machine, validation, events | `Kernel`, `ActionSchema`, `ValidatedAction`, `PolicyOracle`, `ActionSource`, `Latitude` |
-| `policy` | model adapters | `LocalAdapter`, `OpenRouterAdapter`, `PolicyConfig`, `build_oracle`, `gbnf::grammar_for` |
+| `policy` | model adapters + runtime swap | `LocalAdapter`, `OpenRouterAdapter`, `PolicyConfig`, `build_oracle`, `SwappableOracle`, `gbnf::grammar_for` |
 | `mcp` | tool substrate + capability registry | `McpToolSource`, `McpMemoryProvider`, `extensions::{discover, Capability}`, `server::ToolServer`, `memory_server::MemoryToolServer`, bins `tools-server`/`ledger-server`/`memory-server` |
 | `memory` | memory providers | `MemoryProvider`, `InMemoryProvider`, `Episode`, `Provenance` |
 | `api` | HTTP+WS contract | `router`, `serve`, `serve_listener` |

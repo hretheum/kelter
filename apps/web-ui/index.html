@@ -13,6 +13,8 @@
   <header>
     <h1>kelter</h1>
     <p class="tagline">deterministic kernel · constrained policy · live runs</p>
+    <!-- Toggles the model-config screen; revealed once connected. -->
+    <button id="cfg-toggle" class="link-btn" hidden>⚙ Model</button>
     <div id="conn" class="pill offline">disconnected</div>
   </header>
 
@@ -25,6 +27,48 @@
         <input id="token" type="password" placeholder="bearer token" autocomplete="off">
       </label>
       <button id="connect">Connect</button>
+    </section>
+
+    <!-- Model configuration. Hidden by default; first-run routing (app.js)
+         reveals it when the configured model is unreachable. -->
+    <section id="config" hidden>
+      <h2>Model configuration</h2>
+
+      <label>Provider
+        <select id="cfg-provider">
+          <option value="local">Local</option>
+          <option value="api">API</option>
+        </select>
+      </label>
+
+      <label>Preset
+        <select id="cfg-preset">
+          <option value="llamacpp">llama.cpp (local)</option>
+          <option value="ollama">Ollama (local)</option>
+          <option value="openrouter">OpenRouter (API)</option>
+          <option value="custom">Custom</option>
+        </select>
+      </label>
+
+      <label>Base URL
+        <input id="cfg-base-url" type="text" placeholder="http://127.0.0.1:8080" autocomplete="off">
+      </label>
+
+      <label>Model
+        <input id="cfg-model" type="text" placeholder="qwen2.5-0.5b-instruct" autocomplete="off">
+      </label>
+
+      <!-- Only shown for API providers. -->
+      <label id="cfg-key-row">API key
+        <input id="cfg-key" type="password" placeholder="sk-..." autocomplete="off">
+        <span id="cfg-key-note" class="note">stored server-side, never committed or logged; or set OPENROUTER_API_KEY env</span>
+      </label>
+
+      <div class="cfg-actions">
+        <button id="cfg-test">Test connection</button>
+        <button id="cfg-save">Save</button>
+      </div>
+      <div id="cfg-result" class="cfg-result"></div>
     </section>
 
     <section id="submit-box">

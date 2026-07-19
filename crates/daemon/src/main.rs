@@ -2,6 +2,7 @@
 //! the one stable API contract (HTTP + WS) with the embedded web UI.
 
 mod config;
+mod model_config;
 
 use std::sync::Arc;
 
@@ -249,13 +250,20 @@ async fn main() -> anyhow::Result<()> {
         .skip_while(|a| a != "--config")
         .nth(1)
         .unwrap_or_else(|| "config.toml".to_string());
-    let cfg = Config::load(&config_path)?;
+    let mut cfg = Config::load(&config_path)?;
     let (otel_guard, kernel_metrics) = init_observability(&cfg.otel)?;
 
-    // Policy: the adapter + model choice is one line in the config file.
+    // A UI-chosen model (Phase 8.5) persists as an overlay beside the config
+    // and wins over the base [policy]; this also injects the resolved API key
+    // (env or the restricted-perm secret file) — never from config.toml.
+    model_config::apply_overlay(&config_path, &mut cfg.policy);
+
+    // Policy: the adapter + model choice is one line in the config file — now
+    // runtime-swappable behind a SwappableOracle (Phase 8.5).
     let (oracle, latitude) = policy::build_oracle(&cfg.policy)
         .context("failed to build policy adapter from [policy] config")?;
     tracing::info!("policy engine: {}", oracle.describe());
+    let swappable = Arc::new(policy::SwappableOracle::new(oracle));
 
     // Tool substrate: spawn MCP servers (default: the bundled reference
     // tool server, found next to this binary).
@@ -548,7 +556,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let kernel = Arc::new(Kernel::new(
-        oracle,
+        swappable.clone(),
         action_source,
         memory,
         store.clone(),
@@ -614,7 +622,19 @@ async fn main() -> anyhow::Result<()> {
 
     println!("ui:  http://{addr}/");
     println!("api: http://{addr}/api/v1  (Authorization: Bearer <token>)");
-    let serve = api::serve(kernel, token, addr);
+
+    // Runtime model-config controller (Phase 8.5): the UI reads/writes the
+    // model here; the key is never held in the exposed state.
+    let controller: Arc<dyn api::ModelConfigController> =
+        Arc::new(model_config::DaemonModelConfig::new(
+            &config_path,
+            swappable.clone(),
+            policy::PolicyConfig {
+                api_key: None,
+                ..cfg.policy.clone()
+            },
+        ));
+    let serve = api::serve_with_config(kernel, token, addr, Some(controller));
     tokio::select! {
         res = serve => res?,
         _ = tokio::signal::ctrl_c() => {
