@@ -1,0 +1,68 @@
+scripts/smoke-selflearn.sh
+  s_ebdbabe3e659c2::t_a51f19ad43c6f8 70
+  s_ebdbabe3e659c2::t_33e54efc11475a 96-99,106
+  s_ebdbabe3e659c2::t_e8c6baa7eea9ac 1-69,71-95,100-105,107-144
+crates/kernel-core/src/engine.rs
+  s_ebdbabe3e659c2::t_9ae8d946219b75 359,365-379,384-473
+  s_ebdbabe3e659c2::t_dc63200cc87126 360
+  s_ebdbabe3e659c2::t_bcb7bd7b0fd2cb 320-322
+  s_ebdbabe3e659c2::t_33cad1bb7cb1c9 380-383,682-683
+  s_ebdbabe3e659c2::t_b97eccc104b59b 348,354-358
+  s_ebdbabe3e659c2::t_031a0d377c9543 649
+  s_ebdbabe3e659c2::t_feaa613a6736b8 669-681,684-689
+crates/kernel-core/tests/learned_test.rs
+  s_ebdbabe3e659c2::t_82c3eb46a73658 1-19,21-81,86-145,150-173,175-204,213-214,220-234,239-248,253-261
+  s_ebdbabe3e659c2::t_33cad1bb7cb1c9 20,82-85,146-149,174,205-212,215-219,235-238,249-252
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_308b75b3d77ef6 569
+  s_ebdbabe3e659c2::t_7d922b41926250 497-499,507
+  s_ebdbabe3e659c2::t_3fbb7b7ea9c7f7 586-591
+  s_ebdbabe3e659c2::t_33cad1bb7cb1c9 500-506
+docs/evidence/phase10-gates.log
+  s_ebdbabe3e659c2::t_5c116572682569 169-176
+  s_ebdbabe3e659c2::t_992254a4464ed9 1-168
+crates/kernel-core/src/lib.rs
+  s_ebdbabe3e659c2::t_60c69999029a2a 17
+  s_ebdbabe3e659c2::t_db66f7e578175d 32-35
+docs/evidence/selflearn-run.log
+  s_ebdbabe3e659c2::t_13e6c1f3159090 1-8
+crates/api/src/lib.rs
+  s_ebdbabe3e659c2::t_9be93af7dfebd2 434-498
+  s_ebdbabe3e659c2::t_2e5969cdc9ea0b 15
+  s_ebdbabe3e659c2::t_b077929259cd63 123-127
+  s_ebdbabe3e659c2::t_33cad1bb7cb1c9 128-131
+crates/storage/src/lib.rs
+  s_ebdbabe3e659c2::t_355b3a681d4259 340-431
+  s_ebdbabe3e659c2::t_66b76b6515ca01 551-593
+  s_ebdbabe3e659c2::t_2e1fb4f4c7877f 56-67
+docs/adr/0016-governed-self-learning.md
+  s_ebdbabe3e659c2::t_b9f26ad17552d2 1-97
+docs/evidence/phase10-naming-check.log
+  s_ebdbabe3e659c2::t_c25b2cc91b521c 1-5
+crates/kernel-core/src/learned.rs
+  s_ebdbabe3e659c2::t_c48d7ceb0744b3 1-94
+  s_ebdbabe3e659c2::t_77c42426225c2f 95-110,116-135,137-161
+  s_ebdbabe3e659c2::t_33cad1bb7cb1c9 111-115
+  s_ebdbabe3e659c2::t_8ad8de9708f825 136
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_8dbcac140634c1 876-922,924-931
+  s_ebdbabe3e659c2::t_115f8cb5ce7a95 923
+docs/architecture.md
+  s_ebdbabe3e659c2::t_8bd7188a7e4d85 109-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "9e6baca41592a78a73ffc579ca03b1a732bb0f7a",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": null
+    }
+  }
+}
