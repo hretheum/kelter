@@ -224,6 +224,72 @@ impl RunStore for SqliteRunStore {
         }
         Ok(ids)
     }
+
+    async fn prune(
+        &self,
+        policy: &kernel_core::RetentionPolicy,
+    ) -> Result<kernel_core::PruneReport, StoreError> {
+        if policy.is_noop() {
+            return Ok(kernel_core::PruneReport::default());
+        }
+        let mut conn = self.db.conn.lock().await;
+
+        // Only TERMINAL runs are candidates — the SQL filter guarantees an
+        // in-flight (pending/running) run can never be selected for deletion.
+        let terminal: Vec<(Uuid, u64)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, created_at FROM runs
+                     WHERE status IN ('completed', 'failed', 'canceled')
+                     ORDER BY created_at DESC",
+                )
+                .map_err(backend_err)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })
+                .map_err(backend_err)?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id, created) = row.map_err(backend_err)?;
+                out.push((Uuid::parse_str(&id).map_err(backend_err)?, created as u64));
+            }
+            out
+        };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let victims = policy.select(&terminal, now);
+        if victims.is_empty() {
+            return Ok(kernel_core::PruneReport::default());
+        }
+
+        // One transaction: journal + episodes + the run row per victim, so a
+        // run and its markers are pruned together (never half-pruned).
+        let tx = conn.transaction().map_err(backend_err)?;
+        let mut journal_entries_pruned = 0usize;
+        let mut episodes_pruned = 0usize;
+        for id in &victims {
+            let id = id.to_string();
+            journal_entries_pruned += tx
+                .execute("DELETE FROM journal WHERE run_id = ?1", params![id])
+                .map_err(backend_err)?;
+            episodes_pruned += tx
+                .execute("DELETE FROM episodes WHERE run_id = ?1", params![id])
+                .map_err(backend_err)?;
+            tx.execute("DELETE FROM runs WHERE id = ?1", params![id])
+                .map_err(backend_err)?;
+        }
+        tx.commit().map_err(backend_err)?;
+
+        Ok(kernel_core::PruneReport {
+            runs_pruned: victims.len(),
+            journal_entries_pruned,
+            episodes_pruned,
+        })
+    }
 }
 
 // ---- MemoryProvider -------------------------------------------------------
@@ -562,6 +628,71 @@ mod tests {
                 human_validated: false,
                 batch_id: batch,
             },
+        }
+    }
+
+    #[tokio::test]
+    async fn prune_removes_terminal_runs_journal_episodes_but_not_in_flight() {
+        let db = Db::open_in_memory().unwrap();
+        let store = SqliteRunStore::new(db.clone());
+        let memory = SqliteMemoryProvider::new(db.clone());
+
+        // 3 terminal runs (with journal + an episode each) + 1 in-flight.
+        let mut terminal = Vec::new();
+        for i in 0..3 {
+            let mut r = run(RunStatus::Completed);
+            r.created_at = i; // oldest-first
+            let id = r.id;
+            terminal.push(id);
+            store.put(r).await.unwrap();
+            store
+                .append_journal(
+                    id,
+                    JournalEntry::Terminal {
+                        status: RunStatus::Completed,
+                        output: None,
+                        error: None,
+                    },
+                )
+                .await
+                .unwrap();
+            memory.write(episode_for(id)).await.unwrap();
+        }
+        let mut inflight = run(RunStatus::Running);
+        inflight.created_at = 999;
+        let inflight_id = inflight.id;
+        store.put(inflight).await.unwrap();
+
+        // Keep the newest 1 terminal → prune the 2 oldest.
+        let report = store
+            .prune(&kernel_core::RetentionPolicy {
+                max_runs: Some(1),
+                max_age_secs: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(report.runs_pruned, 2);
+        assert_eq!(report.journal_entries_pruned, 2);
+        assert_eq!(report.episodes_pruned, 2);
+
+        // The in-flight run and its (empty) journal are untouched.
+        assert!(store.get(inflight_id).await.is_ok());
+        // The 2 oldest terminal runs + their journal are gone.
+        assert!(store.get(terminal[0]).await.is_err());
+        assert!(store.journal(terminal[0]).await.unwrap().is_empty());
+        // Only 1 episode remains (the surviving terminal run's).
+        assert_eq!(memory.episode_count().await.unwrap(), 1);
+    }
+
+    fn episode_for(run_id: Uuid) -> memory::Episode {
+        memory::Episode {
+            id: Uuid::new_v4(),
+            run_id,
+            task: "t".into(),
+            trace: vec![],
+            outcome: memory::EpisodeOutcome::Success,
+            provenance: memory::Provenance::Reflection,
+            version: 1,
         }
     }
 

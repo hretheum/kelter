@@ -18,6 +18,25 @@ fn generate_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The `prune` subcommand (ADR 0017): open the durable store and apply the
+/// configured retention policy once, then exit. Terminal runs only — never an
+/// in-flight run.
+async fn run_prune(cfg: &Config) -> anyhow::Result<()> {
+    let store: Arc<dyn RunStore> = match cfg.storage.backend.as_str() {
+        "sqlite" => Arc::new(storage::SqliteRunStore::new(
+            storage::Db::open(&cfg.storage.path)
+                .with_context(|| format!("cannot open database '{}'", cfg.storage.path))?,
+        )),
+        other => anyhow::bail!("`prune` requires the sqlite backend (got '{other}')"),
+    };
+    let report = store.prune(&cfg.retention.to_policy()).await?;
+    println!(
+        "{}",
+        serde_json::to_string(&report).unwrap_or_else(|_| "{}".into())
+    );
+    Ok(())
+}
+
 /// The three OpenTelemetry SDK providers, held for shutdown/flush. All are
 /// `None` unless `[otel] endpoint` is configured (observability is off by
 /// default — traces, metrics AND logs).
@@ -251,6 +270,12 @@ async fn main() -> anyhow::Result<()> {
         .nth(1)
         .unwrap_or_else(|| "config.toml".to_string());
     let mut cfg = Config::load(&config_path)?;
+
+    // `kelter --config X prune`: run store retention once and exit (ADR 0017).
+    if std::env::args().skip(1).any(|a| a == "prune") {
+        return run_prune(&cfg).await;
+    }
+
     let (otel_guard, kernel_metrics) = init_observability(&cfg.otel)?;
 
     // A UI-chosen model (Phase 8.5) persists as an overlay beside the config
@@ -616,6 +641,23 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::error!("cannot scan for unfinished runs: {e}"),
     }
 
+    // Store retention on start (ADR 0017): prune terminal runs beyond the
+    // policy window. Runs AFTER resume, and only ever touches terminal runs, so
+    // in-flight/just-resumed runs are never at risk.
+    let policy = cfg.retention.to_policy();
+    if cfg.retention.prune_on_start && !policy.is_noop() {
+        match store.prune(&policy).await {
+            Ok(r) if r.runs_pruned > 0 => tracing::info!(
+                runs = r.runs_pruned,
+                journal = r.journal_entries_pruned,
+                episodes = r.episodes_pruned,
+                "retention: pruned terminal runs on start"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("retention: prune-on-start failed: {e}"),
+        }
+    }
+
     // Token resolution (Phase 8, item F): env first (secrets stay out of the
     // config file / tree), then the config value, then a generated one.
     let token = std::env::var("KELTER_TOKEN")
@@ -629,6 +671,11 @@ async fn main() -> anyhow::Result<()> {
             println!("generated api token: {t}");
             t
         });
+    // Logs carry only a MASKED fingerprint — never the token value (ADR 0017).
+    tracing::info!(
+        "auth: bearer token active (fingerprint {})",
+        kernel_core::redact::redact_secret(&token)
+    );
 
     let addr: std::net::SocketAddr = cfg
         .server

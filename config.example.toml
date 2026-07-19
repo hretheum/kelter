@@ -16,6 +16,13 @@ engine = "local:qwen2.5-0.5b-instruct"
 backend = "sqlite"     # "sqlite" (durable — runs/journal/memory survive restarts) | "memory"
 path = "./kelter.db"
 
+# Store retention (ADR 0017): bound growth by pruning TERMINAL runs only —
+# never an in-flight run. Defaults shown; run once on start + `kelter prune`.
+# [retention]
+# prune_on_start = true
+# max_runs = 10000        # keep at most this many terminal runs (0 = unlimited)
+# max_age_days = 30       # optional: also prune terminal runs older than N days
+
 # [otel]
 # endpoint = "http://127.0.0.1:4318"   # OTLP/HTTP; absent = tracing export off
 # service_name = "kelter"

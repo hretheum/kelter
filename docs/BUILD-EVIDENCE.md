@@ -929,3 +929,67 @@ No new dependencies. The learned layer is `kernel-core` types + a `storage`
 SQLite table (migration v2) reusing `memory::retrieval` BM25; the API adds four
 bearer-gated routes. Kernel `Kernel::new` signature unchanged (learned attaches
 via the `with_learned` builder).
+
+## Phase 9 — data-lifecycle & log hardening
+
+Date: 2026-07-19. Implements ADR 0017 — bounded store retention, a
+deployment-level log-size cap, and a real secret-redaction pass. Precondition:
+Phase 3 (durable store/journal) + Phase 8 (ledger scaling / OTel — built on, not
+duplicated) on origin. Logging stays on stdout (twelve-factor); no in-app file
+logging added.
+
+### 1. Sources verified live (Phase 9)
+
+| Area | What was verified | How |
+|---|---|---|
+| Quadlet log keys | `[Container] LogDriver=` + `LogOpt=` (repeatable) → `--log-driver`/`--log-opt max-size/max-file`; `quadlet -dryrun` generates cleanly | podman **6.0.1** quadlet generator in the local podman machine + podman docs |
+| Store/journal model | `RunStore` (runs+journal), `SqliteMemoryProvider` (episodes) share one Db; terminal statuses = completed/failed/canceled; `unfinished_runs` = pending/running | `crates/kernel-core/src/store.rs`, `crates/storage` |
+
+### 2. Decisions (Phase 9)
+
+- **Retention prunes TERMINAL runs only** — the SQL/filter selects from
+  terminal statuses, so an in-flight run can never be a victim; each victim's
+  journal + episodes + row are deleted in one transaction (no half-prune, no
+  orphaned journal). Durability/exactly-once are preserved by construction.
+- **Log cap at the platform, not the app** — stdout stays; `deploy/kelter.container`
+  gets `LogDriver=k8s-file` + `LogOpt max-size/max-file` (journald + bare-daemon
+  documented as alternatives).
+- **Redaction is enforced + tested** — audit shows no secret value is logged;
+  the daemon logs a masked token fingerprint; `kernel_core::redact` +
+  a capture test lock it in.
+
+### 3. Definition-of-done evidence (Phase 9)
+
+| Gate | Result | Raw evidence |
+|---|---|---|
+| build/test/clippy/fmt | PASS — **135 workspace tests, 0 failures**; clippy `-D warnings` clean; fmt clean | `evidence/phase9-gates.log` |
+| Naming | codename grep = 0; **no secret value in any tracked file** | `evidence/phase9-naming-check.log` |
+| **Retention (money-shot)** | **PASS** — 4 terminal runs + 1 injected in-flight → `prune` (max_runs=2) → `{runs_pruned:2, journal_entries_pruned:10, episodes_pruned:2}`, exactly 2 terminal remain, the **in-flight run + its journal UNTOUCHED**, no orphaned journal rows | `evidence/retention-prune.log`; unit tests `prune_keeps_n_terminal_and_never_touches_in_flight`, `prune_removes_terminal_runs_journal_episodes_but_not_in_flight` |
+| **Durability intact** | **PASS** — exactly-once durability smoke (A/B/C) green after retention landed (prune never touches pending/running) | `scripts/smoke-durability.sh` |
+| **Log cap** | **PASS** — `deploy/kelter.container` bounds logs (`k8s-file` + max-size=10mb + max-file=3); `quadlet -dryrun` on podman 6.0.1 generates `--log-opt max-size=10mb` / `max-file=3` with no errors | `evidence/quadlet-logcap-dryrun.log` |
+| **Redaction (real, tested)** | **PASS** — a capture test installs a tracing subscriber over a buffer, logs a real secret through the redaction path, and asserts the secret value is **absent** (only `…redacted` present); the retention smoke also asserts the token value is absent from the live daemon log (masked fingerprint only) | `crates/kernel-core/tests/redaction_test.rs`; `evidence/retention-prune.log` |
+| **Levels** | PASS — default `info` (`EnvFilter` fallback); `RUST_LOG` documented; no debug firehose | `docs/observability.md` |
+| Docs | PASS — `observability.md` (logging dest/levels/redaction + log caps + retention) + ADR 0017 | — |
+| No secrets / no push | PASS | — |
+
+### 4. Uncertainties / TODO for human review (Phase 9)
+
+- **Retention default** is generous (`max_runs = 10000`, `prune_on_start = true`);
+  it bounds growth without losing recent history and only ever removes terminal
+  runs. Operators wanting time-based retention set `max_age_days`; wanting none
+  set a large cap or `prune_on_start = false`.
+- **Ledger.txt** (the durability-smoke workspace file) is workspace-local, not
+  part of store retention — its markers live in the pruned run's *journal*
+  (removed with the run) and in a per-workspace file the operator manages.
+- **Log cap uses `k8s-file`** so max-size/max-file apply; a journald deployment
+  caps via `SystemMaxUse` instead (documented). `quadlet -dryrun` validates
+  syntax, not runtime driver-opt compatibility.
+- Redaction covers the audited paths + provides a scrubber for future
+  body/header logging; per-field structured-log redaction is out of scope.
+
+### 5. Version pins observed (Phase 9)
+
+No new runtime dependencies. `tracing-subscriber` added as a `kernel-core`
+**dev**-dependency for the redaction capture test. podman 6.0.1 (quadlet
+generator). rusqlite 0.40.1 unchanged (prune is one transaction over existing
+tables).

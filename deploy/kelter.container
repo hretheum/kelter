@@ -13,6 +13,15 @@ PublishPort=7466:7466
 Volume=%h/.config/kelter:/data/config:ro,Z
 Volume=kelter-work:/data/work:Z
 Exec=--config /data/config/config.toml
+# Bound the container's log growth at the platform (ADR 0017): the daemon logs
+# to stdout (twelve-factor — no in-app file logging), and podman rotates it.
+# k8s-file with max-size/max-file caps total log at max-file × max-size (here
+# 3 × 10 MB = 30 MB). To send logs to the system journal instead, use
+# `LogDriver=journald` and cap via journald (SystemMaxUse=) — see
+# docs/observability.md.
+LogDriver=k8s-file
+LogOpt=max-size=10mb
+LogOpt=max-file=3
 # Only needed when [policy] engine = "openrouter:<model>"; keep the key in
 # an env file outside the repo, never in the unit itself. Podman skips it if
 # absent (local engine needs no key); create an empty file to be safe on

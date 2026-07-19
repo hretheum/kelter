@@ -17,6 +17,7 @@ pub mod journal;
 pub mod learned;
 pub mod oracle;
 pub mod plan;
+pub mod redact;
 pub mod store;
 
 pub use action::{
@@ -35,4 +36,4 @@ pub use learned::{
 };
 pub use oracle::{Latitude, PolicyContext, PolicyError, PolicyOracle, Proposal};
 pub use plan::{Plan, PlanNode, ValidatedPlan};
-pub use store::{InMemoryRunStore, RunStore, StoreError};
+pub use store::{InMemoryRunStore, PruneReport, RetentionPolicy, RunStore, StoreError};

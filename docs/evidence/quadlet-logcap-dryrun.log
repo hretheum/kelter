@@ -1,0 +1,51 @@
+quadlet-generator[475442]: Loading source unit file <home>/.config/containers/systemd/kelter.container
+---kelter.service---
+# Quadlet unit: run the kernel under systemd with Podman.
+# Install: copy to ~/.config/containers/systemd/kelter.container
+# then: systemctl --user daemon-reload && systemctl --user start kelter
+[Unit]
+Wants=podman-user-wait-network-online.service
+After=podman-user-wait-network-online.service
+Description=kelter daemon (deterministic agent kernel)
+Wants=network-online.target
+After=network-online.target
+SourcePath=<home>/.config/containers/systemd/kelter.container
+RequiresMountsFor=%t/containers
+
+[X-Container]
+Image=localhost/kelter:latest
+ContainerName=kelter
+PublishPort=7466:7466
+Volume=%h/.config/kelter:/data/config:ro,Z
+Volume=kelter-work:/data/work:Z
+Exec=--config /data/config/config.toml
+# Bound the container's log growth at the platform (ADR 0017): the daemon logs
+# to stdout (twelve-factor — no in-app file logging), and podman rotates it.
+# k8s-file with max-size/max-file caps total log at max-file × max-size (here
+# 3 × 10 MB = 30 MB). To send logs to the system journal instead, use
+# `LogDriver=journald` and cap via journald (SystemMaxUse=) — see
+# docs/observability.md.
+LogDriver=k8s-file
+LogOpt=max-size=10mb
+LogOpt=max-file=3
+# Only needed when [policy] engine = "openrouter:<model>"; keep the key in
+# an env file outside the repo, never in the unit itself. Podman skips it if
+# absent (local engine needs no key); create an empty file to be safe on
+# stricter podman builds.
+EnvironmentFile=%h/.config/kelter/env
+
+[Service]
+Restart=on-failure
+Environment=PODMAN_SYSTEMD_UNIT=%n
+KillMode=mixed
+ExecStop=/usr/bin/podman rm -v -f -i kelter
+ExecStopPost=-/usr/bin/podman rm -v -f -i kelter
+Delegate=yes
+Type=notify
+NotifyAccess=all
+SyslogIdentifier=%N
+ExecStart=/usr/bin/podman run --name kelter --replace --rm --log-driver k8s-file --log-opt max-size=10mb --log-opt max-file=3 --cgroups=split --sdnotify=conmon -d -v %h/.config/kelter:/data/config:ro,Z -v kelter-work:/data/work:Z --publish 7466:7466 --env-file %h/.config/kelter/env localhost/kelter:latest --config /data/config/config.toml
+
+[Install]
+WantedBy=default.target
+

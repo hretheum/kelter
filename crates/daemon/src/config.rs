@@ -33,6 +33,43 @@ pub struct Config {
     pub pricing: std::collections::HashMap<String, kernel_core::ModelPrice>,
     #[serde(default)]
     pub memory: MemoryConfig,
+    #[serde(default)]
+    pub retention: RetentionConfig,
+}
+
+/// Store data-lifecycle policy (ADR 0017, Phase 9). Bounds unbounded growth of
+/// the SQLite store by pruning **terminal** runs (+ their journal/episodes)
+/// beyond a window — never an in-flight run. A generous default keeps growth
+/// bounded out of the box without losing recent history.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct RetentionConfig {
+    /// Prune on daemon start (and it is always available via the `prune`
+    /// subcommand). Set false to never auto-prune.
+    pub prune_on_start: bool,
+    /// Keep at most this many terminal runs (newest). `None`/0 = unlimited.
+    pub max_runs: Option<usize>,
+    /// Prune terminal runs older than this many days. `None` = no age limit.
+    pub max_age_days: Option<u64>,
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            prune_on_start: true,
+            max_runs: Some(10_000),
+            max_age_days: None,
+        }
+    }
+}
+
+impl RetentionConfig {
+    pub fn to_policy(&self) -> kernel_core::RetentionPolicy {
+        kernel_core::RetentionPolicy {
+            max_runs: self.max_runs.filter(|n| *n > 0),
+            max_age_secs: self.max_age_days.map(|d| d * 86_400),
+        }
+    }
 }
 
 /// Memory retrieval configuration (Phase 8, item D). BM25 is the default; set

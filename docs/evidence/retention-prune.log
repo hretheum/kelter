@@ -1,0 +1,6 @@
+=== store retention (Phase 9) ===
+before: 4 terminal + 1 in-flight
+prune report: {"runs_pruned":2,"journal_entries_pruned":10,"episodes_pruned":2}
+after: 2 terminal remain; in-flight untouched (1); orphan journal rows: 0
+--- redaction: token value absent from daemon log; masked fingerprint present ---
+[2m2026-07-19T15:27:57.006276Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m auth: bearer token active (fingerprint smok…redacted)

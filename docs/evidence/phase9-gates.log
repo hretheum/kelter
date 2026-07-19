@@ -1,0 +1,92 @@
+=== Phase 9 gates (2026-07-19T15:29:17Z) ===
+--- fmt ---
+Diff in <repo>/crates/kernel-core/src/lib.rs:15:
+ pub mod engine;
+ pub mod journal;
+ pub mod learned;
+[31m-pub mod redact;
+(B[m pub mod oracle;
+ pub mod plan;
+[32m+pub mod redact;
+(B[m pub mod store;
+ 
+ pub use action::{
+Diff in <repo>/crates/kernel-core/src/redact.rs:38:
+     // Case-insensitive "bearer " or a "sk-"/"key-" prefix.
+     let lower = text.to_ascii_lowercase();
+     let candidates = ["bearer ", "sk-", "key-"];
+[31m-    candidates
+(B[m[31m-        .iter()
+(B[m[31m-        .filter_map(|c| lower.find(c))
+(B[m[31m-        .min()
+(B[m[32m+    candidates.iter().filter_map(|c| lower.find(c)).min()
+(B[m }
+ 
+ fn consume_secret(after: &str) -> (&str, &str) {
+Diff in <repo>/crates/kernel-core/src/store.rs:219:
+     fn select_prunes_only_by_count_and_age_never_negative_index() {
+         let ids: Vec<Uuid> = (0..5).map(|_| Uuid::new_v4()).collect();
+         // newest first, created_at descending
+[31m-        let terminal: Vec<(Uuid, u64)> =
+(B[m[31m-            ids.iter().enumerate().map(|(i, id)| (*id, (100 - i as u64))).collect();
+(B[m[32m+        let terminal: Vec<(Uuid, u64)> = ids
+(B[m[32m+            .iter()
+(B[m[32m+            .enumerate()
+(B[m[32m+            .map(|(i, id)| (*id, (100 - i as u64)))
+(B[m[32m+            .collect();
+(B[m         let policy = RetentionPolicy {
+             max_runs: Some(2),
+             max_age_secs: None,
+Diff in <repo>/crates/kernel-core/src/store.rs:240:
+             terminal_ids.push(r.id);
+             store.put(r).await.unwrap();
+             store
+[31m-                .append_journal(*terminal_ids.last().unwrap(), JournalEntry::Terminal {
+(B[m[31m-                    status: RunStatus::Completed,
+(B[m[31m-                    output: None,
+(B[m[31m-                    error: None,
+(B[m[31m-                })
+(B[m[32m+                .append_journal(
+(B[m[32m+                    *terminal_ids.last().unwrap(),
+(B[m[32m+                    JournalEntry::Terminal {
+(B[m[32m+                        status: RunStatus::Completed,
+(B[m[32m+                        output: None,
+(B[m[32m+                        error: None,
+(B[m[32m+                    },
+(B[m[32m+                )
+(B[m                 .await
+                 .unwrap();
+         }
+Diff in <repo>/crates/kernel-core/tests/redaction_test.rs:54:
+ 
+     let logs = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+     assert!(!logs.is_empty(), "expected some captured log output");
+[31m-    assert!(
+(B[m[31m-        !logs.contains(secret),
+(B[m[31m-        "SECRET LEAKED into logs:\n{logs}"
+(B[m[31m-    );
+(B[m[32m+    assert!(!logs.contains(secret), "SECRET LEAKED into logs:\n{logs}");
+(B[m     assert!(
+         !logs.contains("SECRET-abcdef123456"),
+         "secret tail leaked:\n{logs}"
+fmt: NEEDS FIX
+--- clippy ---
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `kernel-core` (lib test) due to 2 previous errors
+--- test ---
+
+
+=== Phase 9 gates (re-verify) ===
+--- fmt ---
+fmt: OK
+--- clippy ---
+  the following explicit lifetimes could be elided: 'a (1x)
+    crates/kernel-core/src/store.rs:43:19
+--- test ---
+cargo test: 135 passed (31 suites, 3.85s)
+--- clippy (final) ---
+    crates/kernel-core/src/store.rs:176:9
+--- fmt ---
+fmt OK
+--- test count ---
+cargo test: 135 passed (31 suites, 4.72s)
