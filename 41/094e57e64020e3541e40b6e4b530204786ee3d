@@ -1,0 +1,117 @@
+apps/web-ui/src/store/app.ts
+  s_ebdbabe3e659c2::t_d5009f63ff872d 1-315
+.gitignore
+  s_ebdbabe3e659c2::t_e6da3d538f4f7e 41-45
+apps/web-ui/package.json
+  s_ebdbabe3e659c2::t_5e40e5d1cd4720 1-27
+apps/web-ui/pnpm-workspace.yaml
+  s_ebdbabe3e659c2::t_de3fc350ce7570 4
+  s_ebdbabe3e659c2::t_b48713c2b33da9 1-2
+  s_ebdbabe3e659c2::t_57381d42d97d2c 3,5
+.dockerignore
+  s_ebdbabe3e659c2::t_054f0d7c6d0ab6 11-12
+apps/web-ui/src/components/ui/badge.tsx
+  s_ebdbabe3e659c2::t_9358e2e72c9162 1-63
+apps/web-ui/src/features/runs/StepCard.tsx
+  s_ebdbabe3e659c2::t_a4e67383c22ba8 48-50
+  s_ebdbabe3e659c2::t_bb93a33129faae 10-18,24-28
+  s_ebdbabe3e659c2::t_2ae5e9af20e376 1-9,19-23,29-47,51-104
+apps/web-ui/vite.config.ts
+  s_ebdbabe3e659c2::t_d1f7f5bc1891d8 9-11
+  s_ebdbabe3e659c2::t_4b970f9cde56a8 1-8,12-16
+apps/web-ui/src/features/runs/MasterList.tsx
+  s_ebdbabe3e659c2::t_0ba3940b433e79 1-153
+apps/web-ui/src/features/connection-sheet/ConnectionSheet.tsx
+  s_ebdbabe3e659c2::t_99195b994342a4 1-96
+apps/web-ui/src/components/ui/button.tsx
+  s_ebdbabe3e659c2::t_7e3c54c2b49e02 1-75
+apps/web-ui/src/lib/shortcuts.ts
+  s_ebdbabe3e659c2::t_5a4226c0043268 1-32
+crates/api/src/lib.rs
+  s_ebdbabe3e659c2::t_93a3ada4d73649 73-76,78
+  s_ebdbabe3e659c2::t_4b15d6f87022aa 928-934
+apps/web-ui/src/app.tsx
+  s_ebdbabe3e659c2::t_cde3fa88ce4862 1-91
+apps/web-ui/src/main.tsx
+  s_ebdbabe3e659c2::t_e2858ae7c6f386 1-17
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_8869f6639c8130 1124-1175
+apps/web-ui/src/features/runs/Timeline.tsx
+  s_ebdbabe3e659c2::t_18328dbaf5b47e 1-183
+apps/web-ui/src/components/ui/input.tsx
+  s_ebdbabe3e659c2::t_8fa1f67a22b99f 1-27,32-75
+  s_ebdbabe3e659c2::t_dcb429bbfb0b8c 28-31
+apps/web-ui/src/features/settings/ModelConfig.tsx
+  s_ebdbabe3e659c2::t_1aee286f4001dc 1-275
+apps/web-ui/src/lib/announcer.ts
+  s_ebdbabe3e659c2::t_98ddb9776fa008 1-34
+apps/web-ui/src/store/hooks.ts
+  s_ebdbabe3e659c2::t_c6041a19de19a6 1-24
+apps/web-ui/src/lib/cn.ts
+  s_ebdbabe3e659c2::t_fc835ce49225a0 1-13
+apps/web-ui/public/sw.js
+  s_ebdbabe3e659c2::t_ad2747b4484063 1-5,17-18,20-30
+apps/web-ui/src/features/runs/RunDetail.tsx
+  s_ebdbabe3e659c2::t_08079ce591c6f1 1-46
+apps/web-ui/public/manifest.webmanifest
+  s_ebdbabe3e659c2::t_ad2747b4484063 2-4,7-8,10
+apps/web-ui/src/features/runs/Result.tsx
+  s_ebdbabe3e659c2::t_b65adca5093282 141
+  s_ebdbabe3e659c2::t_b39ac6dacecaa9 1-140,142-149
+apps/web-ui/tsconfig.json
+  s_ebdbabe3e659c2::t_c642f7ac670453 1-19
+apps/web-ui/src/features/topbar/TopBar.tsx
+  s_ebdbabe3e659c2::t_07d02c061f187d 1-74
+docs/evidence/web-ui-lighthouse.json
+  s_ebdbabe3e659c2::t_53644bf2b5a67f 1-4824
+apps/web-ui/src/styles/app.css
+  s_ebdbabe3e659c2::t_3c5a2f44ed84e5 1-150
+.github/workflows/ci.yml
+  s_ebdbabe3e659c2::t_22e695ac0d1048 61-71
+  s_ebdbabe3e659c2::t_e7a8b48210f3d6 17-28
+Dockerfile
+  s_ebdbabe3e659c2::t_4ba039507be726 1-11,16
+crates/api/examples/ui-demo.rs
+  s_ebdbabe3e659c2::t_fee6c94c3e859a 1-121
+apps/web-ui/src/lib/api.ts
+  s_ebdbabe3e659c2::t_414e032a71b8e0 1-4,6-8,10,17-18,21-28,31-40,42-45,48-51,56,61-62,65-105,107-117,119-122,125-130,133-135,138-145,148-153,155-160,162-169,171
+  s_ebdbabe3e659c2::t_47c733a79014b4 170
+docs/evidence/web-ui-lighthouse.html
+  s_ebdbabe3e659c2::t_53644bf2b5a67f 1-2893
+apps/web-ui/src/lib/format.ts
+  s_ebdbabe3e659c2::t_c17d57bbfe9dfa 1-52
+docs/evidence/web-ui-redesign.log
+  s_ebdbabe3e659c2::t_6d23a2f4e58fc0 44
+  s_ebdbabe3e659c2::t_e6da3d538f4f7e 1-43,45-96
+apps/web-ui/src/features/runs/Composer.tsx
+  s_ebdbabe3e659c2::t_c52668e4dbb136 72
+  s_ebdbabe3e659c2::t_da147261538ef7 1-71,73-144
+apps/web-ui/index.html
+  s_ebdbabe3e659c2::t_89676f5c5acdca 7
+  s_ebdbabe3e659c2::t_0500d80e270c61 4-6,8-10,13-14
+apps/web-ui/src/lib/events.ts
+  s_ebdbabe3e659c2::t_0f6eada720e309 1-226
+crates/api/tests/api_test.rs
+  s_ebdbabe3e659c2::t_9ee8988edce462 441-443
+  s_ebdbabe3e659c2::t_0327d7feb8bc6a 467,490-492,500-502,563-565,573-575
+apps/web-ui/src/lib/clipboard.ts
+  s_ebdbabe3e659c2::t_ef48c179bc7367 1-13
+apps/web-ui/pnpm-lock.yaml
+  s_ebdbabe3e659c2::t_1cb869a0ab5f48 1-1498
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "41094e57e64020e3541e40b6e4b530204786ee3d",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
