@@ -30,15 +30,28 @@ swappable policy engine, and it stays reliable even on small local models.
   journaled — governance and transparency, not containment (ADR 0012). Done.
 - **Phase 7 — A2A inbound & interop.** Kelter as an A2A server: Agent Card,
   `message/send` → durable run, `tasks/get`, auth; proven with a Kelter↔Kelter
-  loop (ADR 0013). Queued.
-- **Phase 8 — hardening sweep & packaging (C).** Close accumulated deferrals
-  (desktop → durable store, cost in dollars, OTel metrics/logs, embeddings
-  switch, ledger-dedupe scaling, auth) plus packaging scaffolding (unsigned
-  `.dmg` + signing hooks). A sweep of independent items — may land partially;
-  real signing (Developer ID cert) and K12 deploy stay human-blocked. Queued.
+  loop and a generic client (ADR 0013). Done.
+- **Phase 8 — hardening sweep & packaging (C).** All items shipped: desktop on
+  the durable store, dollar cost per run, OTel metrics + logs, a real
+  embeddings-retrieval switch (BM25 default), O(1) ledger dedupe, auth
+  hardening (rate limiting), and packaging scaffolding (unsigned `.app` +
+  signing hooks) (ADR 0014). Signing (Developer ID cert), the `.dmg` GUI step,
+  and K12 deploy stay human/hardware-blocked. Done.
+- **Phase 8.5 — config / onboarding UX.** Choose and configure the model
+  (Local / API) from the UI with pre-filled presets and a real connection
+  test; runtime-mutable config (hot-apply + persisted overlay, survives
+  restart); API key in a 0600 gitignored secret, absent from tree, logs and the
+  API (ADR 0015). Done.
 - **Phase 9 — data-lifecycle & log hardening.** Store retention/pruning (the
   unbounded-SQLite gap), a deployment-level log-size cap (Quadlet), and a
-  secrets-in-logs redaction pass. Queued (after Phase 8).
+  secrets-in-logs redaction pass. In progress.
+- **Phase 10 — governed self-learning (D).** The runtime distils reusable
+  facts from past runs into memory — provenance-tagged, completely reversible,
+  and entering only as validated context, so a learned (even poisoned) fact can
+  never trigger an unvalidated action (ADR 0016). Done.
+- **Phase 11 — security hardening.** Bearer-gate/allowlist the config
+  connection-test, WebSocket auth, per-caller principals, and opt-in TLS
+  (tailnet stays the default transport). Queued.
 
 ## Phase 4 — the governed extension platform (delivered)
 
@@ -124,16 +137,16 @@ will be built. In rough priority.
   also a developer-facing story worth documenting as its own selling point:
   bring your own logic in any language, sandboxed by construction, and the
   kernel decides what it may touch.
-- **B · A2A inbound and interop** — *now Phase 7 (queued).* Kelter as an A2A server — exposing its
+- **B · A2A inbound and interop** — *shipped as Phase 7 (ADR 0013).* Kelter as an A2A server — exposing its
   agents (and plans) via Agent Cards so other systems can delegate to Kelter
   and inherit its governance and durability. Completes the A2A story, out and
   in; more completeness than new wedge.
-- **C · Hardening and real deployment** — *now Phase 8 (queued); the store-retention / log-size / redaction slice split out to Phase 9.* Close the accumulated honest deferrals
+- **C · Hardening and real deployment** — *shipped as Phase 8 (ADR 0014); the store-retention / log-size / redaction slice is Phase 9 (in progress).* Close the accumulated honest deferrals
   — desktop on the durable store, cost in dollars, OpenTelemetry metrics and
   logs, the embeddings retrieval switch, ledger-dedupe scaling, auth — plus
   packaging (above) and deployment on real rootless-podman hardware. Necessary
   for real users; a sweep, not a headline.
-- **D · Governed self-learning.** The runtime distils reusable knowledge and
+- **D · Governed self-learning** — *shipped as Phase 10 (ADR 0016; knowledge slice; plan distillation deferred).* The runtime distils reusable knowledge and
   plans from past runs into memory — governed, provenance-tagged, and
   reversible, so learning can never silently corrupt behaviour. On-brand and
   ambitious; also the highest-risk.
@@ -146,6 +159,30 @@ Developer ID signing and notarization (to clear Gatekeeper), and a universal
 (arm64 + x86_64) build. Windows and Linux bundle targets follow the same
 pattern. The container / daemon path already ships via the Quadlet unit and
 Dockerfile.
+
+## Deferred / backlog
+
+Items intentionally left for later, triaged by who should build them. None
+block a launch; the core is complete.
+
+- **Security hardening (Phase 11, next).** Bearer-gate / host-allowlist the
+  config connection-test (a low-risk unauthenticated outbound probe today),
+  WebSocket-channel auth, per-caller principals with per-run attribution, and
+  opt-in TLS termination (tailnet stays the default transport). mTLS, OAuth/OIDC
+  and OS-level subprocess containment are deferred further.
+- **Correctness-sensitive extensions.** Adaptive re-planning (a re-plan must
+  stay validated + durable), plan distillation (the second self-learning slice —
+  a learned plan re-validated like any plan, reversible per ADR 0016), and WASM
+  for the memory / agent / policy capabilities plus the component model and a
+  real network host-fn.
+- **Additive / lower-stakes.** A2A SSE streaming, webhooks and per-tool skills;
+  multi-profile model configs; an embeddings retrieval-quality harness (the
+  adapter is done — this is the eval plus a dedicated embedding server).
+- **Cosmetic.** ADR-0013 provenance (`claude-opus-4-8` → `claude-fable-5`); the
+  self-learning provenance-list evidence sample.
+- **Human / hardware / paid.** Real code-signing + notarization (Apple Developer
+  ID cert), the `.dmg` build (needs a macOS GUI session), K12 deployment (on
+  hardware arrival), and any live API / dedicated-embedding-server run.
 
 ## Beyond
 
