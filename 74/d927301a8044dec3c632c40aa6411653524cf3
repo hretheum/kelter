@@ -1,0 +1,23 @@
+crates/model-config/src/lib.rs
+  s_5ccc10e3f879cb::t_1b1493730a3bd0 254-260
+crates/policy/src/local.rs
+  s_5ccc10e3f879cb::t_1a066e79efe5f0 52-60
+crates/policy/src/openrouter.rs
+  s_5ccc10e3f879cb::t_9d596738e623ea 79-87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "74d927301a8044dec3c632c40aa6411653524cf3",
+  "prompts": {},
+  "sessions": {
+    "s_5ccc10e3f879cb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e9387de0-2f18-48de-bf7c-a8dbfd854c43",
+        "model": "unknown"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
