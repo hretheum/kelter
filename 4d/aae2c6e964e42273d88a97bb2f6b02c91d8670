@@ -1,0 +1,26 @@
+crates/mcp/src/tools.rs
+  s_ebdbabe3e659c2::t_0db35417a59420 424-433,445,452-454,456-465,467,469-483,486-494,499,503
+  s_ebdbabe3e659c2::t_7f7755c3ce0579 518-519,523,530,536-554
+  s_ebdbabe3e659c2::t_1cf07e48d91d81 8,10-12
+  s_ebdbabe3e659c2::t_dbcfa86f14a6be 555
+crates/mcp/src/server.rs
+  s_ebdbabe3e659c2::t_0c47e938caeb8c 59,66
+  s_ebdbabe3e659c2::t_250f11cbced49e 116-124,156-164
+  s_ebdbabe3e659c2::t_29474af51c3cc7 137,144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "4daae2c6e964e42273d88a97bb2f6b02c91d8670",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
