@@ -1,0 +1,19 @@
+docs/evidence/trust-refuse-no-declaration.log
+  s_ebdbabe3e659c2::t_79b3d529587420 1-2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "37629152699f35bb0ed2f4914890f07836c2bee4",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "unknown"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
