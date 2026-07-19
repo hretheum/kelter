@@ -1,0 +1,24 @@
+docs/packaging.md
+  s_ebdbabe3e659c2::t_064f163fe1468e 1-70
+apps/desktop/src-tauri/tauri.conf.json
+  s_ebdbabe3e659c2::t_edff5952270642 27-41
+scripts/package-desktop.sh
+  s_ebdbabe3e659c2::t_bacadb70bb4f88 52
+  s_ebdbabe3e659c2::t_b75caeeeb14207 1-51,53-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "4b7b14aca50a7d4dd55f8ad6ca7a50e964ff140e",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
