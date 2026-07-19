@@ -1,0 +1,93 @@
+extensions/README.md
+  s_ebdbabe3e659c2::t_8049d0df0e8535 262-299
+docs/evidence/a2a-inbound-durable-resume.log
+  s_ebdbabe3e659c2::t_a7b9847455413e 1-4
+docs/evidence/phase7-naming-check.log
+  s_ebdbabe3e659c2::t_c0c0ff606818ad 1-2,5-8
+  s_ebdbabe3e659c2::t_689d3be2627ed0 3-4
+scripts/smoke-a2a-inbound.sh
+  s_ebdbabe3e659c2::t_3150160ff6d79c 114,116
+  s_ebdbabe3e659c2::t_9d038b1b8a70c2 1-113,115,117-313
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_90a3c3e8d47507 194-196,201-210,215
+  s_ebdbabe3e659c2::t_0cdb34f2b3a4ba 197-200,211
+docs/evidence/phase7-gates.log
+  s_ebdbabe3e659c2::t_45ef51c4f44d73 3,15,35,48,59-60
+  s_ebdbabe3e659c2::t_c32783479ead31 1-2,4-14,16-34,36-47,49-58,61-67
+  s_ebdbabe3e659c2::t_0cdb34f2b3a4ba 68-75
+docs/evidence/a2a-inbound-attribution.log
+  s_ebdbabe3e659c2::t_a7b9847455413e 1
+  s_ebdbabe3e659c2::t_bcd1f5d9ca3f55 2-5
+docs/evidence/phase6-gates.log
+  s_ebdbabe3e659c2::t_45ef51c4f44d73 3,14,26-29
+docs/evidence/a2a-inbound-loop-run.json
+  s_ebdbabe3e659c2::t_a7b9847455413e 1
+docs/architecture.md
+  s_ebdbabe3e659c2::t_7086de147b2c40 208
+  s_ebdbabe3e659c2::t_e5b6500ab2b4a7 103-118
+docs/evidence/a2a-inbound-generic-client.log
+  s_ebdbabe3e659c2::t_a7b9847455413e 4
+  s_ebdbabe3e659c2::t_a6645b554308ca 1-3,5-6
+docs/adr/0013-a2a-inbound-kelter-as-server.md
+  s_ebdbabe3e659c2::t_b72fa1f47b4938 1-125
+crates/api/src/lib.rs
+  s_ebdbabe3e659c2::t_1c0332ac3cfe31 5,13,17-18,32-36,43,51-54
+  s_ebdbabe3e659c2::t_1b713edb24cca5 194-311,316-362
+  s_ebdbabe3e659c2::t_0cdb34f2b3a4ba 312-315
+  s_ebdbabe3e659c2::t_18ee553c95effe 363
+crates/mcp/src/extensions.rs
+  s_ebdbabe3e659c2::t_a495df8f3114a9 98-103
+  s_ebdbabe3e659c2::t_e4ba0c4e3a10f7 334
+  s_ebdbabe3e659c2::t_976d19aa1d3f02 186-188
+docs/evidence/phase6-naming-check.log
+  s_ebdbabe3e659c2::t_c0c0ff606818ad 1-3,6-7
+crates/kernel-core/tests/engine_test.rs
+  s_ebdbabe3e659c2::t_17c815aac14735 101-130
+crates/a2a/src/lib.rs
+  s_ebdbabe3e659c2::t_0ec52acd11b454 293
+  s_ebdbabe3e659c2::t_a0d1ad401cd978 158-160,164-167
+  s_ebdbabe3e659c2::t_70e02cc397be7f 40-41,47-51
+  s_ebdbabe3e659c2::t_c8f6718f97a24b 228
+  s_ebdbabe3e659c2::t_e67ee3e47b185f 201,206-215
+  s_ebdbabe3e659c2::t_ca459e31672b1c 168
+  s_ebdbabe3e659c2::t_7eb52c68debb1b 216-217
+crates/api/Cargo.toml
+  s_ebdbabe3e659c2::t_3be172f04a4efa 10
+crates/a2a/src/server.rs
+  s_ebdbabe3e659c2::t_4d97a0549372cc 1-243
+crates/kernel-core/src/engine.rs
+  s_ebdbabe3e659c2::t_eeba7e962b2bf4 163-166
+  s_ebdbabe3e659c2::t_9dad8fb7407ef4 395-427
+  s_ebdbabe3e659c2::t_2a750e1823ecdd 428-429
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_63e4594e8e60ae 662-711,713-748
+  s_ebdbabe3e659c2::t_7c453d86165f6c 712
+crates/a2a/tests/a2a_client_test.rs
+  s_ebdbabe3e659c2::t_ddaacb236e0d47 138,167
+  s_ebdbabe3e659c2::t_6de5f413d6266e 200,235,263
+examples/a2a-generic-client.py
+  s_ebdbabe3e659c2::t_6054c2fad850c7 1-109
+crates/api/tests/api_test.rs
+  s_ebdbabe3e659c2::t_e822e8e7b2be73 155-160,168-268
+  s_ebdbabe3e659c2::t_0cdb34f2b3a4ba 161-167
+Cargo.lock
+  s_ebdbabe3e659c2::t_b0517e9177da1d 78
+docs/evidence/a2a-inbound-agent-card.json
+  s_ebdbabe3e659c2::t_0dff10bab4265a 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "40fc4aa93a14b280324e6fa6094a0064d04f718f",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
