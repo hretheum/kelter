@@ -41,7 +41,11 @@ swappable policy engine, and it stays reliable even on small local models.
   (Local / API) from the UI with pre-filled presets and a real connection
   test; runtime-mutable config (hot-apply + persisted overlay, survives
   restart); API key in a 0600 gitignored secret, absent from tree, logs and the
-  API (ADR 0015). Done.
+  API (ADR 0015). Done. Follow-up (done): the runtime config controller, first
+  wired only in the daemon, now also serves the **desktop standalone** topology
+  (extracted to `crates/model-config`), so the model config surface works
+  end-to-end there too (no more 501); the web UI degrades to read-only when a
+  deployment returns 501.
 - **Phase 9 — data-lifecycle & log hardening.** Store retention/pruning (the
   unbounded-SQLite gap), a deployment-level log-size cap (Quadlet), and a
   secrets-in-logs redaction pass. In progress.

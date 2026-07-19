@@ -1,0 +1,36 @@
+=== Desktop standalone runtime model config (gap closure) ===
+Diagnosis confirmed: 501 "model config is not runtime-mutable in this deployment"
+originated at crates/api/src/lib.rs:461 (config_controller → None) because
+apps/desktop/src-tauri/src/lib.rs served standalone via api::serve_listener →
+router(config = None). Fix: standalone now builds a policy::SwappableOracle + a
+model_config::DaemonModelConfig controller and serves via
+api::build_app(kernel, Principals::single(token), Some(controller)) — the same
+path the daemon uses (crates/daemon/src/main.rs).
+
+Proof (apps/desktop/src-tauri/tests/standalone_config.rs — replicates
+start_standalone's wiring minus Tauri, hits the real endpoints):
+running 1 test
+standalone config OK: 200 (not 501) · key 0600 · SSRF allowlist · hot-swap · restart-survival
+test standalone_model_config_works_end_to_end_no_501 ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+Asserted end-to-end in standalone:
+  1. GET  /api/v1/config/model            -> 200 + ModelConfigView (NOT 501)
+  2. POST /api/v1/config/model/key        -> 204; secret file 0600 in app config
+                                             dir; key value absent from the API
+                                             response (never echoed/logged)
+  3. POST /api/v1/config/model/test       -> {ok:false, detail: "...allowlist..."}
+                                             for an off-allowlist target
+                                             (169.254.169.254) — SSRF guard holds,
+                                             a real detail, not 501
+  4. POST /api/v1/config/model            -> hot-swap to
+                                             openrouter:anthropic/claude-sonnet-5;
+                                             the NEXT run's policy == the new model
+                                             (no restart)
+  5. restart-survival                     -> model-override.toml persisted in the
+                                             app config dir; a fresh apply_overlay()
+                                             yields the UI-chosen model (wins over
+                                             the default Settings.engine)
+
+Daemon path unchanged: scripts/smoke-config-ux.sh still PASS (serves with
+Some(controller)); moved SSRF tests pass in crates/model-config.

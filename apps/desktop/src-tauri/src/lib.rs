@@ -91,13 +91,29 @@ async fn start_standalone(
         .engine
         .unwrap_or_else(|| "local:qwen2.5-0.5b-instruct".to_string());
 
-    let (oracle, latitude) = policy::build_oracle(&policy::PolicyConfig {
+    // Runtime model config (ADR 0015) — the same layer the daemon uses, now
+    // wired into standalone. The overlay + the 0600 key secret live beside
+    // settings.json in the app config dir; the overlay wins over Settings.engine
+    // on restart (restart-survival, parity with the daemon).
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
+    // Only the *directory* of this path is used (for the overlay + secret file).
+    let config_path = config_dir
+        .join("config.toml")
+        .to_string_lossy()
+        .into_owned();
+
+    let mut policy_cfg = policy::PolicyConfig {
         engine,
         base_url: None,
         latitude: None,
         api_key: None,
-    })
-    .map_err(|e| e.to_string())?;
+    };
+    model_config::apply_overlay(&config_path, &mut policy_cfg);
+
+    let (oracle, latitude) = policy::build_oracle(&policy_cfg).map_err(|e| e.to_string())?;
+    // Swappable so the config controller can hot-swap the model with no restart.
+    let swappable = Arc::new(policy::SwappableOracle::new(oracle));
 
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
@@ -118,7 +134,7 @@ async fn start_standalone(
     ));
 
     let kernel = Arc::new(Kernel::new(
-        oracle,
+        swappable.clone(),
         Arc::new(tools),
         memory,
         store.clone(),
@@ -147,9 +163,23 @@ async fn start_standalone(
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
     let url = format!("http://{addr}");
 
-    let serve_token = token.clone();
+    // Build the config controller and serve WITH it — this is what makes the
+    // /api/v1/config/model* surface return 200 (not 501) in standalone.
+    let controller: Arc<dyn api::ModelConfigController> =
+        Arc::new(model_config::DaemonModelConfig::new(
+            &config_path,
+            swappable.clone(),
+            policy::PolicyConfig {
+                api_key: None,
+                ..policy_cfg.clone()
+            },
+            // No config allowlist extras; the built-in presets (llama.cpp
+            // :8080, ollama :11434, openrouter.ai) are the SSRF allowlist.
+            Vec::new(),
+        ));
+    let router = api::build_app(kernel, api::Principals::single(token.clone()), Some(controller));
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = api::serve_listener(kernel, serve_token, listener).await {
+        if let Err(e) = axum::serve(listener, router).await {
             tracing::error!("standalone api server stopped: {e}");
         }
     });

@@ -1,0 +1,8 @@
+=== gates (2026-07-19T18:58:51Z) ===
+--- fmt ---
+fmt OK
+--- clippy ---
+    Checking daemon v0.1.0 (<repo>/crates/daemon)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.00s
+--- test ---
+

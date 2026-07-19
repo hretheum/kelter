@@ -33,7 +33,11 @@ async function api(path, opts = {}) {
       ...(opts.headers || {}),
     },
   });
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const err = new Error(`${res.status} ${await res.text()}`);
+    err.status = res.status; // callers can branch on it (e.g. 501 = not mutable)
+    throw err;
+  }
   if (res.status === 204) return null; // no body (e.g. key stored)
   return res.json();
 }
@@ -198,14 +202,49 @@ function showConfig(show) {
   for (const id of ["submit-box", "runs", "events"]) $(id).hidden = show;
 }
 
+// Read-only mode: some deployments (daemon without a runtime config controller)
+// return 501 for /config/model. Rather than show an editable form the backend
+// would reject on Save, disable the fields and explain the model is fixed at
+// deploy time. Standalone/daemon-with-controller stays fully editable.
+function setConfigEditable(editable, note) {
+  for (const id of ["cfg-provider", "cfg-preset", "cfg-base-url", "cfg-model", "cfg-key", "cfg-test", "cfg-save"]) {
+    const el = $(id);
+    if (el) el.disabled = !editable;
+  }
+  const res = $("cfg-result");
+  if (res) {
+    res.textContent = note || "";
+    res.className = editable ? "cfg-result" : "cfg-result note";
+  }
+}
+
 // First-run routing: after connecting, check the configured model is reachable.
 // If GET fails or the /test says not-ok, land on the config screen instead of a
 // dead run view. Never fakes the check — it hits the real /test endpoint.
 async function routeByModelHealth() {
+  let cfg;
+  try {
+    cfg = await api("/api/v1/config/model");
+  } catch (e) {
+    if (e.status === 501) {
+      // Model is configured at deploy time and is NOT runtime-mutable here.
+      // Honest: read-only config, run view stays (the model is already set).
+      setConfigEditable(false, "Model is configured at deploy time in this deployment — not editable here.");
+      showConfig(false);
+      $("cfg-toggle").hidden = false;
+      return;
+    }
+    console.warn("model config:", e);
+    setConfigEditable(true);
+    showConfig(true); // other error → let the user configure (first-run)
+    $("cfg-toggle").hidden = false;
+    return;
+  }
+  // 200: runtime-mutable. Editable form + real reachability routing.
+  setConfigEditable(true);
+  prefillConfig(cfg);
   let reachable = false;
   try {
-    const cfg = await api("/api/v1/config/model");
-    prefillConfig(cfg);
     const res = await api("/api/v1/config/model/test", {
       method: "POST",
       body: JSON.stringify({ provider: cfg.provider || "local", base_url: cfg.base_url }),

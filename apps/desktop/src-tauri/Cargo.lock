@@ -726,11 +726,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "api",
+ "axum",
  "kernel-core",
  "mcp",
  "memory",
+ "model-config",
  "policy",
  "rand 0.9.5",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "storage",
@@ -2186,6 +2189,21 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "model-config"
+version = "0.1.0"
+dependencies = [
+ "api",
+ "async-trait",
+ "policy",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml 0.8.2",
+ "tracing",
 ]
 
 [[package]]

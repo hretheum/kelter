@@ -10,6 +10,7 @@ members = [
     "crates/a2a",
     "crates/wasmhost",
     "crates/daemon",
+    "crates/model-config",
 ]
 exclude = ["apps/desktop/src-tauri", "examples/wasm-tools/wordcount", "examples/wasm-tools/netpeek"]
 # The desktop app (apps/desktop/src-tauri) is intentionally excluded from the
@@ -29,6 +30,7 @@ policy = { path = "crates/policy" }
 mcp = { path = "crates/mcp" }
 memory = { path = "crates/memory" }
 api = { path = "crates/api" }
+model-config = { path = "crates/model-config" }
 storage = { path = "crates/storage" }
 a2a = { path = "crates/a2a" }
 wasmhost = { path = "crates/wasmhost" }

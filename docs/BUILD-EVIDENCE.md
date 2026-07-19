@@ -1060,3 +1060,64 @@ anonymous identity.
 `daemon`; `axum` promoted to a direct `daemon` dep (TLS/plain serve);
 `tokio-tungstenite 0.24` as an `api` **dev**-dep (WS-auth test). rustls/aws-lc-rs
 were already in the tree via reqwest.
+
+## Follow-up — desktop standalone runtime model config
+
+Date: 2026-07-19. Closes a gap in ADR 0015: the runtime model-config surface
+(`/api/v1/config/model*`) was wired only into the **daemon** and returned `501`
+in the desktop **standalone** topology.
+
+### The gap (confirmed in code, not assumed)
+
+`501 "model config is not runtime-mutable in this deployment"` originates at
+`crates/api/src/lib.rs:461` (`config_controller()` when `ApiState.config ==
+None`). Standalone served via `apps/desktop/src-tauri/src/lib.rs` →
+`api::serve_listener` → `router(kernel, token)` — which builds the router with
+`config: None`. The daemon (`crates/daemon/src/main.rs`) instead builds a
+`DaemonModelConfig` and serves via `api::build_app(kernel, principals,
+Some(controller))`. The controller lived in the daemon crate, which is bin-only
+(`[[bin]] name = "kelter"`, no `[lib]`), so it couldn't be imported.
+
+### Fix
+
+- **Extracted `crates/model-config`** (the `DaemonModelConfig` controller +
+  `apply_overlay`/`resolve_key`/`origin_of` + its tests), depending on `api` +
+  `policy`. The daemon now depends on it (`mod model_config;` removed); the
+  `kelter` bin is unchanged and its call-sites still compile. The `ModelConfigController`
+  trait in `crates/api` was **not** touched (no ricochet into the daemon/tests).
+- **Standalone now wires the controller** (`apps/desktop/src-tauri/src/lib.rs`):
+  the oracle is wrapped in `policy::SwappableOracle` (one handle to both
+  `Kernel::new` and the controller), `apply_overlay` runs before build (restart-
+  survival), the overlay + 0600 key secret land in the app config dir, and it
+  serves via `axum::serve(listener, api::build_app(kernel,
+  api::Principals::single(token), Some(controller)))`. SSRF allowlist = the
+  built-in presets (localhost + openrouter.ai); no arbitrary hosts.
+- **Web UI degrades on 501** (`apps/web-ui/app.js`): a deployment that returns
+  `501` renders the model section **read-only** with a deploy-time note instead
+  of an editable form the backend would reject; a `200` deployment stays fully
+  editable.
+
+### DoD evidence
+
+| Gate | Result | Evidence |
+|---|---|---|
+| build/test/clippy/fmt (workspace) | PASS — 140 tests (33 suites); clippy `-D warnings` clean; fmt clean | `evidence/faza-desktop-config-gates.log` |
+| `cargo tauri build` (desktop) | PASS — release build clean → `Kelter.app` (unsigned) | `evidence/desktop-tauri-build.log` |
+| **Standalone config end-to-end (no 501)** | **PASS** — `GET /config/model` → 200; `POST /key` → 204 (0600 secret, key never echoed); `POST /test` off-allowlist → `{ok:false, "...allowlist..."}`; `POST /config/model` hot-swap → the next run's `policy` = the new model; overlay persisted → a fresh `apply_overlay` yields the UI-chosen model (restart-survival) | `evidence/desktop-standalone-config.log`; `apps/desktop/src-tauri/tests/standalone_config.rs` |
+| No daemon regression | PASS — `scripts/smoke-config-ux.sh` still PASS (daemon serves with `Some(controller)`); the moved SSRF tests pass in `crates/model-config` | — |
+| Secrets | PASS — OpenRouter key only in the 0600 gitignored secret file; absent from the API response, tree, and logs | `standalone_config.rs` asserts |
+
+### Uncertainties for human review
+
+- **latitude-on-restart** is unchanged from ADR 0015 (derived at build time;
+  a local↔frontier swap re-derives latitude only on the next restart, which the
+  persisted overlay makes correct) — confirm it is OK as-is for standalone too.
+- The web UI still labels the model section "Model configuration" without
+  distinguishing the Kelter API bearer token from the OpenRouter provider key —
+  the prompt flagged a possible relabel; left as a **follow-up** decision.
+
+### Version pins
+
+New crate `model-config` (no new external deps — it reuses api/policy/reqwest/
+toml). Desktop gains `model-config` + `axum 0.8` deps (+ `reqwest` dev-dep for
+the integration test).

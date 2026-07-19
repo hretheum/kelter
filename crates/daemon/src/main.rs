@@ -2,7 +2,6 @@
 //! the one stable API contract (HTTP + WS) with the embedded web UI.
 
 mod config;
-mod model_config;
 
 use std::sync::Arc;
 
