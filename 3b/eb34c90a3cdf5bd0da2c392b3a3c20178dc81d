@@ -1,0 +1,74 @@
+crates/kernel-core/tests/redaction_test.rs
+  s_ebdbabe3e659c2::t_be45176fb81675 1-56,58-64
+  s_ebdbabe3e659c2::t_ddb0afdc435235 57
+deploy/kelter.container
+  s_ebdbabe3e659c2::t_0f1fb7854b34c0 16-24
+crates/kernel-core/src/lib.rs
+  s_ebdbabe3e659c2::t_ddb0afdc435235 20
+  s_ebdbabe3e659c2::t_3b105130f657c2 39
+docs/evidence/phase9-gates.log
+  s_ebdbabe3e659c2::t_95fd789e968367 1-2,4-13,15-25,27-39,41-59,61-77
+  s_ebdbabe3e659c2::t_decd734613e5ea 78-86
+  s_ebdbabe3e659c2::t_f681bc821a4914 87-92
+  s_ebdbabe3e659c2::t_bdf663bc2be5f1 3,14,26,40,60
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_ee624cacbc26b7 21-39
+  s_ebdbabe3e659c2::t_4fdc6a964e2b19 674-678
+  s_ebdbabe3e659c2::t_86d577852e7c91 273-278
+  s_ebdbabe3e659c2::t_8edaf2533a955d 644-660
+docs/adr/0017-data-lifecycle-and-log-hardening.md
+  s_ebdbabe3e659c2::t_4a7708551cc5c2 1-101
+config.example.toml
+  s_ebdbabe3e659c2::t_68037df3aec2b5 19-25
+crates/storage/src/lib.rs
+  s_ebdbabe3e659c2::t_b2551563732185 659
+  s_ebdbabe3e659c2::t_8434556ecdbd4c 635-658,660-686,696-698
+  s_ebdbabe3e659c2::t_e441aa77c95ea5 687-695
+  s_ebdbabe3e659c2::t_5abfbb0dd56a96 227-292
+  s_ebdbabe3e659c2::t_822034400767c5 634
+scripts/smoke-retention.sh
+  s_ebdbabe3e659c2::t_763af60c6d8dc7 1-130
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_f46923772f7dfc 932-995
+crates/daemon/src/config.rs
+  s_ebdbabe3e659c2::t_1bfd4781549a28 36-72
+crates/kernel-core/src/store.rs
+  s_ebdbabe3e659c2::t_60465919267ff6 23-42,44-72,85-89,194
+  s_ebdbabe3e659c2::t_4f94b6fea1ae14 176
+  s_ebdbabe3e659c2::t_cb17726aed7d6d 43
+  s_ebdbabe3e659c2::t_62c99ce4411c46 195-198,200-221,227-245,254-288
+  s_ebdbabe3e659c2::t_e4abd96b9f7dab 156-175,177-193
+  s_ebdbabe3e659c2::t_ddb0afdc435235 222-226,246-253
+  s_ebdbabe3e659c2::t_1bf07a0c5d186d 199
+crates/kernel-core/Cargo.toml
+  s_ebdbabe3e659c2::t_8c4a336bdb6aec 21
+docs/observability.md
+  s_ebdbabe3e659c2::t_46c59655001c7c 98-162
+docs/evidence/quadlet-logcap-dryrun.log
+  s_ebdbabe3e659c2::t_13421bdd1ec261 1-51
+crates/kernel-core/src/redact.rs
+  s_ebdbabe3e659c2::t_ddb0afdc435235 41
+  s_ebdbabe3e659c2::t_84da4e332c759d 1-40,42-81
+Cargo.lock
+  s_ebdbabe3e659c2::t_84a8c9b99857ea 1377
+docs/evidence/phase9-naming-check.log
+  s_ebdbabe3e659c2::t_b31bd9ca5e49eb 1-6
+docs/evidence/retention-prune.log
+  s_ebdbabe3e659c2::t_622805998049aa 1-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "3beb34c90a3cdf5bd0da2c392b3a3c20178dc81d",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
