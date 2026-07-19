@@ -1,0 +1,176 @@
+=== Phase 8 gates (2026-07-19T12:01:05Z) ===
+--- fmt --check ---
+Diff in <repo>/crates/daemon/src/main.rs:517:
+         // Retrieval switch (Phase 8, item D): pass the embedding server to the
+         // memory-server via env when configured; absent → BM25 default.
+         let mut env: Vec<(String, String)> = Vec::new();
+[31m-        if let Some(url) = cfg.memory.embeddings_url.as_deref().filter(|u| !u.is_empty()) {
+(B[m[32m+        if let Some(url) = cfg
+(B[m[32m+            .memory
+(B[m[32m+            .embeddings_url
+(B[m[32m+            .as_deref()
+(B[m[32m+            .filter(|u| !u.is_empty())
+(B[m[32m+        {
+(B[m             env.push(("KELTER_EMBEDDINGS_URL".into(), url.to_string()));
+             if let Some(model) = cfg.memory.embeddings_model.as_deref() {
+                 env.push(("KELTER_EMBEDDINGS_MODEL".into(), model.to_string()));
+Diff in <repo>/crates/kernel-core/src/cost.rs:44:
+     pub fn builtin() -> Self {
+         let mut models = HashMap::new();
+         // Local models: self-hosted, no per-token API bill.
+[31m-        for local in [
+(B[m[31m-            "local:qwen2.5-0.5b-instruct",
+(B[m[31m-            "local:qwen2.5-0.5b",
+(B[m[31m-            "local",
+(B[m[31m-        ] {
+(B[m[32m+        for local in ["local:qwen2.5-0.5b-instruct", "local:qwen2.5-0.5b", "local"] {
+(B[m             models.insert(
+                 local.to_string(),
+                 ModelPrice {
+Diff in <repo>/crates/kernel-core/src/cost.rs:122:
+         let t = PricingTable::builtin();
+         // 1M input + 1M output of sonnet-5 = 3 + 15 = $18.
+         let c = t
+[31m-            .cost("openrouter:anthropic/claude-sonnet-5", &usage(1_000_000, 1_000_000))
+(B[m[32m+            .cost(
+(B[m[32m+                "openrouter:anthropic/claude-sonnet-5",
+(B[m[32m+                &usage(1_000_000, 1_000_000),
+(B[m[32m+            )
+(B[m             .unwrap();
+         assert!((c - 18.0).abs() < 1e-9, "got {c}");
+     }
+Diff in <repo>/crates/kernel-core/src/cost.rs:130:
+     #[test]
+     fn local_model_is_zero_not_null() {
+         let t = PricingTable::builtin();
+[31m-        assert_eq!(t.cost("local:qwen2.5-0.5b-instruct", &usage(500, 500)), Some(0.0));
+(B[m[32m+        assert_eq!(
+(B[m[32m+            t.cost("local:qwen2.5-0.5b-instruct", &usage(500, 500)),
+(B[m[32m+            Some(0.0)
+(B[m[32m+        );
+(B[m         // Prefix fallback: an unseeded local variant still resolves to $0.
+         assert_eq!(t.cost("local:some-other-gguf", &usage(500, 500)), Some(0.0));
+     }
+Diff in <repo>/crates/kernel-core/src/cost.rs:138:
+     #[test]
+     fn unknown_model_is_none_never_fabricated() {
+         let t = PricingTable::builtin();
+[31m-        assert_eq!(t.cost("openrouter:mystery/model-x", &usage(1000, 1000)), None);
+(B[m[32m+        assert_eq!(
+(B[m[32m+            t.cost("openrouter:mystery/model-x", &usage(1000, 1000)),
+(B[m[32m+            None
+(B[m[32m+        );
+(B[m         assert_eq!(t.cost("openai:gpt-whatever", &usage(1000, 1000)), None);
+     }
+ 
+Diff in <repo>/crates/kernel-core/src/lib.rs:21:
+ pub use action::{
+     ActionSchema, ActionSpec, ProposedAction, ValidatedAction, ValidationError, IDEMPOTENCY_KEY_ARG,
+ };
+[32m+pub use cost::{ModelPrice, PricingTable};
+(B[m pub use engine::{
+     crash_point, is_a2a_action, ActionSource, AgentUsage, CompositeActionSource, ExecutionContext,
+     ExecutionError, Kernel, KernelConfig, KernelError, Run, RunEvent, RunEventEnvelope, RunMode,
+Diff in <repo>/crates/kernel-core/src/lib.rs:27:
+     RunStatus, StepRecord, FINISH_ACTION,
+ };
+[31m-pub use cost::{ModelPrice, PricingTable};
+(B[m pub use journal::{JournalEntry, Usage};
+ pub use oracle::{Latitude, PolicyContext, PolicyError, PolicyOracle, Proposal};
+ pub use plan::{Plan, PlanNode, ValidatedPlan};
+Diff in <repo>/crates/mcp/src/server.rs:113:
+     )]
+     async fn append_ledger(&self, Parameters(p): Parameters<LedgerParams>) -> CallToolResult {
+         let ledger = p.ledger.as_deref().unwrap_or("ledger.txt");
+[31m-        match tools::append_ledger(&self.ws, &p.entry, ledger, p.idempotency_key.as_deref(), &self.ledger_index).await {
+(B[m[32m+        match tools::append_ledger(
+(B[m[32m+            &self.ws,
+(B[m[32m+            &p.entry,
+(B[m[32m+            ledger,
+(B[m[32m+            p.idempotency_key.as_deref(),
+(B[m[32m+            &self.ledger_index,
+(B[m[32m+        )
+(B[m[32m+        .await
+(B[m[32m+        {
+(B[m             Ok(v) => ok(v),
+             Err(e) => fail(e),
+         }
+Diff in <repo>/crates/mcp/src/server.rs:145:
+     )]
+     async fn append_ledger(&self, Parameters(p): Parameters<LedgerParams>) -> CallToolResult {
+         let ledger = p.ledger.as_deref().unwrap_or("ledger.txt");
+[31m-        match tools::append_ledger(&self.ws, &p.entry, ledger, p.idempotency_key.as_deref(), &self.ledger_index).await {
+(B[m[32m+        match tools::append_ledger(
+(B[m[32m+            &self.ws,
+(B[m[32m+            &p.entry,
+(B[m[32m+            ledger,
+(B[m[32m+            p.idempotency_key.as_deref(),
+(B[m[32m+            &self.ledger_index,
+(B[m[32m+        )
+(B[m[32m+        .await
+(B[m[32m+        {
+(B[m             Ok(v) => ok(v),
+             Err(e) => fail(e),
+         }
+Diff in <repo>/crates/memory/src/embeddings.rs:160:
+         async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+             Ok(texts
+                 .iter()
+[31m-                .map(|t| self.0.get(t).cloned().unwrap_or_else(|| vec![0.0, 0.0, 0.0]))
+(B[m[32m+                .map(|t| {
+(B[m[32m+                    self.0
+(B[m[32m+                        .get(t)
+(B[m[32m+                        .cloned()
+(B[m[32m+                        .unwrap_or_else(|| vec![0.0, 0.0, 0.0])
+(B[m[32m+                })
+(B[m                 .collect())
+         }
+         fn describe(&self) -> String {
+Diff in <repo>/crates/memory/tests/embeddings_switch.rs:17:
+     let mut table: HashMap<String, Vec<f32>> = HashMap::new();
+     // A tiny 3-dim "semantic" space: axis 0 = weather, 1 = finance, 2 = code.
+     table.insert("what is the weather forecast".into(), vec![1.0, 0.0, 0.0]);
+[31m-    table.insert("sunny skies and warm temperatures today".into(), vec![0.95, 0.05, 0.0]);
+(B[m[31m-    table.insert("quarterly revenue and profit margins".into(), vec![0.0, 1.0, 0.0]);
+(B[m[31m-    table.insert("refactor the rust borrow checker code".into(), vec![0.0, 0.0, 1.0]);
+(B[m[32m+    table.insert(
+(B[m[32m+        "sunny skies and warm temperatures today".into(),
+(B[m[32m+        vec![0.95, 0.05, 0.0],
+(B[m[32m+    );
+(B[m[32m+    table.insert(
+(B[m[32m+        "quarterly revenue and profit margins".into(),
+(B[m[32m+        vec![0.0, 1.0, 0.0],
+(B[m[32m+    );
+(B[m[32m+    table.insert(
+(B[m[32m+        "refactor the rust borrow checker code".into(),
+(B[m[32m+        vec![0.0, 0.0, 1.0],
+(B[m[32m+    );
+(B[m     let table = Arc::new(table);
+ 
+     let app = Router::new().route(
+Diff in <repo>/crates/storage/src/lib.rs:19:
+ use uuid::Uuid;
+ 
+ use kernel_core::{JournalEntry, Run, RunStore, StoreError};
+[31m-use memory::{
+(B[m[31m-    episode_summary, Episode, GraphUpsert, MemoryError, MemoryProvider, RankedContext,
+(B[m[31m-};
+(B[m[32m+use memory::{episode_summary, Episode, GraphUpsert, MemoryError, MemoryProvider, RankedContext};
+(B[m 
+ /// Forward-only migrations; index = schema version - 1.
+ const MIGRATIONS: &[&str] = &[
+--- clippy -D warnings ---
+    Checking api v0.1.0 (<repo>/crates/api)
+    Checking daemon v0.1.0 (<repo>/crates/daemon)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 20.61s
+--- test ---
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+=== Phase 8 gates (re-verify after fmt) ===
+--- fmt --check ---
+fmt: OK
+--- clippy -D warnings ---
+cargo clippy: No issues found
+--- test ---
+cargo test: 121 passed (29 suites, 3.92s)

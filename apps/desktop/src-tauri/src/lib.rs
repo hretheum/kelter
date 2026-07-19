@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::Mutex;
 
-use kernel_core::{Kernel, KernelConfig};
-use memory::InMemoryProvider;
+use kernel_core::{Kernel, KernelConfig, RunStore};
+use storage::{Db, SqliteMemoryProvider, SqliteRunStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
@@ -98,25 +98,46 @@ async fn start_standalone(
     })
     .map_err(|e| e.to_string())?;
 
-    let workspace = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("work");
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    let workspace = data_dir.join("work");
     let tools = mcp::McpToolSource::connect_in_process(&workspace.to_string_lossy())
         .await
         .map_err(|e| e.to_string())?;
 
+    // Durable store: the same SQLite backend the daemon uses (ADR 0007), so
+    // runs + journal + episodes survive a desktop restart. Two handles to one
+    // WAL database file — runs/journal and memory share it, as in the daemon.
+    let db_path = data_dir.join("kelter.db");
+    let store = Arc::new(SqliteRunStore::new(
+        Db::open(&db_path).map_err(|e| e.to_string())?,
+    ));
+    let memory = Arc::new(SqliteMemoryProvider::new(
+        Db::open(&db_path).map_err(|e| e.to_string())?,
+    ));
+
     let kernel = Arc::new(Kernel::new(
         oracle,
         Arc::new(tools),
-        Arc::new(InMemoryProvider::new()),
-        Arc::new(kernel_core::InMemoryRunStore::new()),
+        memory,
+        store.clone(),
         KernelConfig {
             latitude,
             ..KernelConfig::default()
         },
     ));
+
+    // Resume any run interrupted by a previous desktop session before serving.
+    if let Ok(ids) = store.unfinished_runs().await {
+        for run_id in ids {
+            let kernel = kernel.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = kernel.execute_run(run_id).await {
+                    tracing::error!(%run_id, "standalone resume failed: {e}");
+                }
+            });
+        }
+    }
 
     let token = random_token();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

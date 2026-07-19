@@ -11,6 +11,7 @@
 //! - [`store`] — run persistence trait + in-memory implementation.
 
 pub mod action;
+pub mod cost;
 pub mod engine;
 pub mod journal;
 pub mod oracle;
@@ -20,6 +21,7 @@ pub mod store;
 pub use action::{
     ActionSchema, ActionSpec, ProposedAction, ValidatedAction, ValidationError, IDEMPOTENCY_KEY_ARG,
 };
+pub use cost::{ModelPrice, PricingTable};
 pub use engine::{
     crash_point, is_a2a_action, ActionSource, AgentUsage, CompositeActionSource, ExecutionContext,
     ExecutionError, Kernel, KernelConfig, KernelError, Run, RunEvent, RunEventEnvelope, RunMode,

@@ -199,6 +199,11 @@ pub struct Run {
     /// labelled "sandbox".
     #[serde(default)]
     pub trust_posture: Vec<(String, String)>,
+    /// Dollar cost of this run's model usage under the configured price table
+    /// (Phase 8, item B): `Some(usd)` for a priced model, `None` (JSON
+    /// `null`) for an unpriced one — never a fabricated number.
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
 }
 
 /// Accounting for one remote agent within a run.
@@ -273,6 +278,10 @@ pub struct KernelConfig {
     /// The extension trust posture (ADR 0012): `(name, label)` per
     /// registered extension. Recorded on every run for provenance.
     pub trust_posture: Vec<(String, String)>,
+    /// Per-model price table (Phase 8, item B) used to compute each run's
+    /// dollar cost. Default empty → every run's `cost_usd` is `null` until
+    /// prices are configured.
+    pub pricing: crate::cost::PricingTable,
 }
 
 impl Default for KernelConfig {
@@ -283,6 +292,7 @@ impl Default for KernelConfig {
             reflection_enabled: true,
             mode: RunMode::Step,
             trust_posture: Vec::new(),
+            pricing: crate::cost::PricingTable::default(),
         }
     }
 }
@@ -378,6 +388,7 @@ impl Kernel {
             usage: Usage::default(),
             agent_usage: std::collections::HashMap::new(),
             trust_posture: self.config.trust_posture.clone(),
+            cost_usd: None,
         };
         let id = run.id;
         self.store.put(run).await?;
@@ -464,6 +475,7 @@ impl Kernel {
             run.status = *status;
             run.output = output.clone();
             run.error = error.clone();
+            run.cost_usd = self.config.pricing.cost(&run.policy, &run.usage);
             self.store.put(run.clone()).await?;
             return Ok(run);
         }
@@ -962,6 +974,9 @@ impl Kernel {
         run.status = status;
         run.output = output.clone();
         run.error = error.clone();
+        // Dollar cost from the final token usage (Phase 8, item B); `None`
+        // for an unpriced model.
+        run.cost_usd = self.config.pricing.cost(&run.policy, &run.usage);
         self.store.put(run.clone()).await?;
 
         // Gated, provenance-tagged reflection stub: write an episode.

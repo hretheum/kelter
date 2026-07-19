@@ -140,7 +140,13 @@ dangling intent (crash mid-effect) is re-dispatched with the journaled
 idempotency key when the tool declares support — or fails loudly when it
 doesn't. Exactly-once side effects under kill-and-resume are proven by
 `scripts/smoke-durability.sh`. The journal also carries per-model-call
-token usage, aggregated on the run record (`run.usage`).
+token usage, aggregated on the run record (`run.usage`) — and, under a
+config-driven price table (ADR 0014), a `run.cost_usd` dollar figure (`null`
+for an unpriced model, never fabricated). Hardening (ADR 0014, Phase 8) also
+made the desktop shell durable (same SQLite store as the daemon), added the
+OTel **metrics + logs** pillars beside traces (off by default), made the
+retrieval seam switchable (BM25 default ↔ a real `/v1/embeddings` backend),
+and scaled the ledger dedupe to an O(1) indexed lookup.
 
 ### Plan mode (ADR 0010)
 

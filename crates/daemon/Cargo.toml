@@ -26,7 +26,12 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 rand.workspace = true
-opentelemetry = { version = "0.32", features = ["trace"] }
-opentelemetry_sdk = { version = "0.32", features = ["trace"] }
-opentelemetry-otlp = { version = "0.32" }
+uuid.workspace = true
+opentelemetry = { version = "0.32", features = ["trace", "metrics", "logs"] }
+opentelemetry_sdk = { version = "0.32", features = ["trace", "metrics", "logs"] }
+# Blocking reqwest client: the metrics PeriodicReader and the batch span/log
+# processors run on their own OS threads (no tokio reactor), so the exporter
+# must not require an async runtime — a blocking client works from any thread.
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "metrics", "logs", "http-proto", "reqwest-blocking-client", "reqwest-rustls"] }
+opentelemetry-appender-tracing = "0.32"
 tracing-opentelemetry = "0.33"

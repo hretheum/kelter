@@ -19,6 +19,34 @@ pub struct Config {
     pub otel: OtelConfig,
     #[serde(default)]
     pub trust: TrustConfig,
+    /// Per-model price overrides (Phase 8, item B), keyed by the policy
+    /// `describe()` string. Merged over the built-in dated defaults; a model
+    /// in neither yields a `null` run cost (never a fabricated number). Prices
+    /// are static config — no live fetch. Example:
+    ///
+    /// ```toml
+    /// [pricing."openrouter:anthropic/claude-sonnet-5"]
+    /// input_per_mtok = 3.0
+    /// output_per_mtok = 15.0
+    /// ```
+    #[serde(default)]
+    pub pricing: std::collections::HashMap<String, kernel_core::ModelPrice>,
+    #[serde(default)]
+    pub memory: MemoryConfig,
+}
+
+/// Memory retrieval configuration (Phase 8, item D). BM25 is the default; set
+/// `embeddings_url` to point the built-in durable memory at a real embedding
+/// server (a dedicated llama.cpp `--embedding` instance) for cosine retrieval.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct MemoryConfig {
+    /// OpenAI-compatible embeddings server origin (e.g. http://127.0.0.1:8090).
+    /// Absent → BM25 lexical retrieval (the default, no network).
+    pub embeddings_url: Option<String>,
+    /// Model name sent in the embeddings request (llama.cpp ignores the value
+    /// but the field is required by the OpenAI schema).
+    pub embeddings_model: Option<String>,
 }
 
 /// Operator-side trust policy (ADR 0012). The manifest declares a trust

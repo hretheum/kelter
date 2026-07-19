@@ -99,6 +99,45 @@ fn propose(action: &str, args: serde_json::Value) -> ProposedAction {
 }
 
 #[tokio::test]
+async fn run_cost_is_null_for_unpriced_model_and_a_number_for_priced() {
+    use kernel_core::{ModelPrice, PricingTable};
+    use std::collections::HashMap;
+
+    // Unpriced model (mock:scripted is not in any table) → cost is null,
+    // never a fabricated number.
+    let oracle = ScriptedOracle::new(vec![
+        propose("echo", json!({"message": "hi"})),
+        propose("finish", json!({"summary": "done"})),
+    ]);
+    let (kernel, _) = kernel_with(oracle, KernelConfig::default());
+    let run = kernel.run_task("price me".into()).await.unwrap();
+    assert_eq!(run.cost_usd, None, "unpriced model must be null");
+
+    // Priced model → a concrete dollar cost is attached to the run.
+    let mut prices = HashMap::new();
+    prices.insert(
+        "mock:scripted".to_string(),
+        ModelPrice {
+            input_per_mtok: 1.0,
+            output_per_mtok: 1.0,
+        },
+    );
+    let oracle = ScriptedOracle::new(vec![
+        propose("echo", json!({"message": "hi"})),
+        propose("finish", json!({"summary": "done"})),
+    ]);
+    let (kernel, _) = kernel_with(
+        oracle,
+        KernelConfig {
+            pricing: PricingTable::new(prices),
+            ..KernelConfig::default()
+        },
+    );
+    let run = kernel.run_task("price me".into()).await.unwrap();
+    assert!(run.cost_usd.is_some(), "priced model must yield a number");
+}
+
+#[tokio::test]
 async fn cancel_run_marks_pending_run_canceled_durably() {
     // A created-but-not-executed run is cancellable (A2A tasks/cancel).
     let oracle = ScriptedOracle::new(vec![propose("finish", json!({"summary": "x"}))]);

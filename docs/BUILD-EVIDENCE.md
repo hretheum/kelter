@@ -746,3 +746,66 @@ continuity. Not needed.)
 No new dependencies. The inbound server is `axum` (already in `api`) + the
 existing `a2a`/`kernel-core` crates; the generic client is Python stdlib
 (`urllib`). rmcp 2.2.0 / rusqlite 0.40.1 / reqwest 0.12 unchanged.
+
+## Phase 8 — production-hardening sweep
+
+Date: 2026-07-19. Implements ADR 0014 — a SWEEP of independent items (each with
+its own DoD + evidence), closing honest deferrals from the Phase 3
+"uncertainties" list. Precondition: Phase 3 + 4a/4b/4c/5A/6/7 on origin.
+
+### 1. Sources verified live (Phase 8)
+
+| Area | What was verified | How |
+|---|---|---|
+| OTel Rust 0.32 (metrics + logs) | `MetricExporter`/`SdkMeterProvider` (feature `metrics`), `LogExporter`/`SdkLoggerProvider` (feature `logs`), `opentelemetry-appender-tracing` 0.32 pairs with 0.32; the metrics PeriodicReader/batch processors run off-runtime so a **blocking** OTLP client is required | context7 + crates.io; then compiled and exported live to a local OTLP sink |
+| llama.cpp embeddings | `POST /v1/embeddings` → `{data:[{index,embedding[]}]}`, L2-normalized; a `--embedding` server is embedding-only and needs a **dedicated** model (separate from the generation server) | llama.cpp server docs (context7) |
+| Tauri v2 bundle/signing | `bundle.targets` + `bundle.macOS.signingIdentity`/`bundle.windows.certificateThumbprint` hooks; universal via the CLI `--target universal-apple-darwin` | tauri.app schema; built with tauri-cli 2.11.4 |
+
+### 2. Definition-of-done evidence (per item)
+
+| Item | Result | Raw evidence |
+|---|---|---|
+| build/test/clippy/fmt | PASS — **121 workspace tests + 1 desktop test, 0 failures**; clippy `-D warnings` clean; fmt clean | `evidence/phase8-gates.log` |
+| Naming | codename grep = 0 over the tracked tree; `agentkernel` only in historical evidence + notes | `evidence/phase8-naming-check.log` |
+| **A — desktop durable store** | **PASS** — the standalone shell builds `SqliteRunStore` + `SqliteMemoryProvider` on one WAL db in the app data dir and resumes on launch; a run + episode written in one "session" is still present after the store is dropped and reopened ("restart") | `apps/desktop/src-tauri/tests/durable_store.rs` (passes: "restart-survival OK … persisted across reopen") |
+| **B — dollar cost** | **PASS** — a real run exposes `cost_usd` on the API: `0.0` for a priced local model (642+65 tokens, 2 calls); unit tests show a real \$ figure (sonnet 1M+1M = \$18.00) and `null` for an unpriced model (never fabricated) | `evidence/cost-run-known.json`; `crates/kernel-core/src/cost.rs` + engine tests |
+| **C — OTel metrics + logs** | **PASS** — a local OTLP sink captured all three pillars from a live run: metrics (`kelter.runs.started/finished`, `steps.executed`, `tool_calls`, `run.latency`), logs (log bodies), traces (2981 bytes). Off by default | `evidence/otel-metrics-logs-sample.log` |
+| **D — embeddings switch** | **PASS** — `Retrieval::{Bm25\|Embeddings}` switch; the embedding path is a **real** `/v1/embeddings` client, exercised over actual HTTP against a mock server and ranking a lexically-disjoint doc first (BM25 would miss it); BM25 default retained; backend error falls back to BM25. Live comparison vs a dedicated embedding server documented (needs a separate server) | `crates/memory/tests/embeddings_switch.rs` (3 tests), `crates/memory/src/embeddings.rs` |
+| **E — ledger dedupe scaling** | **PASS** — O(n)-per-append full-file scan replaced by an in-memory per-ledger key index (lazy load once → O(1) lookup); a fresh index still dedupes a key that only exists in the file (restart survival); durability smoke (exactly-once) green | `crates/mcp/src/tools.rs` + tests; `scripts/smoke-durability.sh` |
+| **F — auth hardening** | **PASS** — bearer token from `KELTER_TOKEN` env (secrets out of the tree); failed-auth rate limiter → `429` after repeated failures (test). Scope documented: TLS/mTLS, per-caller principals, WS-auth deferred | `crates/api` (`AuthLimiter`) + api test `repeated_bad_auth_is_rate_limited` |
+| **G — packaging (unsigned)** | **PASS** — `tauri.conf.json` declares targets + signing hooks (unsigned); `scripts/package-desktop.sh` built an UNSIGNED **`Kelter.app`** (23 MB, release) — product name correctly `Kelter`. The `.dmg` step then failed on `bundle_dmg.sh` (needs a macOS GUI/Finder session — the known headless limitation), so `.dmg` is built from a desktop session or a UI CI runner. Signing/notarization + K12 deploy documented as human steps | `evidence/dmg-unsigned-build.log`; `docs/packaging.md` |
+| No secrets / no push / **nothing signed** / no K12 deploy | PASS | — |
+
+### 3. Cruxes / decisions (Phase 8)
+
+- **B honesty:** local = \$0 (no API bill), unknown model = `null`. Prices are
+  static, dated config — no live fetch.
+- **C robustness:** blocking OTLP client (the reader/batch threads have no tokio
+  reactor — an async client panics, observed and fixed); bounded (3s) shutdown
+  flush so a dead collector never hangs Ctrl-C.
+- **D honest boundary:** the embedding backend is real code (HTTP-tested), but a
+  live run needs a **separate** llama.cpp `--embedding` server with a dedicated
+  model — that end-to-end comparison is the piece left for a deployment that
+  runs one; the switch, adapter, BM25 default and graceful fallback are all
+  proven here. Not faked.
+- **E exactly-once preserved:** the file line stays the durable marker; the
+  index is a rebuilt-from-file cache, so a crash reloads the key.
+
+### 4. Uncertainties / TODO for human review (Phase 8)
+
+- **Human-blocked (documented, not done):** real code-signing / notarization
+  (needs an Apple Developer ID cert — paid, human-held) and K12 deploy (hardware
+  pending). See `docs/packaging.md`.
+- Headless `.dmg`: creation scripts Finder and needs a macOS GUI session; build
+  `.dmg` from a desktop session (or `--bundles app` in CI).
+- Embeddings: a live retrieval-quality comparison vs BM25 needs a running
+  dedicated embedding server; the adapter is real + HTTP-tested meanwhile.
+- Auth: TLS/mTLS + per-caller tokens + WS-endpoint rate-limiting are the next
+  scope, deliberately not attempted here.
+
+### 5. Version pins observed (Phase 8)
+
+opentelemetry / opentelemetry_sdk / opentelemetry-otlp 0.32 (features `metrics`,
+`logs`; **blocking** reqwest client) · opentelemetry-appender-tracing 0.32 ·
+tauri 2.11.5 / tauri-cli 2.11.4 · rusqlite 0.40.1 · reqwest 0.12 (now also a
+`memory` dep for the embedding client) — otherwise unchanged.

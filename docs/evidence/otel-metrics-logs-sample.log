@@ -1,0 +1,14 @@
+=== OTLP export capture (item C) — bytes received per signal ===
+  traces: 2981 bytes
+  metrics: 947 bytes
+  logs: 2302 bytes
+=== metric instrument names found in the OTLP metrics payload ===
+kelter.run.latency
+kelter.runs.finished
+kelter.runs.started
+kelter.steps.executed
+kelter.tool_calls
+=== a sample of log/trace strings in the payloads ===
+kelter
+kelter
+\storage: sqlite at <work>/kelter.dbY

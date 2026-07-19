@@ -5,6 +5,7 @@
 //! can be plugged in behind it. Retrieval is a tested component with a
 //! relevance metric, not "dump everything into the prompt".
 
+pub mod embeddings;
 pub mod retrieval;
 
 use std::collections::HashMap;
@@ -13,6 +14,47 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+
+use embeddings::EmbeddingBackend;
+
+/// The retrieval-scoring strategy behind `MemoryProvider::retrieve` — the
+/// Phase 3 seam made switchable (Phase 8, item D). BM25 is the default;
+/// `Embeddings` uses a real embedding backend and cosine similarity, falling
+/// back to BM25 if the backend errors (degraded ranking, never a broken run).
+#[derive(Clone, Default)]
+pub enum Retrieval {
+    #[default]
+    Bm25,
+    Embeddings(Arc<dyn EmbeddingBackend>),
+}
+
+impl Retrieval {
+    pub fn describe(&self) -> String {
+        match self {
+            Retrieval::Bm25 => "bm25".into(),
+            Retrieval::Embeddings(b) => b.describe(),
+        }
+    }
+
+    /// Rank `docs` against `query`, returning normalized `(index, score)`
+    /// pairs (best first, ≤ `limit`) — the same shape both strategies produce.
+    pub async fn rank(&self, query: &str, docs: &[String], limit: usize) -> Vec<(usize, f64)> {
+        match self {
+            Retrieval::Bm25 => retrieval::normalize(&retrieval::rank_bm25(query, docs, limit)),
+            Retrieval::Embeddings(backend) => {
+                match embeddings::rank_embeddings(backend.as_ref(), query, docs, limit).await {
+                    Ok(scored) => retrieval::normalize(&scored),
+                    Err(e) => {
+                        tracing::warn!(
+                            "retrieval: embedding backend failed ({e}); falling back to BM25"
+                        );
+                        retrieval::normalize(&retrieval::rank_bm25(query, docs, limit))
+                    }
+                }
+            }
+        }
+    }
+}
 use uuid::Uuid;
 
 /// Where a memory entry came from. Every write is provenance-tagged so the
@@ -95,6 +137,7 @@ pub trait MemoryProvider: Send + Sync {
 #[derive(Default)]
 pub struct InMemoryProvider {
     inner: Arc<RwLock<Store>>,
+    retrieval: Retrieval,
 }
 
 #[derive(Default)]
@@ -107,6 +150,14 @@ struct Store {
 impl InMemoryProvider {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Use a specific retrieval strategy (Phase 8, item D) instead of BM25.
+    pub fn with_retrieval(retrieval: Retrieval) -> Self {
+        Self {
+            retrieval,
+            ..Self::default()
+        }
     }
 
     /// Number of stored episodes (used by tests and the reflection smoke path).
@@ -139,7 +190,7 @@ impl MemoryProvider for InMemoryProvider {
     async fn retrieve(&self, task: &str, limit: usize) -> Result<Vec<RankedContext>, MemoryError> {
         let store = self.inner.read().await;
         let docs: Vec<String> = store.episodes.iter().map(|e| e.task.clone()).collect();
-        let ranked = retrieval::normalize(&retrieval::rank_bm25(task, &docs, limit));
+        let ranked = self.retrieval.rank(task, &docs, limit).await;
         Ok(ranked
             .into_iter()
             .map(|(i, score)| RankedContext {

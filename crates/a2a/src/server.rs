@@ -181,6 +181,7 @@ mod tests {
             usage: Default::default(),
             agent_usage: HashMap::new(),
             trust_posture: Vec::new(),
+            cost_usd: None,
         }
     }
 

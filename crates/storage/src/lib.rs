@@ -19,9 +19,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use kernel_core::{JournalEntry, Run, RunStore, StoreError};
-use memory::{
-    episode_summary, retrieval, Episode, GraphUpsert, MemoryError, MemoryProvider, RankedContext,
-};
+use memory::{episode_summary, Episode, GraphUpsert, MemoryError, MemoryProvider, RankedContext};
 
 /// Forward-only migrations; index = schema version - 1.
 const MIGRATIONS: &[&str] = &[
@@ -220,11 +218,21 @@ impl RunStore for SqliteRunStore {
 
 pub struct SqliteMemoryProvider {
     db: Db,
+    retrieval: memory::Retrieval,
 }
 
 impl SqliteMemoryProvider {
     pub fn new(db: Db) -> Self {
-        Self { db }
+        Self {
+            db,
+            retrieval: memory::Retrieval::Bm25,
+        }
+    }
+
+    /// Use a specific retrieval strategy (Phase 8, item D) instead of BM25 —
+    /// e.g. `Retrieval::Embeddings` backed by a llama.cpp embedding server.
+    pub fn with_retrieval(db: Db, retrieval: memory::Retrieval) -> Self {
+        Self { db, retrieval }
     }
 
     pub async fn episode_count(&self) -> Result<u64, MemoryError> {
@@ -282,7 +290,7 @@ impl MemoryProvider for SqliteMemoryProvider {
         };
 
         let docs: Vec<String> = episodes.iter().map(|e| e.task.clone()).collect();
-        let ranked = retrieval::normalize(&retrieval::rank_bm25(task, &docs, limit));
+        let ranked = self.retrieval.rank(task, &docs, limit).await;
         Ok(ranked
             .into_iter()
             .map(|(i, score)| RankedContext {
@@ -336,6 +344,7 @@ mod tests {
             usage: Default::default(),
             agent_usage: Default::default(),
             trust_posture: Vec::new(),
+            cost_usd: None,
         }
     }
 

@@ -175,6 +175,29 @@ async fn a2a_card_is_public_and_declares_bearer() {
 }
 
 #[tokio::test]
+async fn repeated_bad_auth_is_rate_limited() {
+    // Item F (Phase 8): after enough failed auth attempts the endpoint returns
+    // 429 instead of 401 — a basic brute-force slowdown.
+    let (addr, _) = spawn_server().await;
+    let client = reqwest::Client::new();
+    let mut saw_429 = false;
+    for _ in 0..15 {
+        let res = client
+            .get(format!("http://{addr}/api/v1/runs"))
+            .bearer_auth("wrong")
+            .send()
+            .await
+            .unwrap();
+        if res.status() == 429 {
+            saw_429 = true;
+            break;
+        }
+        assert_eq!(res.status(), 401);
+    }
+    assert!(saw_429, "expected a 429 after repeated failed auth");
+}
+
+#[tokio::test]
 async fn a2a_rpc_rejects_anonymous() {
     let (addr, _) = spawn_server().await;
     let client = reqwest::Client::new();

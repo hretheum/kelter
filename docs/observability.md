@@ -21,7 +21,35 @@ Kelter emits `tracing` spans for everything the kernel does:
 
 Per-run token accounting is separate from tracing: every model call's usage
 is journaled and aggregated on the run record — `GET /api/v1/runs/{id}`
-returns `usage: {prompt_tokens, completion_tokens, calls}`.
+returns `usage: {prompt_tokens, completion_tokens, calls}` and, when the model
+is priced (ADR 0014), a `cost_usd` dollar figure (`null` for an unpriced
+model — never a fabricated number).
+
+## Metrics + logs (Phase 8, ADR 0014)
+
+Beside traces, Kelter exports the other two OpenTelemetry pillars over the same
+OTLP/HTTP endpoint — also **off by default**, enabled by the same `[otel]`
+config.
+
+**Metrics** (instruments, translated from the kernel's run-event stream):
+
+| Instrument | Kind | Meaning |
+|---|---|---|
+| `kelter.runs.started` | counter | runs created |
+| `kelter.runs.finished` | counter | runs reaching a terminal state (attr `outcome`) |
+| `kelter.steps.executed` | counter | executed decision/action steps |
+| `kelter.tool_calls` | counter | tool/action executions (attr `ok`) |
+| `kelter.validation.rejections` | counter | kernel validation rejections |
+| `kelter.run.latency` | histogram (ms) | run wall-clock, creation → terminal |
+
+**Logs**: `tracing` events are bridged to OTel logs
+(`opentelemetry-appender-tracing`) and exported to `…/v1/logs`.
+
+The OTLP exporter uses a **blocking** HTTP client on purpose — the metrics
+PeriodicReader and the batch processors run on their own threads (no tokio
+reactor), where an async client would panic. Shutdown flush is bounded (3s) so
+an unreachable collector never wedges Ctrl-C. A captured sample of exported
+metrics + logs lives in `docs/evidence/otel-metrics-logs-sample.log`.
 
 ## Exporting (OTLP)
 

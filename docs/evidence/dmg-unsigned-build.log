@@ -1,0 +1,64 @@
+[package] building UNSIGNED desktop bundle(s): app,dmg 
+        Info Looking up installed tauri packages to check mismatched versions...
+   Compiling foldhash v0.2.0
+   Compiling objc2-exception-helper v0.1.1
+   Compiling ring v0.17.14
+   Compiling vcpkg v0.2.15
+   Compiling pkg-config v0.3.33
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.3
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling winnow v0.5.40
+   Compiling fallible-iterator v0.3.0
+   Compiling hashbrown v0.17.1
+   Compiling desktop v0.1.0 (<repo>/apps/desktop/src-tauri)
+   Compiling libsqlite3-sys v0.38.1
+   Compiling objc2 v0.6.4
+   Compiling indexmap v2.14.0
+   Compiling hashlink v0.12.1
+   Compiling serde_json v1.0.150
+   Compiling plist v1.10.0
+   Compiling process-wrap v9.1.0
+   Compiling toml_edit v0.20.2
+   Compiling objc2-core-foundation v0.3.2
+   Compiling block2 v0.6.2
+   Compiling dispatch2 v0.3.1
+   Compiling referencing v0.28.3
+   Compiling jsonptr v0.6.3
+   Compiling schemars v1.2.1
+   Compiling json-patch v3.0.1
+   Compiling serialize-to-javascript v0.1.2
+   Compiling objc2-foundation v0.3.2
+   Compiling axum v0.8.9
+   Compiling tauri-utils v2.9.3
+   Compiling rustls v0.23.42
+   Compiling rmcp v2.2.0
+   Compiling toml v0.8.2
+   Compiling rustls-webpki v0.103.13
+   Compiling objc2-app-kit v0.3.2
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling objc2-web-kit v0.3.2
+   Compiling tao v0.35.3
+   Compiling muda v0.19.3
+   Compiling window-vibrancy v0.6.0
+   Compiling memory v0.1.0 (<repo>/crates/memory)
+   Compiling jsonschema v0.28.3
+   Compiling wry v0.55.1
+   Compiling tauri-runtime v2.11.3
+   Compiling kernel-core v0.1.0 (<repo>/crates/kernel-core)
+   Compiling tauri-runtime-wry v2.11.4
+   Compiling a2a v0.1.0 (<repo>/crates/a2a)
+   Compiling policy v0.1.0 (<repo>/crates/policy)
+   Compiling api v0.1.0 (<repo>/crates/api)
+   Compiling tauri v2.11.5
+   Compiling rusqlite v0.40.1
+   Compiling storage v0.1.0 (<repo>/crates/storage)
+   Compiling mcp v0.1.0 (<repo>/crates/mcp)
+    Finished `release` profile [optimized] target(s) in 1m 53s
+       Built application at: <repo>/apps/desktop/src-tauri/target/release/desktop
+    Bundling Kelter.app (<repo>/apps/desktop/src-tauri/target/release/bundle/macos/Kelter.app)
+    Bundling Kelter_0.1.0_aarch64.dmg (<repo>/apps/desktop/src-tauri/target/release/bundle/dmg/Kelter_0.1.0_aarch64.dmg)
+     Running bundle_dmg.sh
+       Error failed to bundle project: error running bundle_dmg.sh: `failed to run <repo>/apps/desktop/src-tauri/target/release/bundle/dmg/bundle_dmg.sh`

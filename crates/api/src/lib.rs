@@ -2,9 +2,10 @@
 //! streaming, bearer-token auth. Every client — web UI, desktop shell,
 //! remote CLI — talks to this same seam, on localhost or across a tailnet.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
@@ -34,6 +35,8 @@ pub struct ApiState {
     /// Best-effort: a run resumed after a crash is not tracked here (A2A
     /// permits a cancel to be refused).
     a2a_handles: Arc<Mutex<HashMap<Uuid, AbortHandle>>>,
+    /// Failed-auth rate limiter (Phase 8, item F).
+    limiter: Arc<AuthLimiter>,
 }
 
 pub fn router(kernel: Arc<Kernel>, token: String) -> Router {
@@ -41,6 +44,7 @@ pub fn router(kernel: Arc<Kernel>, token: String) -> Router {
         kernel,
         token: Arc::new(token),
         a2a_handles: Arc::new(Mutex::new(HashMap::new())),
+        limiter: Arc::new(AuthLimiter::default()),
     };
     Router::new()
         .route("/healthz", get(health))
@@ -103,6 +107,69 @@ fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "invalid or missing bearer token").into_response()
 }
 
+/// Failed-auth rate limiter (Phase 8, item F): a sliding window of recent
+/// auth failures. Past the threshold the endpoint returns `429` for a cooldown
+/// — a basic brute-force slowdown on top of the constant-time token compare.
+/// Process-global (the daemon serves a single token); a successful auth clears
+/// the window.
+const AUTH_MAX_FAILURES: usize = 10;
+const AUTH_WINDOW: Duration = Duration::from_secs(30);
+
+#[derive(Default)]
+struct AuthLimiter {
+    failures: std::sync::Mutex<VecDeque<Instant>>,
+}
+
+impl AuthLimiter {
+    fn prune(&self, dq: &mut VecDeque<Instant>) {
+        let now = Instant::now();
+        while let Some(&front) = dq.front() {
+            if now.duration_since(front) > AUTH_WINDOW {
+                dq.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+    fn is_locked(&self) -> bool {
+        let mut dq = self.failures.lock().unwrap();
+        self.prune(&mut dq);
+        dq.len() >= AUTH_MAX_FAILURES
+    }
+    fn record_failure(&self) {
+        let mut dq = self.failures.lock().unwrap();
+        self.prune(&mut dq);
+        dq.push_back(Instant::now());
+    }
+    fn record_success(&self) {
+        self.failures.lock().unwrap().clear();
+    }
+}
+
+/// Central auth gate for the REST + A2A endpoints: enforces the rate limiter,
+/// then the bearer check. Returns `Some(response)` when the request must be
+/// rejected (`429` locked out, or `401` bad/missing token), `None` when it may
+/// proceed.
+fn auth_gate(state: &ApiState, headers: &HeaderMap) -> Option<Response> {
+    if state.limiter.is_locked() {
+        return Some(
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, "30")],
+                "too many failed auth attempts; try again shortly",
+            )
+                .into_response(),
+        );
+    }
+    if authorized(state, headers) {
+        state.limiter.record_success();
+        None
+    } else {
+        state.limiter.record_failure();
+        Some(unauthorized())
+    }
+}
+
 // ---- runs ----------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -115,8 +182,8 @@ async fn create_run(
     headers: HeaderMap,
     Json(req): Json<CreateRun>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return unauthorized();
+    if let Some(rejection) = auth_gate(&state, &headers) {
+        return rejection;
     }
     if req.task.trim().is_empty() {
         return (StatusCode::UNPROCESSABLE_ENTITY, "task must not be empty").into_response();
@@ -140,8 +207,8 @@ async fn create_run(
 }
 
 async fn list_runs(State(state): State<ApiState>, headers: HeaderMap) -> Response {
-    if !authorized(&state, &headers) {
-        return unauthorized();
+    if let Some(rejection) = auth_gate(&state, &headers) {
+        return rejection;
     }
     match state.kernel.store().list().await {
         Ok(runs) => Json(runs).into_response(),
@@ -153,8 +220,8 @@ async fn list_runs(State(state): State<ApiState>, headers: HeaderMap) -> Respons
 /// extensions) are live. Useful for demos and for verifying an extension
 /// registered without recompiling anything.
 async fn list_tools(State(state): State<ApiState>, headers: HeaderMap) -> Response {
-    if !authorized(&state, &headers) {
-        return unauthorized();
+    if let Some(rejection) = auth_gate(&state, &headers) {
+        return rejection;
     }
     match state.kernel.current_action_schema().await {
         Ok(schema) => {
@@ -179,8 +246,8 @@ async fn get_run(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return unauthorized();
+    if let Some(rejection) = auth_gate(&state, &headers) {
+        return rejection;
     }
     match state.kernel.store().get(id).await {
         Ok(run) => Json(run).into_response(),
@@ -237,8 +304,8 @@ async fn a2a_rpc(
 ) -> Response {
     // Auth is the security surface: reject anonymous task calls loudly. Card
     // discovery is the only unauthenticated A2A route.
-    if !authorized(&state, &headers) {
-        return unauthorized();
+    if let Some(rejection) = auth_gate(&state, &headers) {
+        return rejection;
     }
     let id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
     let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
