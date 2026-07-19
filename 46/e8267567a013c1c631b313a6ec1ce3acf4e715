@@ -1,0 +1,124 @@
+crates/api/tests/api_test.rs
+  s_ebdbabe3e659c2::t_088f1268bacd00 178-199
+  s_ebdbabe3e659c2::t_9fb2544423eba8 177
+crates/memory/src/lib.rs
+  s_ebdbabe3e659c2::t_6128fb2f8d42f9 193
+  s_ebdbabe3e659c2::t_c3be23fa4ce854 140
+  s_ebdbabe3e659c2::t_d81156863975af 8,17-57,161
+  s_ebdbabe3e659c2::t_18f01b3597d520 155-160
+  s_ebdbabe3e659c2::t_4341b86c1e140c 162
+scripts/smoke-observability.sh
+  s_ebdbabe3e659c2::t_e87286c502f548 3-4,6,10-13,19,33,36-56,69,85,99,103-115,121-129
+  s_ebdbabe3e659c2::t_5771ef5dab58bb 1-2,5,7-9,14-18,20-32,34-35,57-68,70-84,86-98,100-102,116-120,130-134
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_787c439e85b1fd 768
+  s_ebdbabe3e659c2::t_9b080b8b5b06aa 749-767,769-775,777-811
+  s_ebdbabe3e659c2::t_6c64e149ed635b 776
+apps/desktop/src-tauri/tests/durable_store.rs
+  s_ebdbabe3e659c2::t_713291f8eb6139 1-38,40-69
+  s_ebdbabe3e659c2::t_09842367119b57 39
+docs/evidence/dmg-unsigned-build.log
+  s_ebdbabe3e659c2::t_4bd3c839067636 14,46-64
+  s_ebdbabe3e659c2::t_7456d5dd59b803 42-45
+  s_ebdbabe3e659c2::t_675bb8df1f79f0 1-13,15-41
+crates/kernel-core/tests/engine_test.rs
+  s_ebdbabe3e659c2::t_27c6783cadbcf8 102-139
+  s_ebdbabe3e659c2::t_5784d1aa5d5cc5 101
+crates/api/src/lib.rs
+  s_ebdbabe3e659c2::t_b2822459c943da 185-186,210-211,223-224,249-250,307-308
+  s_ebdbabe3e659c2::t_bdface7cd11e7c 5,8
+  s_ebdbabe3e659c2::t_8eede624f79bef 38-39,47
+  s_ebdbabe3e659c2::t_5ac9d91e0fe65c 110-172
+crates/daemon/Cargo.toml
+  s_ebdbabe3e659c2::t_5cfe89fc8e6977 29
+  s_ebdbabe3e659c2::t_16eb2a79c78c45 30,36
+  s_ebdbabe3e659c2::t_611a247849a9a3 31-35
+docs/adr/0014-production-hardening-sweep.md
+  s_ebdbabe3e659c2::t_45bd2729ec529d 1-107
+crates/mcp/src/bin/memory_server.rs
+  s_ebdbabe3e659c2::t_0be2b99a986180 19-38
+crates/kernel-core/src/engine.rs
+  s_ebdbabe3e659c2::t_3b6206c4979704 281-284,295
+  s_ebdbabe3e659c2::t_5b644571103f83 977-979
+  s_ebdbabe3e659c2::t_bc5090151aaf43 202-206
+  s_ebdbabe3e659c2::t_33ba3d311302a1 391
+  s_ebdbabe3e659c2::t_0e4b893b820520 478
+crates/memory/tests/embeddings_switch.rs
+  s_ebdbabe3e659c2::t_250f11cbced49e 20-31
+  s_ebdbabe3e659c2::t_df543fb5601efe 1-19,32-107
+apps/desktop/src-tauri/Cargo.toml
+  s_ebdbabe3e659c2::t_56d032322604e3 35
+  s_ebdbabe3e659c2::t_a06e2926438c3a 17-19
+crates/storage/src/lib.rs
+  s_ebdbabe3e659c2::t_250f11cbced49e 22
+  s_ebdbabe3e659c2::t_335915bc0f08f8 293
+  s_ebdbabe3e659c2::t_19f33f563d8741 347
+  s_ebdbabe3e659c2::t_d1189f214b9004 221,226-235
+docs/evidence/phase8-naming-check.log
+  s_ebdbabe3e659c2::t_e60d56787b5c56 1-8
+docs/architecture.md
+  s_ebdbabe3e659c2::t_5098110d5f5fd3 143-149
+crates/a2a/src/server.rs
+  s_ebdbabe3e659c2::t_af1654c4020499 184
+crates/memory/Cargo.toml
+  s_ebdbabe3e659c2::t_31f7c7addfd063 15-20
+docs/observability.md
+  s_ebdbabe3e659c2::t_cc98fea35a4678 24-52
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_cac55798f03820 517-519,526-531,537
+  s_ebdbabe3e659c2::t_0068d5b24aa14b 253
+  s_ebdbabe3e659c2::t_d94683c8d7e642 569-575
+  s_ebdbabe3e659c2::t_b4ac28abb73c95 624-625
+  s_ebdbabe3e659c2::t_cfbf29f24cedd5 564-565
+  s_ebdbabe3e659c2::t_9194e4b53b5601 32-51
+  s_ebdbabe3e659c2::t_9e490b688f4852 20-31,52-151,153,161-198,205,207-243
+  s_ebdbabe3e659c2::t_9612a4faf46fee 199-204,206
+  s_ebdbabe3e659c2::t_250f11cbced49e 520-525
+  s_ebdbabe3e659c2::t_6ea048b6db67bf 595-607
+apps/desktop/src-tauri/src/lib.rs
+  s_ebdbabe3e659c2::t_034c5041b88846 101-103,108-118,122-123,130-140
+  s_ebdbabe3e659c2::t_a909d417fb5ad5 19
+  s_ebdbabe3e659c2::t_3f389bc6e1e61b 20
+  s_ebdbabe3e659c2::t_a280858301435d 141
+crates/kernel-core/src/lib.rs
+  s_ebdbabe3e659c2::t_639a808a3f19eb 14
+  s_ebdbabe3e659c2::t_250f11cbced49e 24
+crates/kernel-core/src/cost.rs
+  s_ebdbabe3e659c2::t_250f11cbced49e 47,121-124,132-135,143-146
+  s_ebdbabe3e659c2::t_18ba8ab73e3a31 1-46,48-120,125-131,136-142,147-166
+crates/daemon/src/config.rs
+  s_ebdbabe3e659c2::t_9ebe6b1e484cbb 22-33
+  s_ebdbabe3e659c2::t_aff51dec796adc 34-49
+docs/evidence/phase8-gates.log
+  s_ebdbabe3e659c2::t_c7d5d8dd736558 3,17,30,42,54,66,74,81,98,115,129,151,163-164
+  s_ebdbabe3e659c2::t_250f11cbced49e 169-176
+  s_ebdbabe3e659c2::t_aa1841b0c53b99 1-2,4-16,18-29,31-41,43-53,55-65,67-73,75-80,82-97,99-114,116-128,130-150,152-162,165-168
+docs/evidence/otel-metrics-logs-sample.log
+  s_ebdbabe3e659c2::t_77feb2b5738844 1-14
+crates/memory/src/embeddings.rs
+  s_ebdbabe3e659c2::t_5c886557fb7c36 1-162,169-180,183-189
+  s_ebdbabe3e659c2::t_250f11cbced49e 163-168
+  s_ebdbabe3e659c2::t_d230f7026b2d0e 181-182
+docs/evidence/cost-run-known.json
+  s_ebdbabe3e659c2::t_77feb2b5738844 1
+Cargo.lock
+  s_ebdbabe3e659c2::t_f8dd288b1b7d0e 124-146,281-282,321-329,339-348,355-364,583,596,672-677,798-803,1268-1326,1509-1510,1515,1663-1668,1683-1694,1950,2186,2192-2195,2198,2331-2339,2359,2368-2379,2390-2416,2423,2450-2458,2491-2513,2669-2684,3536-3544
+apps/desktop/src-tauri/Cargo.lock
+  s_ebdbabe3e659c2::t_f75e5bad5ed837 5-19,83,735,740,953-964,1476-1484,1490-1501,2047-2057,2108,2110,2116,2119,2144,2149,3209-3233,3753-3764,3771-3785,4708-4713
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "46e8267567a013c1c631b313a6ec1ce3acf4e715",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
