@@ -1,0 +1,74 @@
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_a7a202ebebf4ae 732-737,746-748
+  s_ebdbabe3e659c2::t_cdf350c147540b 686-707,710-711,720,722-728,738-745,749-751
+  s_ebdbabe3e659c2::t_14c1055ed3c38a 729-731
+crates/daemon/src/model_config.rs
+  s_ebdbabe3e659c2::t_465aab113ac66e 240-242
+  s_ebdbabe3e659c2::t_68bcb4617508ba 314-366,372-382,388-389
+  s_ebdbabe3e659c2::t_a7a202ebebf4ae 113-115,367-371,383-387
+  s_ebdbabe3e659c2::t_b22cf684ab4f9e 234-239,243-244
+  s_ebdbabe3e659c2::t_1c9f7a9e84dac9 107-112,116-128,134-136,140-145,152-154,157-176,178
+docs/evidence/phase11-gates.log
+  s_ebdbabe3e659c2::t_0dce8804579eb7 127-134
+  s_ebdbabe3e659c2::t_4385a9f4577796 1-126
+docs/adr/0018-security-hardening.md
+  s_ebdbabe3e659c2::t_86918f097b9cb5 1-88
+crates/api/Cargo.toml
+  s_ebdbabe3e659c2::t_f1783f85c5fe7b 25,28
+docs/architecture.md
+  s_ebdbabe3e659c2::t_2cd023f3e6b1df 209-222
+.gitignore
+  s_ebdbabe3e659c2::t_6a5b05cac27938 37-40
+docs/evidence/security-surface.log
+  s_ebdbabe3e659c2::t_5167b7336726b9 1-7
+crates/api/src/lib.rs
+  s_ebdbabe3e659c2::t_abb7505eff0d0b 361,370-384
+  s_ebdbabe3e659c2::t_24c808a087e7f8 77-117,121,142-150,154
+  s_ebdbabe3e659c2::t_d24ec5d1654ad2 319-328,330-335,337-345
+  s_ebdbabe3e659c2::t_f9f02b79f43d7d 260-262,268,271-273
+  s_ebdbabe3e659c2::t_2d821c4e05e23d 203-221,224
+  s_ebdbabe3e659c2::t_a7a202ebebf4ae 263-267,665-667
+  s_ebdbabe3e659c2::t_e43e174973bd76 656
+  s_ebdbabe3e659c2::t_e647b347839e64 799-803
+  s_ebdbabe3e659c2::t_b967886c8222c2 679,692-693,707,715
+  s_ebdbabe3e659c2::t_4c5119a4c11d51 362-364,402-405,416-419,443-446,472-475,487-490,506-509,526-529,558-561,570-573,585-588,600-603,657-659
+  s_ebdbabe3e659c2::t_176b5093fe25a9 202
+config.example.toml
+  s_ebdbabe3e659c2::t_e1f9a58bdf4e41 26-36
+crates/api/tests/api_test.rs
+  s_ebdbabe3e659c2::t_a7a202ebebf4ae 340-342,398-399
+  s_ebdbabe3e659c2::t_bc17b7a3b4eb25 292-339,343-397,400-407
+crates/daemon/src/config.rs
+  s_ebdbabe3e659c2::t_4d77ca73663735 38-75
+scripts/smoke-security.sh
+  s_ebdbabe3e659c2::t_f749e6abb0c1dc 1-41,43-70,76-147
+  s_ebdbabe3e659c2::t_b3c32cb3713d06 42
+  s_ebdbabe3e659c2::t_e69f22e88c123c 71-75
+crates/daemon/Cargo.toml
+  s_ebdbabe3e659c2::t_cc5617116eb879 32
+  s_ebdbabe3e659c2::t_4a84ab310fc310 33-34
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_edb9139cbc015b 996-1062
+Cargo.lock
+  s_ebdbabe3e659c2::t_0376be03acdba0 15,88-89,91,103-111,187,213-234,301-306,375,619-620,631,842-851,1007-1025,1125,1354,1446,1557,1588,1754,1796,1823,1889,2013,2036,2077-2087,2094,2109-2118,2129-2137,2344,2371,2842,2906-2914,2921-2932,3029-3040,3050,3237-3254,3268,3307-3312,3472,3608
+docs/evidence/phase11-naming-check.log
+  s_ebdbabe3e659c2::t_e03ed9b55f68bb 1-6
+apps/desktop/src-tauri/Cargo.lock
+  s_ebdbabe3e659c2::t_ce0192e791b931 84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "c0fb5b78803fa59ce81a5a12985a001865bf7565",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
