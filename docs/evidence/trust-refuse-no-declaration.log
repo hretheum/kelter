@@ -1,3 +1,2 @@
-[2m2026-07-18T23:41:12.932132Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m policy engine: local:qwen2.5-0.5b-instruct
-[2m2026-07-18T23:41:12.932867Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m registry: extension 'optin' capability=Tools trust=SubprocessUnsandboxed permissions=Permissions { network: false, workspace_write: false }
-Error: extension 'optin' opted into subprocess-unsandboxed, but the operator has not allowed it. Add it to [trust] allow_unsandboxed_subprocess to run it — this is an explicit trust decision and does NOT sandbox the subprocess (ADR 0012).
+[2m2026-07-19T10:48:35.217914Z[0m [32m INFO[0m [2mkelter[0m[2m:[0m policy engine: local:qwen2.5-0.5b-instruct
+Error: extension manifest error: extension 'notrust' is a subprocess and did not declare a trust mode — refusing to load (sandbox-by-default). Either use a sandboxed mechanism (mechanism = "wasm") or, to run it as an untrusted subprocess with OS-level egress, declare `trust = "subprocess-unsandboxed"` AND have the operator allow it
