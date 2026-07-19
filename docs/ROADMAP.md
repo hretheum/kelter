@@ -27,8 +27,18 @@ swappable policy engine, and it stays reliable even on small local models.
 - **Phase 6 — enforced trust posture (sandbox-by-default).** The registry
   loads sandboxed by default; running an unsandboxed subprocess needs an
   explicit opt-in (a manifest flag plus an operator allowance) and is
-  journaled — governance and transparency, not containment (ADR 0012).
-  Planned.
+  journaled — governance and transparency, not containment (ADR 0012). Done.
+- **Phase 7 — A2A inbound & interop.** Kelter as an A2A server: Agent Card,
+  `message/send` → durable run, `tasks/get`, auth; proven with a Kelter↔Kelter
+  loop (ADR 0013). Queued.
+- **Phase 8 — hardening sweep & packaging (C).** Close accumulated deferrals
+  (desktop → durable store, cost in dollars, OTel metrics/logs, embeddings
+  switch, ledger-dedupe scaling, auth) plus packaging scaffolding (unsigned
+  `.dmg` + signing hooks). A sweep of independent items — may land partially;
+  real signing (Developer ID cert) and K12 deploy stay human-blocked. Queued.
+- **Phase 9 — data-lifecycle & log hardening.** Store retention/pruning (the
+  unbounded-SQLite gap), a deployment-level log-size cap (Quadlet), and a
+  secrets-in-logs redaction pass. Queued (after Phase 8).
 
 ## Phase 4 — the governed extension platform (delivered)
 
@@ -114,11 +124,11 @@ will be built. In rough priority.
   also a developer-facing story worth documenting as its own selling point:
   bring your own logic in any language, sandboxed by construction, and the
   kernel decides what it may touch.
-- **B · A2A inbound and interop.** Kelter as an A2A server — exposing its
+- **B · A2A inbound and interop** — *now Phase 7 (queued).* Kelter as an A2A server — exposing its
   agents (and plans) via Agent Cards so other systems can delegate to Kelter
   and inherit its governance and durability. Completes the A2A story, out and
   in; more completeness than new wedge.
-- **C · Hardening and real deployment.** Close the accumulated honest deferrals
+- **C · Hardening and real deployment** — *now Phase 8 (queued); the store-retention / log-size / redaction slice split out to Phase 9.* Close the accumulated honest deferrals
   — desktop on the durable store, cost in dollars, OpenTelemetry metrics and
   logs, the embeddings retrieval switch, ledger-dedupe scaling, auth — plus
   packaging (above) and deployment on real rootless-podman hardware. Necessary
