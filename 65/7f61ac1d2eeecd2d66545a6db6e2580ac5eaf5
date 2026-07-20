@@ -1,0 +1,132 @@
+crates/daemon/src/config.rs
+  s_ebdbabe3e659c2::t_ab2c11b569ba92 104-124
+  s_ebdbabe3e659c2::t_446364d455896b 44-45
+apps/web-ui/src/features/runs/FanoutLanes.tsx
+  s_ebdbabe3e659c2::t_bc78e244fc8285 1-78
+docs/evidence/multiagent-fanout.log
+  s_ebdbabe3e659c2::t_9d19591d1cb6a8 1-215
+  s_ebdbabe3e659c2::t_41510c46627b9d 216-399
+apps/web-ui/design/03-screens/R-3-live-timeline.md
+  s_ebdbabe3e659c2::t_422079766a79c8 86-209
+crates/kernel-core/src/engine.rs
+  s_ebdbabe3e659c2::t_dca5ba7bc41d7a 1151
+  s_ebdbabe3e659c2::t_4d310c312bbdd9 1232
+  s_ebdbabe3e659c2::t_549931803e8835 1213
+  s_ebdbabe3e659c2::t_9fe2842ee79575 382-383,395-420
+  s_ebdbabe3e659c2::t_8831050e752e5b 1632-1651
+  s_ebdbabe3e659c2::t_074a8740c80b4c 108-116
+  s_ebdbabe3e659c2::t_80efa377087dec 9
+  s_ebdbabe3e659c2::t_a44fed63f6298d 167-170
+  s_ebdbabe3e659c2::t_25a52e2b9c4945 1359
+  s_ebdbabe3e659c2::t_1ddf4b95541cb0 838-883
+  s_ebdbabe3e659c2::t_e39664740c134b 1934,1946-1961,1964-1965,1967-1989,1991-2008,2010-2025,2027-2028,2030-2046,2048-2097,2100-2102,2104-2121,2123-2139,2144,2149-2151,2155-2156,2160-2161
+  s_ebdbabe3e659c2::t_e0b22f4f9bcaf0 297-300,306-307,314-315
+  s_ebdbabe3e659c2::t_6a0eba2340c48a 246-258
+  s_ebdbabe3e659c2::t_7cc605783d0741 1281,1289-1331
+  s_ebdbabe3e659c2::t_c139a495413415 1723
+  s_ebdbabe3e659c2::t_9872c32a38902d 687-701,717-718
+  s_ebdbabe3e659c2::t_311017829e006f 2203,2205-2217,2219-2273,2275-2303,2305-2332,2334,2337,2339-2340,2344-2350,2352-2373,2375,2377-2393,2395,2397-2401,2403,2405-2424
+  s_ebdbabe3e659c2::t_dcf3d62f8ae3ab 1452
+  s_ebdbabe3e659c2::t_685a4bb4e7240d 1558
+  s_ebdbabe3e659c2::t_6ab23d7d91fa26 2026,2047
+  s_ebdbabe3e659c2::t_3e98da9ca383dc 1332-1333
+apps/desktop/src-tauri/tests/durable_store.rs
+  s_ebdbabe3e659c2::t_587e6f2a57ecdf 42-43
+crates/api/src/lib.rs
+  s_ebdbabe3e659c2::t_9fc35a8b21c20b 1093-1102
+crates/daemon/tests/multiagent_durable_resume_test.rs
+  s_ebdbabe3e659c2::t_34bacc3eca63f7 1-188,193-206,208-312
+  s_ebdbabe3e659c2::t_6ab23d7d91fa26 189-192,207
+crates/a2a/src/server.rs
+  s_ebdbabe3e659c2::t_45a82ea70f1889 111-134
+  s_ebdbabe3e659c2::t_e57a2a3e508030 215-216
+crates/kernel-core/src/lib.rs
+  s_ebdbabe3e659c2::t_99c19dccb7ca86 25-26,30-32
+apps/web-ui/src/features/runs/StepCard.tsx
+  s_ebdbabe3e659c2::t_cfdf4c121489a4 6,11-21,25,31-37,49
+  s_ebdbabe3e659c2::t_62a2bebc931d5e 65-72,82-85
+docs/adr/0022-multiagent-parallel-fanout-governed-delegation.md
+  s_ebdbabe3e659c2::t_aaa50c90376a88 1-265
+crates/a2a/src/lib.rs
+  s_ebdbabe3e659c2::t_be615ed6ddd35d 222-230
+  s_ebdbabe3e659c2::t_6ab23d7d91fa26 372
+  s_ebdbabe3e659c2::t_cc55b7ff48f718 529-552,564
+  s_ebdbabe3e659c2::t_51f45dcf108898 33
+  s_ebdbabe3e659c2::t_49057eb119925e 349-370
+  s_ebdbabe3e659c2::t_1cc3ddee198068 619-625
+crates/kernel-core/tests/plan_test.rs
+  s_ebdbabe3e659c2::t_5e54c17d3da0ef 122-129
+apps/web-ui/src/lib/api.ts
+  s_ebdbabe3e659c2::t_9b22f2651191e6 122-124,126,133
+crates/kernel-core/Cargo.toml
+  s_ebdbabe3e659c2::t_b8d3322fcdbf79 18
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_3e54115bc7fd49 801-804
+crates/a2a/tests/a2a_client_test.rs
+  s_ebdbabe3e659c2::t_cb682327c9c383 258-334
+  s_ebdbabe3e659c2::t_6db6b01ff81c06 16-17,33-35
+  s_ebdbabe3e659c2::t_a4309e55723313 62-63
+  s_ebdbabe3e659c2::t_1a88fcb89107ae 257
+apps/web-ui/src/features/runs/MasterList.tsx
+  s_ebdbabe3e659c2::t_ce61bd476f042d 8,17-36
+  s_ebdbabe3e659c2::t_700f6c7c26b104 153
+crates/kernel-core/tests/parallel_plan_test.rs
+  s_ebdbabe3e659c2::t_f966ea38de4e9a 402,405
+  s_ebdbabe3e659c2::t_6ab23d7d91fa26 72-75,270-272,393-399
+  s_ebdbabe3e659c2::t_f0cc6b2fc3e978 158
+  s_ebdbabe3e659c2::t_f69b19d8164b22 1-71,76-157,159-185,189-193,199,203-269,273-392,400-401,403-404,406-462
+  s_ebdbabe3e659c2::t_df7151ac0a9af3 186-188
+  s_ebdbabe3e659c2::t_af8dc9d852201f 194-198,200-202
+crates/kernel-core/src/store.rs
+  s_ebdbabe3e659c2::t_96632af3e5e243 222-223
+apps/web-ui/src/features/runs/Timeline.tsx
+  s_ebdbabe3e659c2::t_ec1d38d1e058b4 187,190
+  s_ebdbabe3e659c2::t_9939c8010b410d 15
+  s_ebdbabe3e659c2::t_2a59d42daf9086 25-28
+docs/ROADMAP.md
+  s_ebdbabe3e659c2::t_21e6671a38bc90 109-132
+crates/kernel-core/src/action.rs
+  s_ebdbabe3e659c2::t_6fc29fd96ce159 14-20
+  s_ebdbabe3e659c2::t_af4d0127f51bab 91-101
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_ecc6f366390d82 1317-1389
+Cargo.toml
+  s_ebdbabe3e659c2::t_54b14c93f6098f 41
+apps/web-ui/src/lib/events.ts
+  s_ebdbabe3e659c2::t_f7699526baad20 102,111,118
+  s_ebdbabe3e659c2::t_d2b53915048986 84-85
+  s_ebdbabe3e659c2::t_9dfc872b59d4f0 29-37
+  s_ebdbabe3e659c2::t_601ffa21d8db00 189-240
+crates/storage/src/lib.rs
+  s_ebdbabe3e659c2::t_1cff7ec6980f84 520-521
+crates/skills/examples/model-activation-demo.rs
+  s_ebdbabe3e659c2::t_b1766b9cc8bac1 155,228
+Cargo.lock
+  s_ebdbabe3e659c2::t_42e22057ef504d 1470
+docs/multi-agent-expansion-plan.md
+  s_3f46a7f8a2bfd5::t_2880a47757dfd0 1-69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "657f61ac1d2eeecd2d66545a6db6e2580ac5eaf5",
+  "prompts": {},
+  "sessions": {
+    "s_3f46a7f8a2bfd5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-abackend-ask-impl-7ebf781b450a246c",
+        "model": "unknown"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    },
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
