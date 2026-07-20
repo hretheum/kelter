@@ -1,0 +1,73 @@
+docs/adr/0024-wasm-memory-backend.md
+  s_7ac77bc07b52a5::t_596677b435a3d5 1-135
+crates/memory/Cargo.toml
+  s_7ac77bc07b52a5::t_e44324b4d8aaae 10
+examples/wasm-tools/memstore-wasm/src/lib.rs
+  s_7ac77bc07b52a5::t_12e229cd50911a 1-121
+examples/wasm-tools/poisonmem/Cargo.toml
+  s_7ac77bc07b52a5::t_8b0e210b07f49f 1-21
+examples/wasm-tools/poisonmem/src/lib.rs
+  s_7ac77bc07b52a5::t_8db6b7357ee6f2 1-42
+examples/extensions/memstore-wasm/kelter-extension.toml
+  s_7ac77bc07b52a5::t_35ddd1387ea032 1-22
+crates/wasmhost/src/lib.rs
+  s_7ac77bc07b52a5::t_618849e7486838 105-106,116
+  s_7ac77bc07b52a5::t_852dca15f27753 412-416
+  s_7ac77bc07b52a5::t_eb463a44e33299 107
+  s_7ac77bc07b52a5::t_b0c604a8b86d6a 238-411,417-485
+crates/mcp/src/extensions.rs
+  s_7ac77bc07b52a5::t_225665fd40ca62 347-362,364-368
+  s_7ac77bc07b52a5::t_c4724b21a17528 314-316,320
+  s_7ac77bc07b52a5::t_bf374f484c3e68 256,259-265
+  s_7ac77bc07b52a5::t_f6f57857583d39 559
+  s_7ac77bc07b52a5::t_8ba99d0112c2a2 87-91
+  s_7ac77bc07b52a5::t_8f0df30d712d92 653-655,660-710
+  s_7ac77bc07b52a5::t_5740ac1886f68c 198-200
+  s_7ac77bc07b52a5::t_852dca15f27753 363
+crates/wasmhost/tests/wasm_memory_test.rs
+  s_7ac77bc07b52a5::t_852dca15f27753 24-26,98-101
+  s_7ac77bc07b52a5::t_538eb70121f647 137-141
+  s_7ac77bc07b52a5::t_2103fecce2bace 1-23,27-97,102-136,142-283
+crates/memory/src/lib.rs
+  s_7ac77bc07b52a5::t_3f699e2168446e 103-133
+docs/evidence/wasm-memory.log
+  s_7ac77bc07b52a5::t_ff7f07d22f9a2a 1-39
+crates/wasmhost/Cargo.toml
+  s_7ac77bc07b52a5::t_9ba280947bfe22 10
+scripts/build-wasm-demo.sh
+  s_7ac77bc07b52a5::t_d68ac26b289137 25-29
+examples/wasm-tools/memstore-wasm/Cargo.toml
+  s_7ac77bc07b52a5::t_f3c07451ba8d74 1-21
+docs/BUILD-EVIDENCE.md
+  s_7ac77bc07b52a5::t_9ab02a6fc435d5 1500-1561
+crates/mcp/src/memory_client.rs
+  s_7ac77bc07b52a5::t_d5dc15122f89da 22-24,26
+crates/daemon/src/main.rs
+  s_7ac77bc07b52a5::t_8effefee12e977 441-443
+  s_7ac77bc07b52a5::t_852dca15f27753 600-605
+  s_7ac77bc07b52a5::t_e4ec5eb816415d 707-713,719-729
+  s_7ac77bc07b52a5::t_f461cf3be93753 568-573,577,584-599,606-607
+  s_7ac77bc07b52a5::t_e8e3c9aa080032 608
+Cargo.lock
+  s_7ac77bc07b52a5::t_5c43968a33da75 1617,3566
+examples/wasm-tools/memstore-wasm/Cargo.lock
+  s_7ac77bc07b52a5::t_d8c3f15347b607 1-105
+examples/wasm-tools/poisonmem/Cargo.lock
+  s_7ac77bc07b52a5::t_50f3fc88379d63 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ac7124483d419060a80d67073bf24dd46d232e05",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
