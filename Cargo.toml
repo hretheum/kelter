@@ -11,6 +11,7 @@ members = [
     "crates/wasmhost",
     "crates/daemon",
     "crates/model-config",
+    "crates/skills",
 ]
 exclude = ["apps/desktop/src-tauri", "examples/wasm-tools/wordcount", "examples/wasm-tools/netpeek"]
 # The desktop app (apps/desktop/src-tauri) is intentionally excluded from the
@@ -31,6 +32,7 @@ mcp = { path = "crates/mcp" }
 memory = { path = "crates/memory" }
 api = { path = "crates/api" }
 model-config = { path = "crates/model-config" }
+skills = { path = "crates/skills" }
 storage = { path = "crates/storage" }
 a2a = { path = "crates/a2a" }
 wasmhost = { path = "crates/wasmhost" }
@@ -50,4 +52,6 @@ rust-embed = "8"
 uuid = { version = "1", features = ["v4", "serde"] }
 rand = "0.9"
 toml = "0.8"
+flate2 = "1"
+tar = "0.4"
 anyhow = "1"

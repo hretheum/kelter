@@ -1173,3 +1173,39 @@ disk (no recompile in the dev loop).
 
 **Human tasks left:** the §7.1 five-second test (3 users) on the built app;
 push/release at the human gate.
+
+## Skills subsystem — advisory procedural knowledge (ADR 0019)
+
+Adds the OpenSkills / Anthropic `SKILL.md` format to Kelter so **anyone can
+add any skill** — held to the architectural line that makes that safe: a
+skill is **advisory, never authorizing**, decomposed onto two existing planes
+with no new intermediary in propose→validate→execute.
+
+- **Knowledge plane:** the new `crates/skills` ships `SkillContextOracle`, a
+  `PolicyOracle` decorator that appends skill context to
+  `PolicyContext.guidance` and passes the kernel's `ActionSchema` through
+  untouched — skill content structurally cannot widen the action space.
+  Progressive disclosure is enforced and budgeted (catalog name+description
+  always, ≤8 KiB; full instructions only on activation, ≤16 KiB/skill,
+  ≤48 KiB total). Wraps the `SwappableOracle`, so model hot-swaps keep it.
+- **Capability plane:** bundled `scripts/` / `kelter-extension.toml` are
+  surfaced as *candidates* only; they reach the action space exclusively via
+  `[tools] extension_dirs` + the ADR-0012 sandbox-by-default gate (unchanged
+  two-man opt-in). Install/activation never executes anything.
+- **Open install:** `kelter skill add <dir|bundle|https://…tar.gz>` +
+  `list/remove/activate/deactivate`; defensive minimal frontmatter parser
+  (no YAML engine; hard caps; hostile names jailed; frontmatter
+  trust/provenance claims ignored). Subsystem-owned provenance sidecar,
+  `untrusted` by default, no elevation API.
+
+**Proof (full detail: `docs/evidence/skills-subsystem.log`):** the key
+invariant test has an "obedient" oracle propose exactly what the active
+skill's instructions urge — `wipe_disk` is proposed (so injection provably
+happened) and the kernel **rejects** it; inactive bodies never reach the
+oracle; a bundled marker-writing script does not run across
+install/activate/run; **265 skillforge-ECC skills** install with zero
+special-casing (all `untrusted`, catalog held at budget), plus URL-tarball
+install; a real daemon run (qwen-0.5b) completed with the catalog+active
+instructions injected per model call (`catalog_bytes=8059`,
+`active_instruction_bytes=93`). Gates: 151 workspace tests (9 new), clippy
+`-D warnings` clean, fmt clean.

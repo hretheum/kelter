@@ -39,6 +39,37 @@ pub struct Config {
     pub auth: AuthConfig,
     #[serde(default)]
     pub tls: Option<TlsConfig>,
+    #[serde(default)]
+    pub skills: SkillsConfig,
+}
+
+/// Skills (ADR 0019): advisory procedural knowledge in the OpenSkills /
+/// SKILL.md format. Skill instructions enter the ORACLE'S CONTEXT only
+/// (progressive disclosure); bundled scripts/tools reach the action space
+/// exclusively through `[tools] extension_dirs` + the `[trust]` gate —
+/// installing or activating a skill never executes or authorizes anything.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SkillsConfig {
+    /// Master switch: absent/true → the registry loads and the catalog
+    /// (name+description) is visible to the oracle.
+    pub enabled: bool,
+    /// The installed-skills directory (managed by `kelter skill …`).
+    pub dir: String,
+    /// Skills to activate at startup (full instructions into context).
+    /// Runtime (de)activation via `kelter skill activate/deactivate` also
+    /// persists in the skills dir and wins over this seed.
+    pub active: Vec<String>,
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            dir: "./skills".into(),
+            active: Vec::new(),
+        }
+    }
 }
 
 /// Security surface configuration (Phase 11, ADR 0018). All additive — the

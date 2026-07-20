@@ -262,6 +262,111 @@ fn init_observability(
     ))
 }
 
+/// The `skill` subcommand family (ADR 0019). Everything here is registry
+/// bookkeeping: install/list/remove/activate. No skill content is executed,
+/// and nothing touches the action space — capability candidates (scripts/,
+/// kelter-extension.toml) are only REPORTED, with the extension-registry
+/// route named explicitly.
+async fn run_skill_command(cfg: &Config, args: &[String]) -> anyhow::Result<()> {
+    let reg = skills::SkillRegistry::open(&cfg.skills.dir)?;
+    let sub = args.first().map(String::as_str).unwrap_or("list");
+    match (sub, args.get(1)) {
+        ("add", Some(src)) => {
+            if src.starts_with("http://") || src.starts_with("https://") {
+                let report = reg.install_from_url(src).await?;
+                println!(
+                    "installed {} skill(s) from {src} (provenance: url, trust: untrusted)",
+                    report.installed.len()
+                );
+                for (dir, why) in &report.skipped {
+                    println!("  skipped {dir}: {why}");
+                }
+            } else {
+                let path = std::path::Path::new(src);
+                if path.join("SKILL.md").is_file() {
+                    let m = reg.install_from_dir(path)?;
+                    println!("installed '{}' (trust: {})", m.name, m.provenance.trust);
+                } else {
+                    let report = reg.install_bundle(path)?;
+                    println!(
+                        "installed {} skill(s) from bundle {src} (trust: untrusted)",
+                        report.installed.len()
+                    );
+                    for (dir, why) in &report.skipped {
+                        println!("  skipped {dir}: {why}");
+                    }
+                }
+            }
+        }
+        ("remove", Some(name)) => {
+            reg.remove(name)?;
+            println!("removed '{name}'");
+        }
+        ("activate", Some(name)) => {
+            reg.activate(name)?;
+            println!(
+                "activated '{name}' — its instructions now enter the model's context. \
+                 Activation adds knowledge, not capability: every proposed action is \
+                 still validated by the kernel."
+            );
+        }
+        ("deactivate", Some(name)) => {
+            reg.deactivate(name)?;
+            println!("deactivated '{name}'");
+        }
+        ("list", _) => {
+            let active = reg.active_names();
+            let skills_list = reg.list();
+            if skills_list.is_empty() {
+                println!("no skills installed (dir: {})", cfg.skills.dir);
+            }
+            for s in skills_list {
+                let mark = if active.contains(&s.name) { "*" } else { " " };
+                let mut flags = Vec::new();
+                if s.has_scripts {
+                    flags.push(
+                        "scripts: candidate (inert — expose via [tools] extension_dirs + [trust])",
+                    );
+                }
+                if s.has_extension_manifest {
+                    flags.push("extension manifest: candidate for extension_dirs");
+                }
+                println!(
+                    "{mark} {}  [{}, {}]  {}{}",
+                    s.name,
+                    s.provenance.trust,
+                    s.provenance.source_kind,
+                    truncate_line(&s.description, 80),
+                    if flags.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\n     {}", flags.join("; "))
+                    }
+                );
+            }
+        }
+        _ => {
+            println!(
+                "usage: kelter [--config X] skill <add <dir|url> | list | remove <name> | \
+                 activate <name> | deactivate <name>>"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn truncate_line(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        let mut cut = max;
+        while cut > 0 && !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        format!("{}…", &s[..cut])
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config_path = std::env::args()
@@ -273,6 +378,14 @@ async fn main() -> anyhow::Result<()> {
     // `kelter --config X prune`: run store retention once and exit (ADR 0017).
     if std::env::args().skip(1).any(|a| a == "prune") {
         return run_prune(&cfg).await;
+    }
+
+    // `kelter --config X skill <add|list|remove|activate|deactivate> …`
+    // (ADR 0019): manage the advisory skill registry and exit. Pure
+    // file-level state — activation marks context injection, never execution.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(pos) = args.iter().position(|a| a == "skill") {
+        return run_skill_command(&cfg, &args[pos + 1..]).await;
     }
 
     let (otel_guard, kernel_metrics) = init_observability(&cfg.otel)?;
@@ -590,8 +703,38 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(InMemoryProvider::new())
     };
 
+    // Skills (ADR 0019): a PolicyOracle decorator that injects the skill
+    // catalog (always) and activated instructions (progressive disclosure)
+    // into the oracle's context — and passes the kernel's action schema
+    // through untouched, so skill content can never widen the action space.
+    // It wraps the SWAPPABLE oracle, so a runtime model swap keeps the layer.
+    let policy_oracle: Arc<dyn kernel_core::PolicyOracle> = if cfg.skills.enabled {
+        let skill_reg = Arc::new(
+            skills::SkillRegistry::open(&cfg.skills.dir)
+                .context("failed to open the skills registry")?,
+        );
+        for name in &cfg.skills.active {
+            if let Err(e) = skill_reg.activate(name) {
+                tracing::warn!("skills: cannot activate '{name}' from config: {e}");
+            }
+        }
+        let n = skill_reg.list().len();
+        if n > 0 {
+            tracing::info!(
+                "skills: {n} installed ({} active) — advisory context only (ADR 0019)",
+                skill_reg.active_names().len()
+            );
+        }
+        Arc::new(skills::SkillContextOracle::new(
+            swappable.clone(),
+            skill_reg,
+        ))
+    } else {
+        swappable.clone()
+    };
+
     let mut kernel_built = Kernel::new(
-        swappable.clone(),
+        policy_oracle,
         action_source,
         memory,
         store.clone(),

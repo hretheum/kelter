@@ -13,6 +13,7 @@ path = "src/main.rs"
 kernel-core.workspace = true
 policy.workspace = true
 model-config.workspace = true
+skills.workspace = true
 mcp.workspace = true
 memory.workspace = true
 api.workspace = true
