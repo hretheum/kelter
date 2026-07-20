@@ -240,6 +240,24 @@ reasoning and the one open contract question (the decide endpoint's exact
 path is an analogy from D-9's, not contract-fixed) — **since resolved: the
 backend built `POST /api/v1/runs/{id}/delegation` to match exactly.**
 
+### Interactive-delegation input pause (ADR 0026)
+
+A THIRD pause kind, distinct from the two above. Once a delegation is
+authorized and dialed, the remote agent can enter `input-required` — it needs
+more information to finish. The run pauses on `awaiting_delegation_input` with
+a "◉ Awaiting your input" header badge and an inline, non-modal
+`DelegationInputPrompt.tsx` that renders the remote's question (`prompt`) and a
+free-text answer box (⌘⏎ to send) instead of decision buttons. Submitting
+`POST /api/v1/runs/{id}/delegation-input {input}` resumes the run, which
+reconnects to the SAME remote task and forwards the answer — resolved by the
+paired `agent_delegation_input_provided` WS event (no local dismiss). This is
+NOT an authorization gate (the dial already happened); it is a mid-flight
+continuation, so the copy is "needs more input to continue", never
+"authorize". The plan-mode delegation-ask pause (ADR 0025) reuses the existing
+`DelegationAuthorizationPrompt` unchanged — it emits the same
+`agent_delegation_requested` event, only now also reachable from a plan node
+(carrying its `branch`).
+
 ### Governed resilience (retry/fallback/circuit-breaker), ADR 0023 P4
 
 Grounded directly against the shipped backend (`engine.rs`'s

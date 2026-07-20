@@ -48,6 +48,7 @@ export const STATUS_GLYPH: Record<string, string> = {
   running: "◐",
   awaiting_skill_decision: "◉",
   awaiting_delegation_decision: "◉",
+  awaiting_delegation_input: "◉",
   completed: "✓",
   failed: "✕",
   canceled: "⊘",

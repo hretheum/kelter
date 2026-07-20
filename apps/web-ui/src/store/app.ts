@@ -330,6 +330,26 @@ export async function decideDelegation(
   }
 }
 
+/* Interactive-delegation continuation (ADR 0026): the human's answer to a
+ * remote agent that paused asking for more input. The kernel emits its own
+ * RunEvent::AgentDelegationInputProvided, which clears pendingDelegationInput
+ * and flips the run back to running — so no manual axis update here. Mirrors
+ * decideDelegation's 404/405 capability-degrade. */
+export async function provideDelegationInput(runId: string, input: string): Promise<Run> {
+  try {
+    const run = await api<Run>(`/api/v1/runs/${runId}/delegation-input`, {
+      method: "POST",
+      body: JSON.stringify({ input }),
+    });
+    upsertRun(run);
+    return run;
+  } catch (e) {
+    const err = e as ApiError;
+    if (err.status === 404 || err.status === 405) set({ delegationAuthSupported: false });
+    throw e;
+  }
+}
+
 // ---- agent trust/policy management (ADR 0023 Part 3) -----------------------
 
 /* Shared 404/405 → capability-off handling, mirroring skillsApiCall. */

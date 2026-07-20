@@ -73,6 +73,7 @@ export type RunStatus =
   | "running"
   | "awaiting_skill_decision"
   | "awaiting_delegation_decision"
+  | "awaiting_delegation_input"
   | "completed"
   | "failed"
   | "canceled";
@@ -131,6 +132,18 @@ export interface PendingDelegationUi {
   branch: string | null;
 }
 
+/* An interactive-delegation input request (ADR 0026): an AUTHORIZED delegation
+ * whose remote task entered `input-required` and is paused for the human's
+ * continuation text. Distinct from PendingDelegationUi (which gates whether to
+ * dial at all) — here the dial already happened and the remote asked back. */
+export interface PendingDelegationInputUi {
+  step: number;
+  agent: string;
+  task_id: string;
+  prompt: string;
+  branch: string | null;
+}
+
 export type RunEvent =
   | { type: "created"; task: string; policy: string }
   | {
@@ -169,6 +182,14 @@ export type RunEvent =
       step: number;
       agent: string;
       decision: DelegationDecision;
+      principal: string;
+      branch: string | null;
+    }
+  | ({ type: "agent_delegation_input_required" } & PendingDelegationInputUi)
+  | {
+      type: "agent_delegation_input_provided";
+      step: number;
+      agent: string;
       principal: string;
       branch: string | null;
     };

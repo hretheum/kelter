@@ -40,6 +40,7 @@ const STATUS_CLS: Record<string, string> = {
   running: "text-primary",
   awaiting_skill_decision: "text-warning",
   awaiting_delegation_decision: "text-warning",
+  awaiting_delegation_input: "text-warning",
   completed: "text-success",
   failed: "text-danger",
   canceled: "text-muted-foreground",

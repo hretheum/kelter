@@ -15,6 +15,7 @@
 import type {
   AgentView,
   JournalEntry,
+  PendingDelegationInputUi,
   PendingDelegationUi,
   PendingSkillActivationUi,
   RunEvent,
@@ -63,6 +64,11 @@ export interface AxisState {
    * shape exactly; a paused delegation is a real authorization gate, not
    * advice, but the pause mechanics are identical. */
   pendingDelegation: PendingDelegationUi | null;
+  /* Set by agent_delegation_input_required, cleared by the paired
+   * agent_delegation_input_provided (ADR 0026) — an AUTHORIZED delegation
+   * whose remote asked for more input. Separate from pendingDelegation: the
+   * dial already happened, this is the remote's follow-up. */
+  pendingDelegationInput: PendingDelegationInputUi | null;
 }
 
 function newAxis(runId: string): AxisState {
@@ -76,6 +82,7 @@ function newAxis(runId: string): AxisState {
     lastSeq: -1,
     pendingSkillActivation: null,
     pendingDelegation: null,
+    pendingDelegationInput: null,
   };
 }
 
@@ -172,6 +179,20 @@ export function applyEvent(axis: AxisState, ev: RunEvent): void {
     case "agent_delegation_decided":
       if (axis.pendingDelegation?.agent === ev.agent) {
         axis.pendingDelegation = null;
+      }
+      break;
+    case "agent_delegation_input_required":
+      axis.pendingDelegationInput = {
+        step: ev.step,
+        agent: ev.agent,
+        task_id: ev.task_id,
+        prompt: ev.prompt,
+        branch: ev.branch,
+      };
+      break;
+    case "agent_delegation_input_provided":
+      if (axis.pendingDelegationInput?.agent === ev.agent) {
+        axis.pendingDelegationInput = null;
       }
       break;
   }

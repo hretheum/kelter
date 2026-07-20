@@ -13,6 +13,7 @@ import { cancelRun } from "@/store/app";
 import { useAppState, useAxis } from "@/store/hooks";
 import type { Run } from "@/lib/api";
 import { DelegationAuthorizationPrompt } from "./DelegationAuthorizationPrompt";
+import { DelegationInputPrompt } from "./DelegationInputPrompt";
 import { FanoutLanes } from "./FanoutLanes";
 import { SkillActivationPrompt } from "./SkillActivationPrompt";
 import { StepCard } from "./StepCard";
@@ -36,6 +37,7 @@ export function Timeline({ run }: { run: Run }) {
   const announced = useRef(new Set<string>());
   const prevPendingSkill = useRef<string | null>(null);
   const prevPendingDelegation = useRef<string | null>(null);
+  const prevPendingDelegationInput = useRef<string | null>(null);
 
   // Live elapsed timer while running.
   useEffect(() => {
@@ -53,7 +55,13 @@ export function Timeline({ run }: { run: Run }) {
     } else {
       setShowPill(true);
     }
-  }, [steps.length, axis.terminal, axis.pendingSkillActivation, axis.pendingDelegation]);
+  }, [
+    steps.length,
+    axis.terminal,
+    axis.pendingSkillActivation,
+    axis.pendingDelegation,
+    axis.pendingDelegationInput,
+  ]);
 
   // Milestone announcements only (design/04 §6): rejected + executed + terminal.
   useEffect(() => {
@@ -102,6 +110,20 @@ export function Timeline({ run }: { run: Run }) {
     prevPendingDelegation.current = cur;
   }, [axis.pendingDelegation]);
 
+  // Interactive-delegation input pause/resolve (ADR 0026): an authorized
+  // delegation's remote agent asked for more input — announced assertively
+  // like the pauses above (the run cannot progress until answered).
+  useEffect(() => {
+    const cur = axis.pendingDelegationInput?.agent ?? null;
+    const prev = prevPendingDelegationInput.current;
+    if (cur && cur !== prev) {
+      announce(`${cur} needs more input to continue — awaiting your answer`, "assertive");
+    } else if (!cur && prev) {
+      announce(`${prev} received your input`);
+    }
+    prevPendingDelegationInput.current = cur;
+  }, [axis.pendingDelegationInput]);
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -139,8 +161,12 @@ export function Timeline({ run }: { run: Run }) {
       <div className="border-b border-border px-4 py-3">
         <div className="flex items-start gap-3">
           <h2 className="flex-1 text-title3 font-semibold">{run.task}</h2>
-          {run.status === "awaiting_skill_decision" ||
-          run.status === "awaiting_delegation_decision" ? (
+          {run.status === "awaiting_delegation_input" ? (
+            <Badge tone="warning" className="shrink-0">
+              ◉ Awaiting your input
+            </Badge>
+          ) : run.status === "awaiting_skill_decision" ||
+            run.status === "awaiting_delegation_decision" ? (
             <Badge tone="warning" className="shrink-0">
               ◉ Awaiting your decision
             </Badge>
@@ -210,6 +236,9 @@ export function Timeline({ run }: { run: Run }) {
         )}
         {axis.pendingDelegation && (
           <DelegationAuthorizationPrompt runId={run.id} pending={axis.pendingDelegation} />
+        )}
+        {axis.pendingDelegationInput && (
+          <DelegationInputPrompt runId={run.id} pending={axis.pendingDelegationInput} />
         )}
         {axis.reflections > 0 && (
           <p className="text-caption2 text-muted-foreground">
