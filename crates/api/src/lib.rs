@@ -351,6 +351,10 @@ pub fn router_with_principals_and_skills_and_agents(
         // human's deny/allow_once/allow_always decision on a paused run's
         // pending `delegate_to_*` ask-request. Bearer.
         .route("/api/v1/runs/{id}/delegation", post(decide_delegation))
+        .route(
+            "/api/v1/runs/{id}/delegation-input",
+            post(provide_delegation_input),
+        )
         .route("/api/v1/tools", get(list_tools))
         .route("/api/v1/events", get(events_ws))
         // Model configuration (Phase 8.5): read/write the model config, test a
@@ -870,6 +874,55 @@ async fn decide_delegation(
     match state
         .kernel
         .decide_delegation(id, &req.agent, decision, &principal)
+        .await
+    {
+        Ok(run) => {
+            let kernel = state.kernel.clone();
+            let handles = state.run_handles.clone();
+            let mut map = state.run_handles.lock().await;
+            let handle = tokio::spawn(async move {
+                if let Err(e) = kernel.execute_run(id).await {
+                    tracing::error!(%id, "run execution error: {e}");
+                }
+                handles.lock().await.remove(&id);
+            });
+            map.insert(id, handle.abort_handle());
+            drop(map);
+            (StatusCode::ACCEPTED, Json(run)).into_response()
+        }
+        Err(kernel_core::KernelError::InvalidState(msg)) => {
+            (StatusCode::CONFLICT, msg).into_response()
+        }
+        Err(kernel_core::KernelError::Store(kernel_core::StoreError::NotFound(_))) => {
+            (StatusCode::NOT_FOUND, "run not found").into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// POST /api/v1/runs/{id}/delegation-input (ADR 0026): a human's continuation
+/// text for a run paused on an interactive delegation
+/// (`AwaitingDelegationInput`). Journals the input and re-spawns the run —
+/// the delegation reconnects to the remote task and sends the continuation.
+/// Bearer.
+#[derive(Deserialize)]
+struct DelegationInputRequest {
+    input: String,
+}
+
+async fn provide_delegation_input(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(req): Json<DelegationInputRequest>,
+) -> Response {
+    let principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    match state
+        .kernel
+        .provide_delegation_input(id, &req.input, &principal)
         .await
     {
         Ok(run) => {

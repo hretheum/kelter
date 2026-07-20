@@ -54,6 +54,10 @@ pub fn state_for(status: RunStatus) -> &'static str {
         // ADR 0023: paused awaiting a human's delegation-authorization
         // decision — the same canonical state fits for the same reason.
         RunStatus::AwaitingDelegationDecision => "TASK_STATE_INPUT_REQUIRED",
+        // ADR 0026: paused awaiting a human's continuation for an interactive
+        // outbound delegation — from an inbound caller's view this run still
+        // "needs additional input before it can continue".
+        RunStatus::AwaitingDelegationInput => "TASK_STATE_INPUT_REQUIRED",
     }
 }
 
@@ -216,6 +220,7 @@ mod tests {
             active_skills: Vec::new(),
             pending_skill_activation: None,
             pending_delegation: None,
+            pending_delegation_input: None,
             a2a_depth: 0,
             a2a_ancestry: Vec::new(),
         }

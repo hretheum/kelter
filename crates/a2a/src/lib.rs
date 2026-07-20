@@ -32,13 +32,18 @@ use serde_json::json;
 
 use kernel_core::{
     crash_point, ActionSchema, ActionSource, ActionSpec, CircuitCheck, ExecutionContext,
-    ExecutionError, Latitude, ValidatedAction, A2A_ANCESTRY_ARG, A2A_DEPTH_ARG,
-    IDEMPOTENCY_KEY_ARG,
+    ExecutionError, Latitude, ValidatedAction, A2A_ANCESTRY_ARG, A2A_CONTINUATION_INPUT_NOTE,
+    A2A_DEPTH_ARG, IDEMPOTENCY_KEY_ARG,
 };
 
 pub const A2A_VERSION: &str = "1.0";
 pub const WELL_KNOWN_CARD: &str = "/.well-known/agent-card.json";
 const NOTE_TASK_ID: &str = "a2a_task_id";
+/// Set the moment a continuation message is dispatched to a paused remote task
+/// (ADR 0026), so a resume after the marker is journaled RE-POLLS rather than
+/// re-sending — the same at-most-reconnect durability the initial send's
+/// `NOTE_TASK_ID` provides.
+const NOTE_CONTINUATION_SENT: &str = "a2a_continuation_sent";
 
 pub mod gate;
 pub mod registry;
@@ -442,6 +447,22 @@ impl A2aClient {
         let result = self.rpc("GetTask", json!({ "id": id })).await?;
         self.parse_task(result)
     }
+
+    /// Continue an existing remote task that entered `input-required` (ADR
+    /// 0026): a `SendMessage` carrying `taskId` so the peer routes it to the
+    /// paused task rather than creating a new one. The reply is polled via
+    /// `get_task` afterwards, so the return here only reports the send.
+    pub async fn send_continuation(&self, task_id: &str, text: &str) -> Result<(), A2aError> {
+        let message = json!({
+            "messageId": uuid::Uuid::new_v4().to_string(),
+            "role": "ROLE_USER",
+            "parts": [{"text": text}],
+            "taskId": task_id,
+        });
+        self.rpc("SendMessage", json!({ "message": message }))
+            .await?;
+        Ok(())
+    }
 }
 
 pub enum SendOutcome {
@@ -576,15 +597,18 @@ impl A2aActionSource {
             if is_terminal(&task.status.state) {
                 return Ok(task);
             }
-            if matches!(
-                task.status.state.as_str(),
-                "TASK_STATE_INPUT_REQUIRED" | "TASK_STATE_AUTH_REQUIRED"
-            ) {
+            // `input-required` is a STOP state, not terminal: the remote is
+            // waiting on more input (ADR 0026). Return the task and let
+            // `execute` decide — a fresh input-required becomes a durable
+            // pause; `auth-required` stays an error (out of scope).
+            if task.status.state == "TASK_STATE_INPUT_REQUIRED" {
+                return Ok(task);
+            }
+            if task.status.state == "TASK_STATE_AUTH_REQUIRED" {
                 return Err(A2aError::Protocol(
                     client.agent.clone(),
                     format!(
-                        "remote task entered '{}' — interactive continuation is not supported \
-                         in outbound delegation v1",
+                        "remote task entered '{}' — auth-required continuation is not supported",
                         task.status.state
                     ),
                 ));
@@ -683,11 +707,39 @@ impl ActionSource for A2aActionSource {
             // Durable reconnect: if this step already created a remote task
             // before a crash, reattach to it — never delegate twice.
             let task = if let Some(existing) = ctx.note(NOTE_TASK_ID).and_then(|v| v.as_str()) {
-                tracing::info!(
-                    agent = %client.agent_name(),
-                    task_id = %existing,
-                    "a2a: reconnecting to existing remote task from the journal — NOT re-delegating"
-                );
+                // Interactive continuation (ADR 0026): a human's continuation
+                // input for a paused input-required task. Send it ONCE — the
+                // NOTE_CONTINUATION_SENT marker (journaled right after the
+                // send) makes a later resume re-poll instead of re-sending,
+                // the same at-most-reconnect durability NOTE_TASK_ID gives the
+                // initial dial.
+                let continuation = ctx
+                    .note(A2A_CONTINUATION_INPUT_NOTE)
+                    .and_then(|v| v.as_str().map(String::from));
+                let already_sent = ctx.note(NOTE_CONTINUATION_SENT).is_some();
+                if let (Some(input), false) = (&continuation, already_sent) {
+                    tracing::info!(
+                        agent = %client.agent_name(),
+                        task_id = %existing,
+                        "a2a: sending human continuation to paused remote task (ADR 0026)"
+                    );
+                    client.send_continuation(existing, input).await?;
+                    ctx.record_note(NOTE_CONTINUATION_SENT, json!(true))
+                        .await
+                        .map_err(|e| {
+                            A2aError::Protocol(
+                                client.agent.clone(),
+                                format!("cannot journal continuation-sent marker: {e}"),
+                            )
+                        })?;
+                    crash_point("after_a2a_continuation", action.action());
+                } else {
+                    tracing::info!(
+                        agent = %client.agent_name(),
+                        task_id = %existing,
+                        "a2a: reconnecting to existing remote task from the journal — NOT re-delegating"
+                    );
+                }
                 self.poll_to_terminal(client, existing).await?
             } else {
                 match client.send_message(task_text, lineage).await? {
@@ -734,8 +786,14 @@ impl ActionSource for A2aActionSource {
         // this origin updates its consecutive-failure streak, regardless of
         // whether the caller was a fresh proposal, a kernel-initiated retry,
         // or a fallback attempt — the circuit tracks the AGENT, not who
-        // asked.
-        let succeeded = matches!(&outcome, Ok((_, state, _)) if state == "TASK_STATE_COMPLETED");
+        // asked. `input-required` is a HEALTHY outcome (ADR 0026): the agent
+        // responded and is waiting on us — it must NOT count as a failure and
+        // trip the circuit.
+        let succeeded = matches!(
+            &outcome,
+            Ok((_, state, _))
+                if state == "TASK_STATE_COMPLETED" || state == "TASK_STATE_INPUT_REQUIRED"
+        );
         self.record_circuit_outcome(client.allowed_origin(), succeeded);
 
         match outcome {
@@ -746,6 +804,32 @@ impl ActionSource for A2aActionSource {
                 "output": output,
                 "remote_ms": elapsed_ms,
             })),
+            // Interactive delegation (ADR 0026): the remote needs input. On a
+            // FRESH dial this is a durable pause (the engine catches
+            // DelegationInputRequired). If we ALREADY sent a continuation this
+            // step (the human answered once) and the remote asks AGAIN, that
+            // is multi-round — not supported in this slice, so fail cleanly
+            // instead of pausing forever.
+            Ok((task_id, state, prompt)) if state == "TASK_STATE_INPUT_REQUIRED" => {
+                if ctx.note(A2A_CONTINUATION_INPUT_NOTE).is_some() {
+                    Err(ExecutionError::Tool(format!(
+                        "remote agent '{}' task {task_id} asked for input again after a \
+                         continuation — multi-round interactive delegation is not supported \
+                         in this slice",
+                        client.agent_name()
+                    )))
+                } else {
+                    Err(ExecutionError::DelegationInputRequired {
+                        agent: action.action().to_string(),
+                        task_id,
+                        prompt: if prompt.is_empty() {
+                            format!("remote agent '{}' needs more input", client.agent_name())
+                        } else {
+                            prompt
+                        },
+                    })
+                }
+            }
             Ok((task_id, state, _)) => Err(ExecutionError::Tool(format!(
                 "remote agent '{}' task {task_id} ended in {state}",
                 client.agent_name()

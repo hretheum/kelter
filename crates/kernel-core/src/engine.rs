@@ -211,7 +211,26 @@ pub enum ExecutionError {
     Tool(String),
     #[error("tool substrate unavailable: {0}")]
     Substrate(String),
+    /// A delegation dialed a remote agent that entered `input-required`: the
+    /// remote needs more input before it can finish (ADR 0026, interactive
+    /// multi-turn delegation). This is NOT a failure — the engine catches it
+    /// and pauses the run durably (`AwaitingDelegationInput`) to collect the
+    /// human's continuation, then re-dispatches the SAME delegation, which
+    /// reconnects to the existing remote task and sends the continuation.
+    #[error("delegation to '{agent}' needs input: {prompt}")]
+    DelegationInputRequired {
+        agent: String,
+        task_id: String,
+        prompt: String,
+    },
 }
+
+/// Journal-note key under which a human's continuation input for a paused
+/// interactive delegation is recorded (ADR 0026). Defined here (not in the
+/// a2a crate) because the kernel's `provide_delegation_input` writes it and
+/// the a2a `ActionSource` reads it back on resume — one shared key, no magic
+/// string drift.
+pub const A2A_CONTINUATION_INPUT_NOTE: &str = "a2a.continuation_input";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -236,6 +255,15 @@ pub enum RunStatus {
     /// this status for the same reason as `AwaitingSkillDecision` — a
     /// restart must re-surface, never orphan, a paused delegation.
     AwaitingDelegationDecision,
+    /// Non-terminal, PAUSED (ADR 0026): an AUTHORIZED delegation dialed a
+    /// remote agent that entered `input-required` — the remote needs more
+    /// input to continue. The run waits for a human's continuation text, then
+    /// re-dispatches the same delegation (reconnecting to the existing remote
+    /// task). Distinct from `AwaitingDelegationDecision`: authorization
+    /// already happened (P2+P3 passed, the dial was made); this is the remote
+    /// asking a follow-up. `unfinished_runs` INCLUDES it — a restart
+    /// re-surfaces the input request, never orphans it.
+    AwaitingDelegationInput,
 }
 
 /// One executed step: which action ran, with what arguments, and how it went.
@@ -289,6 +317,10 @@ pub struct Run {
     /// `status == AwaitingDelegationDecision` (ADR 0023). `None` otherwise.
     #[serde(default)]
     pub pending_delegation: Option<PendingDelegation>,
+    /// The pending interactive-delegation input request this run is paused on,
+    /// when `status == AwaitingDelegationInput` (ADR 0026). `None` otherwise.
+    #[serde(default)]
+    pub pending_delegation_input: Option<PendingDelegationInput>,
     /// Chain depth reached by THIS run via inbound A2A delegation (ADR
     /// 0022): 0 for a run started directly (CLI/API/local), N for a run
     /// that arrived as the Nth hop of an A2A delegation chain. Fixed at run
@@ -339,6 +371,24 @@ pub struct PendingDelegation {
     pub description: String,
     pub provenance_source_kind: String,
     pub provenance_source: String,
+    pub requested_at: u64,
+}
+
+/// A durable snapshot of one pending interactive-delegation input request (ADR
+/// 0026): an authorized delegation's remote task entered `input-required` and
+/// the run is paused collecting the human's continuation. Carried on the run
+/// record (and journaled) so a restart re-renders the prompt without re-reading
+/// the journal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingDelegationInput {
+    pub step: u32,
+    /// The `delegate_to_*` action whose remote task is asking for input.
+    pub agent: String,
+    /// The remote A2A task id awaiting continuation — reconnected to (never
+    /// re-created) once the human responds.
+    pub task_id: String,
+    /// The remote's follow-up question / what it needs, surfaced to the human.
+    pub prompt: String,
     pub requested_at: u64,
 }
 
@@ -439,6 +489,23 @@ pub enum RunEvent {
         step: u32,
         agent: String,
         decision: AgentDelegationDecision,
+        principal: String,
+        branch: Option<String>,
+    },
+    /// An authorized delegation's remote task entered `input-required`; the
+    /// run is paused collecting the human's continuation (ADR 0026).
+    AgentDelegationInputRequired {
+        step: u32,
+        agent: String,
+        task_id: String,
+        prompt: String,
+        branch: Option<String>,
+    },
+    /// A human provided the continuation input; the run resumes and
+    /// re-dispatches the delegation, reconnecting to the remote task (ADR 0026).
+    AgentDelegationInputProvided {
+        step: u32,
+        agent: String,
         principal: String,
         branch: Option<String>,
     },
@@ -683,6 +750,42 @@ fn still_awaiting_delegation_decision(journal: &[JournalEntry]) -> Option<Pendin
     pending
 }
 
+/// The most recent `AgentDelegationInputRequested` in the journal that the
+/// human has not yet answered — resolution is a `Note` keyed
+/// `A2A_CONTINUATION_INPUT_NOTE` at the SAME step (ADR 0026). Mirrors
+/// `still_awaiting_delegation_decision`, but the resolving entry is the
+/// continuation Note rather than a dedicated "decided" entry.
+fn still_awaiting_delegation_input(journal: &[JournalEntry]) -> Option<PendingDelegationInput> {
+    let mut pending: Option<PendingDelegationInput> = None;
+    for entry in journal {
+        match entry {
+            JournalEntry::AgentDelegationInputRequested {
+                step,
+                agent,
+                task_id,
+                prompt,
+                requested_at,
+            } => {
+                pending = Some(PendingDelegationInput {
+                    step: *step,
+                    agent: agent.clone(),
+                    task_id: task_id.clone(),
+                    prompt: prompt.clone(),
+                    requested_at: *requested_at,
+                });
+            }
+            JournalEntry::Note { step, key, .. }
+                if key == A2A_CONTINUATION_INPUT_NOTE
+                    && pending.as_ref().is_some_and(|p| p.step == *step) =>
+            {
+                pending = None;
+            }
+            _ => {}
+        }
+    }
+    pending
+}
+
 impl Kernel {
     pub fn new(
         oracle: Arc<dyn PolicyOracle>,
@@ -903,6 +1006,7 @@ impl Kernel {
             active_skills: Vec::new(),
             pending_skill_activation: None,
             pending_delegation: None,
+            pending_delegation_input: None,
             a2a_depth,
             a2a_ancestry,
         };
@@ -1068,6 +1172,53 @@ impl Kernel {
             },
         );
         tracing::info!(%run_id, %agent, ?decision, %principal, "agent delegation decided");
+        Ok(run)
+    }
+
+    /// Provide a human's continuation input for a run paused on an interactive
+    /// delegation (ADR 0026). Journals the input as a `Note` (the resolving
+    /// entry `still_awaiting_delegation_input` looks for), clears the pause,
+    /// and flips the run back to `Running`. The CALLER then calls
+    /// `execute_run` to resume — the delegation is re-dispatched and
+    /// reconnects to the remote task, sending this input as the continuation.
+    pub async fn provide_delegation_input(
+        &self,
+        run_id: Uuid,
+        input: &str,
+        principal: &str,
+    ) -> Result<Run, KernelError> {
+        let mut run = self.store.get(run_id).await?;
+        let pending = run.pending_delegation_input.as_ref().ok_or_else(|| {
+            KernelError::InvalidState(format!(
+                "run {run_id} has no pending delegation-input request"
+            ))
+        })?;
+        let step = pending.step;
+        let agent = pending.agent.clone();
+        self.store
+            .append_journal(
+                run_id,
+                JournalEntry::Note {
+                    step,
+                    key: A2A_CONTINUATION_INPUT_NOTE.to_string(),
+                    value: serde_json::json!(input),
+                },
+            )
+            .await?;
+        run.pending_delegation_input = None;
+        run.status = RunStatus::Running;
+        self.store.put(run.clone()).await?;
+        self.emit(
+            run_id,
+            0,
+            RunEvent::AgentDelegationInputProvided {
+                step,
+                agent,
+                principal: principal.to_string(),
+                branch: None,
+            },
+        );
+        tracing::info!(%run_id, %principal, "delegation input provided");
         Ok(run)
     }
 
@@ -1550,6 +1701,35 @@ impl Kernel {
             );
             run.status = RunStatus::AwaitingDelegationDecision;
             run.pending_delegation = Some(pending);
+            self.store.put(run.clone()).await?;
+            return Ok(run);
+        }
+
+        // Still awaiting a human continuation for an interactive delegation
+        // (ADR 0026)? Re-surface, do not advance — mirrors the two checks
+        // above. Only reached once the continuation Note is ABSENT (a resolved
+        // input is not "still awaiting"), so a resumed run whose human already
+        // answered falls through and re-dispatches the delegation.
+        if let Some(pending) = still_awaiting_delegation_input(&journal) {
+            tracing::info!(
+                %run_id,
+                step = pending.step,
+                agent = %pending.agent,
+                "resume: still awaiting a human delegation-input continuation — re-surfacing"
+            );
+            self.emit(
+                run_id,
+                0,
+                RunEvent::AgentDelegationInputRequired {
+                    step: pending.step,
+                    agent: pending.agent.clone(),
+                    task_id: pending.task_id.clone(),
+                    prompt: pending.prompt.clone(),
+                    branch: None,
+                },
+            );
+            run.status = RunStatus::AwaitingDelegationInput;
+            run.pending_delegation_input = Some(pending);
             self.store.put(run.clone()).await?;
             return Ok(run);
         }
@@ -2434,6 +2614,54 @@ impl Kernel {
                         .await
                     {
                         Ok(v) => (v, true),
+                        // Interactive delegation (ADR 0026): the remote task
+                        // entered `input-required`. This is NOT a failure —
+                        // pause the run durably to collect the human's
+                        // continuation, then return. The delegation's Intent
+                        // and remote task id are already journaled (the dial
+                        // happened), so a later resume re-dispatches the SAME
+                        // action, which reconnects to the remote task and
+                        // sends the continuation. Never re-dials from scratch.
+                        Err(ExecutionError::DelegationInputRequired {
+                            agent,
+                            task_id,
+                            prompt,
+                        }) => {
+                            let requested_at = now_secs();
+                            self.store
+                                .append_journal(
+                                    run_id,
+                                    JournalEntry::AgentDelegationInputRequested {
+                                        step: step_index,
+                                        agent: agent.clone(),
+                                        task_id: task_id.clone(),
+                                        prompt: prompt.clone(),
+                                        requested_at,
+                                    },
+                                )
+                                .await?;
+                            run.status = RunStatus::AwaitingDelegationInput;
+                            run.pending_delegation_input = Some(PendingDelegationInput {
+                                step: step_index,
+                                agent: agent.clone(),
+                                task_id: task_id.clone(),
+                                prompt: prompt.clone(),
+                                requested_at,
+                            });
+                            self.store.put(run.clone()).await?;
+                            self.emit(
+                                run_id,
+                                seq,
+                                RunEvent::AgentDelegationInputRequired {
+                                    step: step_index,
+                                    agent,
+                                    task_id,
+                                    prompt,
+                                    branch: None,
+                                },
+                            );
+                            return Ok(run);
+                        }
                         Err(e) => {
                             let msg = e.to_string();
                             last_error = Some(format!(

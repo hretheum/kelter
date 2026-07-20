@@ -134,6 +134,17 @@ pub enum JournalEntry {
         decision: AgentDelegationDecision,
         principal: String,
     },
+    /// An authorized delegation's remote task entered `input-required` (ADR
+    /// 0026): the run pauses here durably until the human's continuation
+    /// arrives as a `Note` keyed `A2A_CONTINUATION_INPUT_NOTE` at the same
+    /// step. `task_id` is the remote task to reconnect to (never re-created).
+    AgentDelegationInputRequested {
+        step: u32,
+        agent: String,
+        task_id: String,
+        prompt: String,
+        requested_at: u64,
+    },
 }
 
 impl JournalEntry {
@@ -146,7 +157,8 @@ impl JournalEntry {
             | JournalEntry::SkillActivationRequested { step, .. }
             | JournalEntry::SkillActivationDecided { step, .. }
             | JournalEntry::AgentDelegationRequested { step, .. }
-            | JournalEntry::AgentDelegationDecided { step, .. } => Some(*step),
+            | JournalEntry::AgentDelegationDecided { step, .. }
+            | JournalEntry::AgentDelegationInputRequested { step, .. } => Some(*step),
             JournalEntry::TrustPosture { .. }
             | JournalEntry::PlanProposed { .. }
             | JournalEntry::Terminal { .. } => None,

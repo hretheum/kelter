@@ -1609,3 +1609,46 @@ on this same paused-waiting machinery):** interactive multi-turn delegation
 extension); remote-progress streaming (A2A SSE → journaled/attributed timeline
 steps); the frontend (swimlane streamed-progress + multi-turn pause states +
 a plan-mode delegation-ask prompt). Sequenced behind the enabler by design.
+
+## Phase 18 — interactive multi-turn delegation (ADR 0026)
+
+An authorized delegation whose remote task enters `input-required` now PAUSES
+the run durably (`AwaitingDelegationInput`) and resumes on a human's
+continuation — reconnecting to the SAME remote task, never re-dialing —
+instead of failing with "interactive continuation is not supported."
+
+- **A distinct signal across the ActionSource boundary.** New
+  `ExecutionError::DelegationInputRequired { agent, task_id, prompt }` — NOT a
+  failure. `poll_to_terminal` treats `input-required` as a stop state; a2a
+  `execute` maps a fresh one to the signal, surfacing the remote's artifact
+  text as the prompt.
+- **A durable pause mirroring the ask pauses.** The engine journals
+  `AgentDelegationInputRequested`, sets the new status +
+  `pending_delegation_input`, and returns; `unfinished_runs` includes it and
+  `still_awaiting_delegation_input` re-surfaces it on restart. Separate from
+  `AwaitingDelegationDecision` — authorization already happened; this is the
+  remote asking a follow-up.
+- **Resume reconnects, never re-dials.** `provide_delegation_input` journals
+  the input as a `Note` (the resolving entry), flips to Running; on resume the
+  delegation's journaled Decision replays, `execute` sees the existing task id
+  + continuation note and calls `send_continuation` (a SendMessage carrying
+  `taskId`) to the SAME task, then polls to completion. A
+  `NOTE_CONTINUATION_SENT` marker gives the continuation the same
+  at-most-reconnect durability `NOTE_TASK_ID` gives the initial dial.
+- **`input-required` is a healthy circuit outcome** (not a failure — the agent
+  responded). Multi-round (remote asks again after a continuation) fails
+  cleanly rather than deadlocking — single-round is this slice; step-mode only.
+- **API:** `POST /api/v1/runs/{id}/delegation-input {input}`, bearer.
+
+**Proof (`docs/evidence/multiagent-p5.log`):** 2 new tests
+(`crates/a2a/tests/delegation_interactive_test.rs`) against a real `Kernel`
+(step mode) + a real mock A2A server that asks one clarifying question then
+completes — the pause-then-continuation-completes cycle (dialed once,
+continuation sent once, no re-dial) and the pause surviving a restart (a
+second Kernel + a2a source over the same store re-surfaces the request and
+resolves it). Full A2A regression green (client/durability/governance/
+resilience, 26 tests). Full `cargo test --workspace` **exit 0, 49 suites, 0
+failures**; clippy + fmt clean.
+
+**Still deferred:** remote-progress SSE streaming; the frontend; plan-mode
+interactive + multi-round continuation.

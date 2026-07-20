@@ -518,6 +518,7 @@ mod tests {
             active_skills: Vec::new(),
             pending_skill_activation: None,
             pending_delegation: None,
+            pending_delegation_input: None,
             a2a_depth: 0,
             a2a_ancestry: Vec::new(),
         }
