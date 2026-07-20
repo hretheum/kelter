@@ -100,6 +100,37 @@ pub struct RankedContext {
     pub score: f64,
 }
 
+/// The canonical response contract for `retrieve` when a backend lives on
+/// the other side of an untrusted boundary (a subprocess MCP extension, a
+/// WASM module). This is the kernel-side gate of ADR 0008: every transport
+/// validates the backend's response against THIS schema before anything
+/// reaches the policy context — the contract belongs to the interface, not
+/// to any one transport.
+pub fn retrieve_response_schema() -> &'static jsonschema::Validator {
+    static SCHEMA: std::sync::OnceLock<jsonschema::Validator> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        jsonschema::validator_for(&serde_json::json!({
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "episode_id": {"type": "string"},
+                            "summary": {"type": "string"},
+                            "score": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                        },
+                        "required": ["episode_id", "summary", "score"]
+                    }
+                }
+            },
+            "required": ["results"]
+        }))
+        .expect("static schema compiles")
+    })
+}
+
 /// An entity or relation upsert for graph-shaped backends.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

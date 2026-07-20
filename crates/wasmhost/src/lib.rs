@@ -102,7 +102,9 @@ impl WasmToolSource {
 /// Build the capability-scoped linker: a capability's host function is
 /// defined ONLY if granted. This is the sandbox — an ungranted capability
 /// is simply absent, so a module importing it cannot be instantiated.
-fn linker_for(engine: &Engine, grants: Grants) -> Result<Linker<HostState>, WasmError> {
+/// Generic over the host state so the tool host (`HostState`) and the
+/// memory host (`MemHostState`, which carries store limits) share ONE gate.
+fn linker_for<T: 'static>(engine: &Engine, grants: Grants) -> Result<Linker<T>, WasmError> {
     let mut linker = Linker::new(engine);
     if grants.network {
         // A real network capability would live here. For this slice it is a
@@ -111,7 +113,7 @@ fn linker_for(engine: &Engine, grants: Grants) -> Result<Linker<HostState>, Wasm
             .func_wrap(
                 "kelter:net",
                 "kelter_net_fetch",
-                |_caller: wasmtime::Caller<'_, HostState>, _ptr: i32, _len: i32| -> i32 { -1 },
+                |_caller: wasmtime::Caller<'_, T>, _ptr: i32, _len: i32| -> i32 { -1 },
             )
             .map_err(|e| WasmError::Engine(e.to_string()))?;
     }
@@ -231,6 +233,254 @@ impl ActionSource for WasmToolSource {
 
 pub fn arc(source: WasmToolSource) -> Arc<dyn ActionSource> {
     Arc::new(source)
+}
+
+// ---- WASM memory backend (ADR 0024) ---------------------------------------
+//
+// The memory capability promoted from a compiled-in trait (ADR 0005) to a
+// WASM-sandboxed, manifest-declared backend, over the SAME byte ABI as tools
+// (`alloc`/`run`/`memory`) — the op is multiplexed in a JSON envelope whose
+// op names mirror the reserved MCP memory tools (ADR 0008):
+//
+//   {"op":"memory_write",    "episode": {...}}          -> {"ok": true}
+//   {"op":"memory_retrieve", "task": "...", "limit": N} -> {"results": [...]}
+//   {"op":"memory_upsert",   "item": {...}}             -> {"ok": true}
+//
+// Two deliberate differences from the tool host:
+//
+// - **Persistent instance.** A memory backend must remember across calls, so
+//   ONE Store/instance lives for the provider's lifetime (guest state = its
+//   linear memory), serialized behind a mutex. Fuel is refilled per call and
+//   linear-memory growth is capped by a store limiter — a runaway or hoarding
+//   guest hits a bound, never the host.
+// - **Eager instantiation.** The sandbox bites at instantiation (an ungranted
+//   import is structurally absent), so `load` instantiates immediately: a
+//   memory module demanding an ungranted capability is refused at startup,
+//   loudly, not on first use.
+//
+// GOVERNANCE INVARIANT (ADR 0016, unchanged by construction): everything this
+// provider returns enters the kernel ONLY as retrieved context
+// (`PolicyContext.memory`). A malicious module can poison that context — it
+// can never authorize an action; every proposal is still schema-validated by
+// the kernel. Responses are additionally gated by the canonical interface
+// schema (`memory::retrieve_response_schema`), the same gate the subprocess
+// transport uses, and summaries are provenance-tagged with the module name.
+
+use memory::{Episode, GraphUpsert, MemoryError, MemoryProvider, RankedContext};
+use wasmtime::{StoreLimits, StoreLimitsBuilder};
+
+/// Cap on the guest's linear memory (64 MiB) — the demo-scale bound that
+/// keeps a hoarding/leaky memory module from growing without limit.
+const MEMORY_GUEST_MAX_BYTES: usize = 64 << 20;
+
+/// Host state for the persistent memory instance: nothing ambient, plus the
+/// resource limiter that enforces the linear-memory cap.
+struct MemHostState {
+    limits: StoreLimits,
+}
+
+/// The persistent guest: one Store + typed ABI handles, living as long as
+/// the provider. All calls are serialized through the owning mutex.
+struct MemGuest {
+    store: Store<MemHostState>,
+    memory: Memory,
+    alloc: TypedFunc<i32, i32>,
+    run: TypedFunc<(i32, i32), i64>,
+}
+
+/// A WASM module serving the `memory` capability as a `MemoryProvider`.
+pub struct WasmMemoryProvider {
+    name: String,
+    guest: Arc<std::sync::Mutex<MemGuest>>,
+}
+
+impl WasmMemoryProvider {
+    /// Load AND instantiate a WASM memory backend. Instantiation is where
+    /// the capability sandbox bites, so a module importing an ungranted
+    /// capability is refused here — at registration — not at first call.
+    pub fn load(
+        name: impl Into<String>,
+        module_path: &str,
+        grants: Grants,
+    ) -> Result<Self, WasmError> {
+        let name = name.into();
+        let mut config = Config::new();
+        config.consume_fuel(true);
+        let engine = Engine::new(&config).map_err(|e| WasmError::Engine(e.to_string()))?;
+        let bytes =
+            std::fs::read(module_path).map_err(|e| WasmError::Read(module_path.to_string(), e))?;
+        let module = Module::new(&engine, &bytes).map_err(|e| WasmError::Engine(e.to_string()))?;
+
+        let has = |n: &str| module.exports().any(|e| e.name() == n);
+        if !has("run") {
+            return Err(WasmError::MissingExport(name, "run"));
+        }
+        if !has("alloc") {
+            return Err(WasmError::MissingExport(name, "alloc"));
+        }
+
+        let mut store = Store::new(
+            &engine,
+            MemHostState {
+                limits: StoreLimitsBuilder::new()
+                    .memory_size(MEMORY_GUEST_MAX_BYTES)
+                    .build(),
+            },
+        );
+        store.limiter(|s| &mut s.limits);
+        store
+            .set_fuel(CALL_FUEL)
+            .map_err(|e| WasmError::Engine(e.to_string()))?;
+
+        let linker = linker_for::<MemHostState>(&engine, grants)?;
+        let instance = linker.instantiate(&mut store, &module).map_err(|e| {
+            WasmError::Engine(format!(
+                "wasm memory backend '{name}' could not be instantiated (a required \
+                 capability may not be granted): {e}"
+            ))
+        })?;
+
+        let memory: Memory = instance
+            .get_memory(&mut store, "memory")
+            .ok_or(WasmError::MissingExport(name.clone(), "memory"))?;
+        let alloc: TypedFunc<i32, i32> = instance
+            .get_typed_func(&mut store, "alloc")
+            .map_err(|e| WasmError::Engine(format!("bad `alloc`: {e}")))?;
+        let run: TypedFunc<(i32, i32), i64> = instance
+            .get_typed_func(&mut store, "run")
+            .map_err(|e| WasmError::Engine(format!("bad `run`: {e}")))?;
+
+        Ok(Self {
+            name,
+            guest: Arc::new(std::sync::Mutex::new(MemGuest {
+                store,
+                memory,
+                alloc,
+                run,
+            })),
+        })
+    }
+
+    /// One envelope round-trip on the blocking pool (wasmtime is sync).
+    async fn call(&self, payload: serde_json::Value) -> Result<serde_json::Value, MemoryError> {
+        let guest = self.guest.clone();
+        let name = self.name.clone();
+        let input = payload.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mut g = guest.lock().expect("wasm memory guest mutex");
+            call_mem_guest(&mut g, &name, &input)
+        })
+        .await
+        .map_err(|e| MemoryError::Backend(format!("wasm memory task join: {e}")))?
+    }
+}
+
+/// Drive one guest call: refuel, write the envelope in, `run`, read JSON out.
+fn call_mem_guest(
+    g: &mut MemGuest,
+    name: &str,
+    input: &str,
+) -> Result<serde_json::Value, MemoryError> {
+    let backend = |m: String| MemoryError::Backend(m);
+    g.store
+        .set_fuel(CALL_FUEL)
+        .map_err(|e| backend(format!("set_fuel: {e}")))?;
+
+    let bytes = input.as_bytes();
+    let len = bytes.len() as i32;
+    let ptr = g
+        .alloc
+        .call(&mut g.store, len)
+        .map_err(|e| backend(format!("wasm memory '{name}' alloc trap: {e}")))?;
+    g.memory
+        .write(&mut g.store, ptr as usize, bytes)
+        .map_err(|e| backend(format!("wasm memory '{name}' write: {e}")))?;
+
+    let packed = g
+        .run
+        .call(&mut g.store, (ptr, len))
+        .map_err(|e| backend(format!("wasm memory '{name}' run trap: {e}")))?;
+    let out_ptr = (packed >> 32) as usize;
+    let out_len = (packed & 0xffff_ffff) as usize;
+
+    let data = g.memory.data(&g.store);
+    let out = data
+        .get(out_ptr..out_ptr + out_len)
+        .ok_or_else(|| backend(format!("wasm memory '{name}' result out of bounds")))?;
+    let text = std::str::from_utf8(out)
+        .map_err(|e| backend(format!("wasm memory '{name}' result not utf-8: {e}")))?;
+    serde_json::from_str(text).map_err(|e| {
+        backend(format!(
+            "wasm memory '{name}' result not valid JSON: {e}: {text}"
+        ))
+    })
+}
+
+#[async_trait]
+impl MemoryProvider for WasmMemoryProvider {
+    async fn write(&self, episode: Episode) -> Result<(), MemoryError> {
+        let episode =
+            serde_json::to_value(&episode).map_err(|e| MemoryError::Backend(e.to_string()))?;
+        let resp = self
+            .call(serde_json::json!({ "op": "memory_write", "episode": episode }))
+            .await?;
+        if resp["ok"] != serde_json::json!(true) {
+            return Err(MemoryError::Backend(format!(
+                "wasm memory '{}' write not acknowledged: {resp}",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+
+    async fn retrieve(&self, task: &str, limit: usize) -> Result<Vec<RankedContext>, MemoryError> {
+        let resp = self
+            .call(serde_json::json!({ "op": "memory_retrieve", "task": task, "limit": limit }))
+            .await?;
+
+        // The kernel-side gate (ADR 0008): the SAME canonical schema the
+        // subprocess transport enforces. A malformed response is an error —
+        // degraded context — never trusted into the policy context.
+        let violations: Vec<String> = memory::retrieve_response_schema()
+            .iter_errors(&resp)
+            .map(|e| e.to_string())
+            .collect();
+        if !violations.is_empty() {
+            return Err(MemoryError::Backend(format!(
+                "wasm memory '{}' returned an interface-violating retrieve response: {}",
+                self.name,
+                violations.join("; ")
+            )));
+        }
+
+        let mut results: Vec<RankedContext> = serde_json::from_value(resp["results"].clone())
+            .map_err(|e| {
+                MemoryError::Backend(format!("retrieve results failed to deserialize: {e}"))
+            })?;
+        // Defensive bound: the guest cannot flood the context past what the
+        // kernel asked for.
+        results.truncate(limit);
+        // Provenance tag (ADR 0016 style, like `[learned]`): context lines
+        // from a WASM backend carry their untrusted source visibly.
+        for r in &mut results {
+            r.summary = format!("[wasm-memory:{}] {}", self.name, r.summary);
+        }
+        Ok(results)
+    }
+
+    async fn upsert(&self, item: GraphUpsert) -> Result<(), MemoryError> {
+        let item = serde_json::to_value(&item).map_err(|e| MemoryError::Backend(e.to_string()))?;
+        let resp = self
+            .call(serde_json::json!({ "op": "memory_upsert", "item": item }))
+            .await?;
+        if resp["ok"] != serde_json::json!(true) {
+            return Err(MemoryError::Backend(format!(
+                "wasm memory '{}' upsert not acknowledged: {resp}",
+                self.name
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

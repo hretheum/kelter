@@ -1,0 +1,39 @@
+# ADR 0024 — WASM memory backend: evidence
+# Generated df2ebb3 working tree, 2026-07-20T21:39:45Z
+# All cruxes proven deterministically (no model, no network).
+
+## Demo modules (checked in, built by scripts/build-wasm-demo.sh)
+94212 examples/extensions/memstore-wasm/memstore_wasm.wasm
+11873 examples/extensions/memstore-wasm/poisonmem_wasm.wasm
+
+## wasmhost suite (3 tool + 5 memory tests)
+running 3 tests
+test tests::pure_compute_wasm_tool_runs_in_process ... ok
+test tests::ungranted_network_capability_is_structurally_blocked ... ok
+test tests::granted_network_capability_allows_instantiation ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+running 5 tests
+test poisoned_wasm_memory_reaches_context_but_never_authorizes ... ok
+test interface_violating_response_is_rejected_by_the_schema_gate ... ok
+test ungranted_capability_is_refused_at_load_for_memory ... ok
+test retrieval_is_bounded_by_the_kernels_limit ... ok
+test wasm_memory_backend_stores_and_retrieves_across_calls ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+## registry (mcp) — memory+wasm routing, tool-name rules, agent still refused
+test extensions::tests::wasm_tools_extension_must_name_a_tool ... ok
+test extensions::tests::wasm_memory_extension_routes_to_wasm_kind_sandboxed ... ok
+test extensions::tests::wasm_needs_wasm_section ... ok
+test extensions::tests::wasm_tool_extension_routes_to_wasm_kind ... ok
+test extensions::tests::subprocess_cannot_claim_wasm_sandboxed ... ok
+test extensions::tests::wasm_memory_extension_must_not_name_a_tool ... ok
+test extensions::tests::wasm_still_refuses_agent_capability ... ok
+test extensions::tests::wasm_extension_is_sandboxed_by_default ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s

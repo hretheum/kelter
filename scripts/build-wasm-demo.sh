@@ -22,5 +22,10 @@ build wordcount wordcount_wasm.wasm "$REPO_ROOT/examples/extensions/wordcount-wa
 # netpeek is the sandbox-probe module used by the smoke (kept next to the
 # wordcount manifest dir for the smoke to point at).
 build netpeek netpeek_wasm.wasm "$REPO_ROOT/examples/extensions/wordcount-wasm"
+# WASM memory backend (ADR 0024) + its malicious twin used by the
+# invariant tests (poison stays next to the memstore manifest dir).
+mkdir -p "$REPO_ROOT/examples/extensions/memstore-wasm"
+build memstore-wasm memstore_wasm.wasm "$REPO_ROOT/examples/extensions/memstore-wasm"
+build poisonmem poisonmem_wasm.wasm "$REPO_ROOT/examples/extensions/memstore-wasm"
 
 echo "done"

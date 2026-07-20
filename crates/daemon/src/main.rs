@@ -438,6 +438,9 @@ async fn main() -> anyhow::Result<()> {
 
     let mut memory_extensions: Vec<mcp::ServerSpec> = Vec::new();
     let mut memory_extension_names: Vec<String> = Vec::new();
+    // A WASM memory backend (ADR 0024) — at most one, counted together with
+    // the subprocess memory extensions below.
+    let mut wasm_memory: Option<Arc<dyn MemoryProvider>> = None;
     let mut remote_agents: Vec<a2a::RemoteAgent> = Vec::new();
     let mut wasm_sources: Vec<Arc<dyn kernel_core::ActionSource>> = Vec::new();
     // Trust posture recorded on every run (ADR 0012).
@@ -562,15 +565,46 @@ async fn main() -> anyhow::Result<()> {
                     ext.name,
                     grants
                 );
+                let tool = endpoint.tool.clone().with_context(|| {
+                    format!(
+                        "registry invariant broken: wasm tools extension '{}' has no tool name",
+                        ext.name
+                    )
+                })?;
                 let source = wasmhost::WasmToolSource::load(
                     ext.name.clone(),
                     &endpoint.module_path,
-                    endpoint.tool,
+                    tool,
                     endpoint.description,
                     grants,
                 )
                 .with_context(|| format!("failed to load WASM extension '{}'", ext.name))?;
                 wasm_sources.push(wasmhost::arc(source));
+            }
+            (
+                mcp::extensions::Capability::Memory,
+                mcp::extensions::ExtensionKind::Wasm(endpoint),
+            ) => {
+                // WASM memory backend (ADR 0024): in-process, capability-
+                // sandboxed, persistent instance. Loading instantiates —
+                // an ungranted import refuses the daemon start loudly here,
+                // not on first retrieval.
+                let grants = wasmhost::Grants {
+                    network: ext.permissions.network,
+                };
+                tracing::info!(
+                    "registry: WASM memory extension '{}' (in-process, sandboxed; grants: {:?})",
+                    ext.name,
+                    grants
+                );
+                let provider = wasmhost::WasmMemoryProvider::load(
+                    ext.name.clone(),
+                    &endpoint.module_path,
+                    grants,
+                )
+                .with_context(|| format!("failed to load WASM memory extension '{}'", ext.name))?;
+                memory_extension_names.push(ext.name.clone());
+                wasm_memory = Some(Arc::new(provider) as Arc<dyn MemoryProvider>);
             }
             (capability, kind) => {
                 anyhow::bail!("registry mis-routed capability {capability:?} with kind {kind:?}")
@@ -670,17 +704,29 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    // Memory: always a registered extension over the reserved MCP tools
-    // (ADR 0008). An external memory extension overrides the built-in one;
-    // the built-in durable memory is itself dogfooded through the same
-    // registry seam (spawned `memory-server`, no in-process shortcut).
-    if memory_extensions.len() > 1 {
+    // Memory: always a registered extension — subprocess over the reserved
+    // MCP tools (ADR 0008) or an in-process WASM module (ADR 0024). An
+    // external memory extension overrides the built-in one; the built-in
+    // durable memory is itself dogfooded through the same registry seam
+    // (spawned `memory-server`, no in-process shortcut). Exactly one external
+    // backend, counted across BOTH mechanisms.
+    if memory_extensions.len() + usize::from(wasm_memory.is_some()) > 1 {
         anyhow::bail!(
             "multiple memory extensions registered ({memory_extension_names:?}) — exactly one \
              memory backend is supported"
         );
     }
-    let memory: Arc<dyn MemoryProvider> = if let Some(spec) = memory_extensions.pop() {
+    let memory: Arc<dyn MemoryProvider> = if let Some(provider) = wasm_memory.take() {
+        tracing::info!(
+            "memory: WASM extension '{}' (in-process, sandboxed; NOT the durable builtin — \
+             persistence is whatever the module implements within its grants)",
+            memory_extension_names
+                .first()
+                .map(String::as_str)
+                .unwrap_or("?")
+        );
+        provider
+    } else if let Some(spec) = memory_extensions.pop() {
         tracing::info!(
             "memory: extension '{}' (external backend)",
             memory_extension_names

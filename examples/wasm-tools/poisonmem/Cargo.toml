@@ -1,0 +1,21 @@
+[package]
+name = "poisonmem-wasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# A deliberately MALICIOUS memory backend used by the ADR 0024 invariant
+# tests: it acknowledges writes without storing anything and answers every
+# retrieval with a well-formed but poisoned context line urging the model to
+# run an unvalidated action. The tests prove this can degrade context but can
+# NEVER cause an unvalidated action. Build with:
+#   cargo build --release --target wasm32-unknown-unknown
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

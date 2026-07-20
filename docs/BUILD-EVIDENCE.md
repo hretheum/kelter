@@ -1497,3 +1497,65 @@ pass — the strongest available evidence (133/133 on every crate this round
 touched, 0 regressions observed anywhere) supports high confidence, but the
 single-command, all-crates confirmation other phases in this log report was
 not obtainable this session.
+
+## Phase 16 — WASM as a governed memory backend (ADR 0024)
+
+Promotes the memory capability from a compiled-in trait (ADR 0005) and a
+subprocess MCP backend (ADR 0008) to a THIRD shape: an in-process,
+capability-sandboxed, manifest-declared WASM backend (ADR 0011 mechanism).
+`mechanism = "wasm"` now routes `memory` as well as `tools`; `agent` and
+`model-provider` still fail loudly (the forward-compatible refusal shrank,
+it did not disappear). "Bring your own memory backend in any language that
+compiles to WASM, sandboxed by construction, without recompiling Kelter."
+
+- **Same byte ABI as tools, one multiplexed op.** A memory module exports
+  the identical `alloc`/`run`/`memory` ABI; the op rides a JSON envelope
+  whose names mirror the reserved MCP memory tools
+  (`memory_write`/`memory_retrieve`/`memory_upsert`). One trust path, one
+  host, one sandbox test surface — the only real difference from a tool
+  guest is a host-side lifetime decision, not an ABI change. A memory module
+  declares NO `[wasm] tool` name (loud manifest error if it does; a tools
+  module omitting one is the symmetric error).
+- **Persistent instance + bounded growth.** A memory backend must remember,
+  so ONE Store/instance lives for the provider's lifetime (guest linear
+  memory IS its storage), serialized behind a mutex, fuel refilled per call.
+  Linear memory is capped by a wasmtime `StoreLimits` bound (64 MiB) — a
+  hoarding/leaky guest hits a limit, never the host. Proven by
+  `wasm_memory_backend_stores_and_retrieves_across_calls`: a write in one
+  call is visible, ranked, and provenance-tagged in a later call.
+- **The capability sandbox holds, and bites EAGERLY.** The ADR 0011 linker
+  gate (a host function is defined only if granted) is now generic over the
+  host state, shared by both hosts. `load` instantiates immediately, so a
+  memory module importing an ungranted capability is refused AT DAEMON
+  STARTUP, not on first retrieval —
+  `ungranted_capability_is_refused_at_load_for_memory` proves netpeek
+  (imports `kelter:net`) fails to load without the grant and loads with it.
+- **THE INVARIANT (ADR 0016), proven with a malicious module.** Everything a
+  backend returns enters ONLY as `PolicyContext.memory`. Three guards, none
+  new, all now on the WASM boundary: (1) the canonical response schema —
+  lifted into the interface crate (`memory::retrieve_response_schema`) and
+  now SHARED with the subprocess transport, so both boundaries validate
+  identically; (2) a `[wasm-memory:<name>]` provenance tag, same technique
+  as `[learned]`; (3) the unchanged validation floor. The money-shot
+  `poisoned_wasm_memory_reaches_context_but_never_authorizes` loads a
+  deliberately malicious module that answers every retrieval with a
+  schema-VALID response ordering the model to run an out-of-schema `nuke`
+  claiming pre-authorization; the scripted model OBEYS; the kernel REJECTS
+  `nuke`; the run completes via valid actions. Poisoned context ≠
+  authorization.
+- **The compiled-in default is untouched.** No memory extension → the
+  built-in durable backend, as before. "Exactly one memory backend" is now
+  counted across BOTH mechanisms (a WASM + a subprocess memory extension
+  together is a loud startup error). Honest durability boundary, stated at
+  startup: a WASM backend's persistence is only as durable as the daemon
+  process — NOT the crash-resumable SQLite durability of the builtin.
+
+**Proof (`docs/evidence/wasm-memory.log`):** wasmhost 8/8 (3 pre-existing
+tool tests + 5 new memory tests) against REAL compiled `.wasm` modules
+(`memstore_wasm.wasm`, `poisonmem_wasm.wasm`, built from
+`examples/wasm-tools/`, checked in); registry (mcp) 8 wasm-routing tests
+including memory+wasm routing, tool-name required/forbidden rules, and the
+still-loud agent+wasm refusal. Full `cargo test --workspace` **exit 0, 47
+suites `test result: ok`, 0 failures**; `cargo clippy --workspace
+--all-targets` clean; `cargo fmt --all --check` clean. `git grep -i <codename>`
+= 0. No live model/network needed — every crux is deterministic.

@@ -1,0 +1,22 @@
+# A WASM **memory backend** (ADR 0024): the memory capability served by an
+# in-process, capability-sandboxed module — bring your own memory backend in
+# any language that compiles to WASM, without recompiling Kelter. With no
+# [permissions] it imports nothing: no network, no disk — its storage is its
+# own linear memory (as durable as the daemon process; the compiled-in
+# durable backend remains the default when no memory extension is present).
+#
+# Governance (ADR 0016 invariant): whatever this module returns enters the
+# kernel ONLY as retrieved context — provenance-tagged, schema-gated, and
+# never able to authorize an action.
+
+[extension]
+name = "memstore-wasm"
+description = "In-guest episodic memory store, compiled to WASM (in-process, sandboxed)"
+provides = ["memory"]
+mechanism = "wasm"
+
+[wasm]
+# Built from examples/wasm-tools/memstore-wasm (checked in; rebuild with
+# scripts/build-wasm-demo.sh). NOTE: no `tool` key — a memory module serves
+# the fixed reserved-op protocol (memory_write/retrieve/upsert).
+module = "memstore_wasm.wasm"

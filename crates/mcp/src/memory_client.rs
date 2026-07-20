@@ -7,8 +7,6 @@
 //! trusted. Writes carry kernel-constructed, provenance-tagged episodes;
 //! the extension cannot alter what gets attributed, only store it.
 
-use std::sync::OnceLock;
-
 use async_trait::async_trait;
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::{RoleClient, RunningService};
@@ -21,29 +19,11 @@ use memory::{Episode, GraphUpsert, MemoryError, MemoryProvider, RankedContext};
 
 pub const MEMORY_TOOLS: [&str; 3] = ["memory_write", "memory_retrieve", "memory_upsert"];
 
+/// The kernel-side response gate — the canonical contract now lives in the
+/// interface crate (`memory::retrieve_response_schema`), shared with the
+/// WASM memory transport (ADR 0024) so both boundaries validate identically.
 fn retrieve_schema() -> &'static jsonschema::Validator {
-    static SCHEMA: OnceLock<jsonschema::Validator> = OnceLock::new();
-    SCHEMA.get_or_init(|| {
-        jsonschema::validator_for(&serde_json::json!({
-            "type": "object",
-            "properties": {
-                "results": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "episode_id": {"type": "string"},
-                            "summary": {"type": "string"},
-                            "score": {"type": "number", "minimum": 0.0, "maximum": 1.0}
-                        },
-                        "required": ["episode_id", "summary", "score"]
-                    }
-                }
-            },
-            "required": ["results"]
-        }))
-        .expect("static schema compiles")
-    })
+    memory::retrieve_response_schema()
 }
 
 pub struct McpMemoryProvider {

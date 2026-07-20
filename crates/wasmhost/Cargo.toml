@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 kernel-core.workspace = true
+memory.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

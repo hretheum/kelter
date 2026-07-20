@@ -84,8 +84,11 @@ pub struct Manifest {
 pub struct WasmSection {
     /// Path to the `.wasm` module (relative to the extension directory).
     pub module: String,
-    /// The action name the module exposes.
-    pub tool: String,
+    /// The action name the module exposes. Required for the `tools`
+    /// capability; refused for `memory` (a memory module serves the fixed
+    /// reserved-op protocol, not a named action).
+    #[serde(default)]
+    pub tool: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,8 +195,9 @@ pub struct RemoteAgentEndpoint {
 pub struct WasmEndpoint {
     /// Absolute path to the `.wasm` module.
     pub module_path: String,
-    /// The action name the module exposes.
-    pub tool: String,
+    /// The action name the module exposes — `Some` for a `tools` module
+    /// (validated at load), `None` for a `memory` module (fixed op protocol).
+    pub tool: Option<String>,
     pub description: String,
 }
 
@@ -249,9 +253,16 @@ pub enum ManifestError {
     UnknownMechanism(String, String),
     #[error(
         "extension '{0}' capability '{1}' does not support mechanism '{2}' in this runtime slice — \
-         WASM currently supports only the `tools` capability"
+         WASM currently supports the `tools` and `memory` capabilities"
     )]
     UnsupportedMechanism(String, &'static str, &'static str),
+    #[error("wasm tools extension '{0}' must name the action it exposes ([wasm] tool = \"…\")")]
+    WasmToolNameRequired(String),
+    #[error(
+        "wasm memory extension '{0}' must not declare a [wasm] tool name — a memory module \
+         serves the fixed reserved-op protocol (memory_write/retrieve/upsert), not a named action"
+    )]
+    WasmToolNameForbidden(String),
     #[error(
         "extension '{0}' is a subprocess and did not declare a trust mode — refusing to load \
          (sandbox-by-default). Either use a sandboxed mechanism (mechanism = \"wasm\") or, to run \
@@ -300,14 +311,13 @@ pub fn load_manifest(manifest_path: &Path) -> Result<RegisteredExtension, Manife
     if mechanism != "subprocess" && mechanism != "wasm" {
         return Err(ManifestError::UnknownMechanism(name, mechanism.to_string()));
     }
-    // WASM is a tools-only mechanism in this slice; anything else with
-    // mechanism = "wasm" fails loudly (memory/agent/model-provider deferred).
-    if mechanism == "wasm" && capability != Capability::Tools {
+    // WASM supports tools (ADR 0011) and memory (ADR 0024); agent and
+    // model-provider with mechanism = "wasm" still fail loudly (deferred).
+    if mechanism == "wasm" && !matches!(capability, Capability::Tools | Capability::Memory) {
         let cap = match capability {
-            Capability::Memory => "memory",
             Capability::Agent => "agent",
             Capability::ModelProvider => "model-provider",
-            Capability::Tools => unreachable!(),
+            Capability::Tools | Capability::Memory => unreachable!(),
         };
         return Err(ManifestError::UnsupportedMechanism(name, cap, "wasm"));
     }
@@ -334,10 +344,28 @@ pub fn load_manifest(manifest_path: &Path) -> Result<RegisteredExtension, Manife
                 token_env: agent.token_env,
             })
         }
-        Capability::Tools if manifest.extension.mechanism == "wasm" => {
-            let wasm = manifest
-                .wasm
-                .ok_or_else(|| ManifestError::MissingSection(name.clone(), "wasm", "wasm"))?;
+        Capability::Tools | Capability::Memory if manifest.extension.mechanism == "wasm" => {
+            let wasm = manifest.wasm.ok_or_else(|| {
+                ManifestError::MissingSection(
+                    name.clone(),
+                    if capability == Capability::Tools {
+                        "tools"
+                    } else {
+                        "memory"
+                    },
+                    "wasm",
+                )
+            })?;
+            // A tools module exposes ONE named action; a memory module serves
+            // the fixed reserved-op protocol — the tool name is required for
+            // the former and refused for the latter (never silently ignored).
+            match (capability, &wasm.tool) {
+                (Capability::Tools, None) => return Err(ManifestError::WasmToolNameRequired(name)),
+                (Capability::Memory, Some(_)) => {
+                    return Err(ManifestError::WasmToolNameForbidden(name))
+                }
+                _ => {}
+            }
             let dir = manifest_path.parent().unwrap_or(Path::new("."));
             let module_path = dir.join(&wasm.module).to_string_lossy().into_owned();
             ExtensionKind::Wasm(WasmEndpoint {
@@ -528,7 +556,7 @@ mod tests {
         match &exts[0].kind {
             ExtensionKind::Wasm(w) => {
                 assert!(w.module_path.ends_with("m.wasm"));
-                assert_eq!(w.tool, "word_count");
+                assert_eq!(w.tool.as_deref(), Some("word_count"));
             }
             other => panic!("expected wasm kind, got {other:?}"),
         }
@@ -622,12 +650,64 @@ mod tests {
     }
 
     #[test]
-    fn wasm_only_supports_tools_capability() {
+    fn wasm_memory_extension_routes_to_wasm_kind_sandboxed() {
+        // ADR 0024: memory + wasm is a supported combination — routed to the
+        // WASM kind, structurally sandboxed, no operator consent needed.
         let root = tmp();
         write_ext(
             &root,
             "wmem",
-            "[extension]\nname = \"wmem\"\nprovides = [\"memory\"]\nmechanism = \"wasm\"\n\n[wasm]\nmodule = \"m.wasm\"\ntool = \"t\"\n",
+            "[extension]\nname = \"wmem\"\nprovides = [\"memory\"]\nmechanism = \"wasm\"\n\n[wasm]\nmodule = \"m.wasm\"\n",
+        );
+        let (exts, errors) = discover(&[root.to_string_lossy().into_owned()]);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(exts[0].capability, Capability::Memory);
+        assert_eq!(exts[0].trust, TrustMode::WasmSandboxed);
+        assert!(!exts[0].requires_operator_consent());
+        match &exts[0].kind {
+            ExtensionKind::Wasm(w) => {
+                assert!(w.module_path.ends_with("m.wasm"));
+                assert_eq!(w.tool, None);
+            }
+            other => panic!("expected wasm kind, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wasm_memory_extension_must_not_name_a_tool() {
+        let root = tmp();
+        write_ext(
+            &root,
+            "wmem-tool",
+            "[extension]\nname = \"wmem-tool\"\nprovides = [\"memory\"]\nmechanism = \"wasm\"\n\n[wasm]\nmodule = \"m.wasm\"\ntool = \"t\"\n",
+        );
+        let (exts, errors) = discover(&[root.to_string_lossy().into_owned()]);
+        assert!(exts.is_empty());
+        assert!(errors[0].to_string().contains("must not declare"));
+    }
+
+    #[test]
+    fn wasm_tools_extension_must_name_a_tool() {
+        let root = tmp();
+        write_ext(
+            &root,
+            "wtool-anon",
+            "[extension]\nname = \"wtool-anon\"\nprovides = [\"tools\"]\nmechanism = \"wasm\"\n\n[wasm]\nmodule = \"m.wasm\"\n",
+        );
+        let (exts, errors) = discover(&[root.to_string_lossy().into_owned()]);
+        assert!(exts.is_empty());
+        assert!(errors[0].to_string().contains("must name the action"));
+    }
+
+    #[test]
+    fn wasm_still_refuses_agent_capability() {
+        // The forward-compatible refusal shrank to agent/model-provider —
+        // it did not disappear.
+        let root = tmp();
+        write_ext(
+            &root,
+            "wagent",
+            "[extension]\nname = \"wagent\"\nprovides = [\"agent\"]\nmechanism = \"wasm\"\n\n[permissions]\nnetwork = true\n\n[wasm]\nmodule = \"m.wasm\"\n",
         );
         let (_, errors) = discover(&[root.to_string_lossy().into_owned()]);
         assert!(errors[0]
