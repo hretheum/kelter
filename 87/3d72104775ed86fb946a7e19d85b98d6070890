@@ -1,0 +1,68 @@
+crates/a2a/src/server.rs
+  s_7ac77bc07b52a5::t_d58317cf852992 223
+  s_7ac77bc07b52a5::t_1f35cfe78211eb 57-60
+crates/kernel-core/src/lib.rs
+  s_7ac77bc07b52a5::t_1cc6e4054d8239 36-38
+crates/a2a/src/lib.rs
+  s_7ac77bc07b52a5::t_36d406464107fb 450-461,464-465
+  s_7ac77bc07b52a5::t_5c409821871f79 710-742
+  s_7ac77bc07b52a5::t_38c43c065020d5 789-796
+  s_7ac77bc07b52a5::t_775535e473d1b4 807-832
+  s_7ac77bc07b52a5::t_00296b96377ae4 35-36,42-46
+  s_7ac77bc07b52a5::t_c9de151567aa43 462-463
+  s_7ac77bc07b52a5::t_8ca0dd5bab7df6 600-607,611
+crates/storage/src/lib.rs
+  s_7ac77bc07b52a5::t_d58317cf852992 521
+apps/desktop/src-tauri/tests/durable_store.rs
+  s_7ac77bc07b52a5::t_d58317cf852992 43
+crates/kernel-core/src/store.rs
+  s_7ac77bc07b52a5::t_d58317cf852992 227
+  s_7ac77bc07b52a5::t_dd5691b312dc3b 159
+docs/BUILD-EVIDENCE.md
+  s_7ac77bc07b52a5::t_44529ad2824559 1612-1654
+crates/kernel-core/src/engine.rs
+  s_7ac77bc07b52a5::t_d58317cf852992 1009
+  s_7ac77bc07b52a5::t_d514db2ce376ea 1178-1191,1195-1224
+  s_7ac77bc07b52a5::t_c9de151567aa43 1192-1194
+  s_7ac77bc07b52a5::t_93020e250a3004 377-394
+  s_7ac77bc07b52a5::t_b4e14b6dd34f8f 1708-1736
+  s_7ac77bc07b52a5::t_da0ba09e797353 2617-2664
+  s_7ac77bc07b52a5::t_5fb27e924b12cf 753-788
+  s_7ac77bc07b52a5::t_a4fe3c258d16a5 320-323
+  s_7ac77bc07b52a5::t_59acf35129196d 258-266
+  s_7ac77bc07b52a5::t_94572d9df6cb40 214-225,228-233
+  s_7ac77bc07b52a5::t_1694289cb6ed0e 495-511
+  s_7ac77bc07b52a5::t_c7a9b67c8e2f67 234
+crates/kernel-core/src/journal.rs
+  s_7ac77bc07b52a5::t_5cb8fadf3c2805 137-147
+  s_7ac77bc07b52a5::t_8a56baa2e3462c 160-161
+docs/evidence/multiagent-p5.log
+  s_7ac77bc07b52a5::t_4460a29d6f0922 27-42
+crates/a2a/tests/delegation_interactive_test.rs
+  s_7ac77bc07b52a5::t_c9de151567aa43 152
+  s_7ac77bc07b52a5::t_6407768db6975f 1-151,153-267
+docs/adr/0026-interactive-multi-turn-delegation.md
+  s_7ac77bc07b52a5::t_5e7b0c42008946 1-110
+crates/api/src/lib.rs
+  s_7ac77bc07b52a5::t_47298ac044ab7b 354-357
+  s_7ac77bc07b52a5::t_ee29598594ad56 901,903-926
+  s_7ac77bc07b52a5::t_cc7c3211594b07 898-900
+  s_7ac77bc07b52a5::t_fd06bbec8184d4 902
+  s_7ac77bc07b52a5::t_b0b8601c7caa87 878-897
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "873d72104775ed86fb946a7e19d85b98d6070890",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
