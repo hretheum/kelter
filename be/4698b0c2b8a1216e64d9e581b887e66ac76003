@@ -1,0 +1,45 @@
+apps/web-ui/src/lib/api.ts
+  s_7ac77bc07b52a5::t_840d240c60f38e 187-194
+  s_7ac77bc07b52a5::t_7fb1bac4d9d98a 135-146
+  s_7ac77bc07b52a5::t_cf14fb83cb11fa 76
+apps/web-ui/src/features/runs/MasterList.tsx
+  s_7ac77bc07b52a5::t_e90b2e3492b162 43
+apps/web-ui/src/store/app.ts
+  s_7ac77bc07b52a5::t_a2bc78a36ea603 333-352
+apps/web-ui/src/lib/format.ts
+  s_7ac77bc07b52a5::t_b355267e4134d7 51
+apps/web-ui/src/lib/events.ts
+  s_7ac77bc07b52a5::t_ab48b2ac842c51 18
+  s_7ac77bc07b52a5::t_f9117199cce790 184-197
+  s_7ac77bc07b52a5::t_6b21282ade8f13 85
+  s_7ac77bc07b52a5::t_9468ea036b0aa4 67-71
+apps/web-ui/design/03-screens/R-3-live-timeline.md
+  s_7ac77bc07b52a5::t_a82dd80d49517b 243-260
+apps/web-ui/src/features/runs/Timeline.tsx
+  s_7ac77bc07b52a5::t_cc224ad40e293b 240-242
+  s_7ac77bc07b52a5::t_a5c5d9ad011c04 40
+  s_7ac77bc07b52a5::t_c64d17d870972a 164-169
+  s_7ac77bc07b52a5::t_5b34f2627cfb6e 113-126
+  s_7ac77bc07b52a5::t_81aa3ae27d5b86 16
+  s_7ac77bc07b52a5::t_1eea8d81c94ca7 58-64
+apps/web-ui/src/features/runs/DelegationInputPrompt.tsx
+  s_7ac77bc07b52a5::t_16a4366de2c9ff 1-96
+apps/web-ui/src/features/runs/RunDetail.tsx
+  s_7ac77bc07b52a5::t_fde9c05ae347fa 35-36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "be4698b0c2b8a1216e64d9e581b887e66ac76003",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
