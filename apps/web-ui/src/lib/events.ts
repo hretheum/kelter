@@ -26,6 +26,15 @@ export interface AxisStep {
   rationale: string | null;
   rejections: { reason: string; attempt: number }[];
   executed: { ok: boolean; result: unknown } | null;
+  /* Plan node id for a parallel-plan-fanout node (P1, ADR 0022); `null` for
+   * an ordinary step-mode step — today's single-lane behavior, unchanged. */
+  branch: string | null;
+  /* Client wall-clock time this step was first observed (design/03 R-3
+   * parallel variant "elapsed time" for a still-running lane — remote_ms is
+   * only known once a receipt lands, so a running lane's elapsed reading is
+   * honestly sourced from local time, same technique as the run header's
+   * own elapsed timer). */
+  receivedAt: number;
 }
 
 export interface AxisState {
@@ -72,6 +81,8 @@ function stepOf(axis: AxisState, step: number): AxisStep {
       rationale: null,
       rejections: [],
       executed: null,
+      branch: null,
+      receivedAt: Date.now(),
     };
     axis.steps.set(step, s);
   }
@@ -88,6 +99,7 @@ export function applyEvent(axis: AxisState, ev: RunEvent): void {
       s.action = ev.action;
       s.arguments = ev.arguments;
       if (ev.rationale) s.rationale = ev.rationale;
+      s.branch = ev.branch;
       break;
     }
     case "rejected": {
@@ -96,12 +108,14 @@ export function applyEvent(axis: AxisState, ev: RunEvent): void {
       if (!s.rejections.some((r) => r.attempt === ev.attempt)) {
         s.rejections.push({ reason: ev.reason, attempt: ev.attempt });
       }
+      s.branch = ev.branch;
       break;
     }
     case "executed": {
       const s = stepOf(axis, ev.step);
       if (!s.action) s.action = ev.action;
       s.executed = { ok: ev.ok, result: ev.result };
+      s.branch = ev.branch;
       break;
     }
     case "reflection_written":
@@ -170,6 +184,58 @@ export function applyJournalEntry(axis: AxisState, entry: JournalEntry): void {
 /* Ordered steps for rendering. */
 export function axisSteps(axis: AxisState): AxisStep[] {
   return [...axis.steps.values()].sort((a, b) => a.step - b.step);
+}
+
+// ---- parallel plan fan-out (P1, ADR 0022, design/03 R-3 parallel variant) -
+
+/* A plan node's id (`branch`) and its own index (`step`) are 1:1 — the
+ * engine assigns one index per node, so each branch is exactly one
+ * AxisStep, never a sub-sequence. "Lanes" are therefore just the
+ * branch-tagged subset of axis.steps, in the plan's topological (step)
+ * order — no separate bucketing structure is needed. */
+export function axisBranches(axis: AxisState): AxisStep[] {
+  return axisSteps(axis).filter((s) => s.branch !== null);
+}
+
+export function hasFanout(axis: AxisState): boolean {
+  for (const s of axis.steps.values()) if (s.branch !== null) return true;
+  return false;
+}
+
+/* Mirrors kernel-core's `is_a2a_action` (engine.rs) exactly: `delegate_to_*`
+ * actions are A2A delegations, everything else is not. */
+export function isA2aAction(action: string): boolean {
+  return action.startsWith("delegate_to_");
+}
+
+/* Mirrors plan.rs's `REVIEW_ACTION` constant. A review node with no
+ * explicit `action` in its plan falls back server-side to the node type's
+ * name ("review") — both forms are treated as a review lane here. */
+export type LaneKind = "a2a" | "review" | "tool";
+export function laneKind(action: string): LaneKind {
+  if (isA2aAction(action)) return "a2a";
+  if (action === "review_verdict" || action === "review") return "review";
+  return "tool";
+}
+
+/* Governance counter (design/03 R-3 parallel variant): count of
+ * delegate_to_* branch steps that have REACHED a decision (executed or
+ * rejected) — mirrors the kernel's own `authorize_delegation` counting
+ * method (`run.steps.iter().filter(is_a2a_action)`, engine.rs), computed
+ * client-side from the live axis rather than waiting on a Run refresh so it
+ * updates in real time during a running fan-out. No "max" is shown: no HTTP
+ * endpoint exposes `DelegationLimits.max_delegations_per_run` today
+ * (grepped `crates/api/src/lib.rs` — absent) — showing a max would mean
+ * either hardcoding a number that can drift from the daemon's real config,
+ * or fabricating a denominator the UI can't verify. Both violate the
+ * honesty convention (design/08), so this is deliberately "N so far", not
+ * "N/max". */
+export function countDelegationAttempts(axis: AxisState): number {
+  let n = 0;
+  for (const s of axis.steps.values()) {
+    if (isA2aAction(s.action) && (s.executed !== null || s.rejections.length > 0)) n += 1;
+  }
+  return n;
 }
 
 // ---- the bucketed event store ---------------------------------------------

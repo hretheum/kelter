@@ -11,6 +11,13 @@ use serde::{Deserialize, Serialize};
 /// [`ActionSpec::supports_idempotency_key`]).
 pub const IDEMPOTENCY_KEY_ARG: &str = "idempotency_key";
 
+/// Reserved argument names for A2A delegation lineage (ADR 0022), injected
+/// into a `delegate_to_*` action's execution copy after validation — never
+/// proposed by the model, never part of what the schema checks. Mirrors
+/// [`IDEMPOTENCY_KEY_ARG`]'s precedent.
+pub const A2A_DEPTH_ARG: &str = "__a2a_depth";
+pub const A2A_ANCESTRY_ARG: &str = "__a2a_ancestry";
+
 /// One action the policy may propose at a decision point.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionSpec {
@@ -79,6 +86,17 @@ impl ValidatedAction {
                 IDEMPOTENCY_KEY_ARG.to_string(),
                 serde_json::Value::String(key.to_string()),
             );
+        }
+    }
+
+    /// Kernel-side injection of A2A delegation lineage (ADR 0022) into a
+    /// `delegate_to_*` action's execution copy — called after governance
+    /// authorized the attempt, with kernel-derived values only. Mirrors
+    /// [`Self::inject_idempotency_key`] exactly.
+    pub(crate) fn inject_a2a_lineage(&mut self, depth: u32, ancestry: &[String]) {
+        if let Some(obj) = self.arguments.as_object_mut() {
+            obj.insert(A2A_DEPTH_ARG.to_string(), serde_json::json!(depth));
+            obj.insert(A2A_ANCESTRY_ARG.to_string(), serde_json::json!(ancestry));
         }
     }
 }

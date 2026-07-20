@@ -1,0 +1,399 @@
+<!-- provenance: ai_authored | agent: claude-sonnet-5 | session_date: 2026-07-20 | human_validated: false | context: ADR 0022 parallel plan fan-out + governed delegation — frontend evidence (design/multiagent-fanout-design.md Part 6). A backend agent is implementing Parts 0-5 (kernel-core executor, governance, a2a lineage, daemon config) concurrently in the same tree; its section, if any, is appended separately — do not overwrite either section. -->
+
+# Frontend evidence — parallel plan fan-out swimlanes (ADR 0022, R-3 parallel variant)
+
+Scope: `apps/web-ui/` only, plus `apps/web-ui/design/03-screens/R-3-live-timeline.md`.
+Built against the FIXED wire contract in the design doc's Part 6 ("Contract"
+section) rather than the backend's actual code, since the two halves were
+implemented in parallel in the same tree and were not integration-tested
+against each other end-to-end as part of this evidence — see "Honest
+limitations" below.
+
+## Build
+
+```
+$ pnpm --dir apps/web-ui build
+tsc -b && vite build
+vite v7.3.6 building client environment for production...
+transforming...
+✓ 56 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.62 kB │ gzip:  0.35 kB
+dist/assets/index-CEOqfuuN.css   27.39 kB │ gzip:  5.81 kB
+dist/assets/index-CvxHJ0QD.js   271.56 kB │ gzip: 83.41 kB
+✓ built in 746ms
+```
+Clean on the first attempt and re-confirmed after every subsequent edit.
+`tsc -b` strict mode (`noUnusedLocals` / `noUnusedParameters` /
+`noFallthroughCasesInSwitch`) passes. No new dependency added — `package.json`
+unchanged.
+
+## Files changed
+
+- `src/lib/api.ts` — `RunEvent`'s `proposed` / `rejected` / `executed`
+  variants gain `branch: string | null` (always present, never optional,
+  per the contract's "not to be reinterpreted" instruction).
+- `src/lib/events.ts` — `AxisStep` gains `branch: string | null` (set from
+  the corresponding `RunEvent` field on every one of the three variants,
+  not just `proposed`, since replay-order isn't guaranteed to start there)
+  and `receivedAt: number` (client wall-clock captured once, at first
+  observation of the step — powers a running lane's honest elapsed-time
+  reading, since `remote_ms` only exists after a receipt lands). New pure
+  helpers, all operating on the existing flat `axis.steps` map rather than
+  a new stored structure (deliberately simpler than the design doc's
+  speculative "new per-branch bucketing structure" — see "Judgment calls"):
+  `axisBranches`, `hasFanout`, `isA2aAction`, `laneKind`,
+  `countDelegationAttempts`.
+- `src/features/runs/StepCard.tsx` — new optional `opaqueRemote` prop.
+  When the step is still `proposed` (no receipt, no rejection) and
+  `opaqueRemote` is set, renders the existing `Spinner` (imported from
+  `components/ui/button.tsx`, already used for button loading states) +
+  "waiting on remote agent…" instead of the plain "proposed…" text — a
+  genuinely indeterminate treatment, never a percentage. Also: the executed
+  state line now appends `· {n}s remote` when the result carries a numeric
+  `remote_ms` (present on A2A results only; guarded with a narrow type
+  check since `result` is `unknown`).
+- `src/features/runs/FanoutLanes.tsx` (new) — the swimlane region. Renders
+  nothing (`null`) when the axis has no branch-tagged steps — additive,
+  zero visual change to an ordinary run. Each lane reuses `StepCard`
+  unmodified; a lane's "kind" badge (`⇄ delegate` / `☰ review` / `⚙ tool`)
+  is the only new markup per lane.
+- `src/features/runs/Timeline.tsx` — flat step list now filters to
+  `branch === null` (so a branch-tagged step never renders twice); renders
+  `<FanoutLanes axis={axis} now={now} />` after the flat list. No change to
+  the milestone-announcement effect — it already iterates every axis step
+  regardless of `branch`, so lane rejections/executions are announced for
+  free (see a11y below).
+- `src/features/runs/MasterList.tsx` — new `FanoutBadge` component
+  (subscribes to the run's axis via the existing `useAxis` hook; renders a
+  small "⑂" glyph + `title` + `sr-only` text when `hasFanout` is true).
+- `apps/web-ui/design/03-screens/R-3-live-timeline.md` — new "Parallel
+  variant" section appended after the existing sequential spec (extends,
+  does not replace).
+
+## Rendered states (textual description — see "Honest limitations")
+
+**Fan-out running, mixed lane states.** The detail pane shows the ordinary
+run header (task, live badge, elapsed, Stop) unchanged. Below the (empty)
+flat step area, a bordered "⑂ Fan-out — 3 branches" region appears with a
+"2 delegations so far" chip (no denominator) at its top-right. Inside, a
+left rail groups three lane rows in step-index order: an `⇄ delegate` lane
+mid-flight shows a spinning indeterminate icon + "waiting on remote
+agent…", no percentage anywhere on it; a second `⇄ delegate` lane already
+has a receipt and shows "validated ✓ · executed · 1.8s remote" in success
+green; a `⚙ tool` lane shows the same "validated ✓ · executed" line
+`StepCard` already renders for any ordinary tool step, unchanged.
+
+**One lane governance-refused.** That lane's `StepCard` shows the identical
+danger-tinted rejection chip used for any other kernel rejection —
+"Kernel rejected this step: delegation budget exhausted (10/10 this run) ·
+retry 0" — same component, same copy shape, only the reason string differs.
+Per ADR 0010's fail-fast stance (mirrored, not re-litigated here), the
+whole plan run then fails; the run header transitions to the terminal
+Result face like any other failed run, no special-cased "governance
+failure" screen.
+
+**One lane opaque-remote (isolated).** Same as the "running" lane above:
+spinner, "waiting on remote agent…", no fabricated step count. If that
+lane's delegation eventually errors instead of timing out silently, it
+renders through `executed-failed` ("ran, tool error ✕") — the kernel has
+no distinct "timed out" signal today (grepped, not found), so no fabricated
+"timed-out" state was invented for the UI to display; this is a scope
+simplification against the design doc's requirements line, documented
+under "Judgment calls."
+
+**All done.** All lanes show a settled state (`executed` success/failure or
+`rejected`); the fan-out region stays visible as the historical record of
+the plan run (mirrors how the flat timeline keeps completed step cards
+visible after a run finishes) until the pane transitions to the terminal
+Result face.
+
+**Master-list fan-out indicator.** A run row that has (this session)
+observed any branch-tagged event shows a small blue "⑂" glyph between the
+status glyph and the task title, with a tooltip "This run forked into
+parallel branches" and `sr-only` "forked" text for screen readers — same
+visual weight and convention as the existing status glyphs.
+
+I did **not** have a live daemon with the backend's ADR 0022 changes
+available to screenshot against (the backend half was implemented
+concurrently, in the same pass, and the two were not wired together for
+this evidence pass) — the above is the same honest textual-description
+fallback used for the ADR 0021 frontend round, not a fabricated screenshot
+claim.
+
+## Manual accessibility pass (no automated a11y tooling in this repo —
+confirmed absent in the ADR-0021 round; not re-verified, cited)
+
+- **Keyboard:** `FanoutLanes` and `MasterList`'s `FanoutBadge` introduce no
+  new interactive controls — every clickable affordance in the fan-out view
+  (a lane's own expand/collapse) is `StepCard`'s existing real `<button
+  aria-expanded>`, already keyboard-operable and already carrying a visible
+  focus ring (`focusRing` utility, mandatory offset per design/08 B-1a).
+  The badges (kind, governance counter, fan-out indicator) are decorative
+  `<span>`s, correctly non-focusable.
+- **`aria-live` on lane status changes:** no new live region was added —
+  the timeline's existing milestone-throttled `role="log"` announcer
+  (`Timeline.tsx`'s announcement effect) iterates the FULL axis step list,
+  which already includes branch-tagged steps; a lane's rejection or
+  execution is announced through the same polite/assertive milestones as
+  any ordinary step, verified by reading the effect's loop (it has no
+  `branch` filter). This satisfies the hard constraint without inventing a
+  parallel announcement path.
+- **B-7 (glyph + text + color, never color alone):** kind badges (`⇄`/`☰`/
+  `⚙` + word), the fan-out indicator (`⑂` + tooltip + `sr-only` text), and
+  the governance-counter chip (plain text, no color-only signal) all follow
+  this; the opaque-remote spinner is paired with literal "waiting on remote
+  agent…" text, never motion-only.
+- **Reduced motion:** the fan-out region's entrance animation
+  (`animate-slide-in`) and the spinner's `animate-spin` are both plain CSS
+  `animation` properties, already caught by design/05's global
+  `@media (prefers-reduced-motion: reduce)` wildcard override — no new
+  motion-handling code needed, verified by reading that rule (`*,
+  *::before, *::after`).
+
+## Governance-counter design decision
+
+Rendered as "**N delegations so far**" — a plain count, no denominator.
+Grepped `crates/api/src/lib.rs`'s route table before deciding: no endpoint
+exposes `DelegationLimits.max_delegations_per_run` (the design doc's own
+Part 0/3 don't promise one either — only a `KernelConfig`/daemon-config
+field, never an HTTP surface). The design doc's Part 6 explicitly gave two
+options and told the implementer to default to NOT hardcoding a number the
+backend hasn't promised to expose; that is exactly what happened here.
+Depth was considered and dropped from the counter too: even if the backend
+adds `a2a_depth` to the `Run` struct (Part 3), rendering "depth D" with no
+`max_depth` counterpart is equally ungrounded, and the Part 6 Contract
+section does not promise depth exposure at all (only `branch` on
+`RunEvent`) — so it was left out rather than half-added.
+
+## Honest limitations / gaps found during grounding
+
+1. **No A2A trust concept exists anywhere in this codebase.** Grepped
+   `crates/a2a/src/*.rs` and `crates/api/src/lib.rs` for `trust` — the only
+   hit is `SkillView.trust` (skills, unrelated). A2A's security control is
+   SSRF-pinned origin allowlisting (`A2aClient::allowed_origin`), not a
+   trust label. The design brief's instruction to "mirror the skills
+   trust-badge convention" for A2A lanes assumed data that does not exist.
+   **No trust badge renders on A2A lanes** — fabricating one would violate
+   the same honesty convention the badge is supposed to embody. Documented
+   in the R-3 doc's a11y section as a disclosed gap, not silently absorbed.
+2. **Master-list fan-out indicator is session-scoped, not authoritative.**
+   It reflects only branch-tagged events the client has actually observed
+   (live WS this session, or a prior in-session replay) — a completed
+   fan-out run from before the current session, never opened, will not
+   show the badge. No backend field answers "did this run fork" from the
+   run-list endpoint alone. Stated plainly in both this log and the R-3 doc
+   rather than worked around with a guess.
+3. **No distinct "timed-out" lane state.** The requirements list asked for
+   running/done/failed/timed-out per lane; grepping the kernel found no
+   timeout concept distinct from an ordinary execution failure or a
+   governance rejection, so no fourth fabricated state was added — a timed-
+   out delegation renders as `executed-failed`, same as any other tool
+   error, until/unless the kernel actually grows a distinct timeout signal.
+
+## Judgment calls (for Eryk)
+
+- `AxisState` did **not** get the "new per-branch bucketing structure" the
+  design doc speculated it might need (Part 1). Each plan node maps 1:1 to
+  exactly one axis step (the engine assigns one index per node — P1's
+  concurrency changes *when* things run, not the step-keying model), so a
+  swimlane is just the branch-tagged subset of the existing flat
+  `axis.steps` map, filtered and sorted. Simpler than speculated, and kept
+  that way deliberately rather than building unneeded structure.
+  See `axisBranches` in `src/lib/events.ts`.
+- No DAG/diagram renderer was built for "diverge/converge" — a bordered
+  region + left rail + topological (step-index) ordering was judged
+  proportionate to this app's dense, non-graphical visual language (nothing
+  else in the app renders a graph). If a future round wants an actual
+  branching diagram, this is a from-scratch addition, not an extension of
+  what exists here.
+- `StepCard`'s `opaqueRemote` prop is generic (not fan-out-specific) so a
+  future single-delegation step-mode run could opt into the same honest
+  indeterminate treatment without duplicating the spinner logic — not
+  wired up for step-mode in this pass (out of the stated scope), but the
+  seam is there.
+
+<!-- provenance: ai_authored | agent: claude-sonnet-5 | session_date: 2026-07-20 | human_validated: false | context: ADR 0022 backend section — parallel plan executor (P1), governed delegation (P2), a2a lineage wire plumbing. Appended after the frontend section above; do not overwrite it. -->
+
+# Backend evidence — parallel plan executor + governed delegation (ADR 0022)
+
+Scope: `crates/kernel-core`, `crates/a2a`, `crates/api`, `crates/daemon`.
+
+## fmt / clippy / test — bottom line
+
+```
+$ cargo fmt --all            # clean, no diffs after the run shown below
+$ cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy: No issues found
+
+$ cargo test --workspace
+cargo test: 181 passed (43 suites, 5.69s)
+```
+Baseline before this work: ~170 passing (per the brief). 181 = 170 baseline
++ ~2 pre-existing-but-uncounted (skills/a2a suites grew slightly between the
+brief being written and this session) + 9 new tests added here (7 in
+`parallel_plan_test.rs`, 1 in `a2a_client_test.rs`, 1 in
+`multiagent_durable_resume_test.rs`). Zero regressions: every existing
+sequential plan-mode test (`plan_test.rs`) and single-delegation A2A test
+(`a2a_client_test.rs`'s pre-existing 5) still pass unmodified in substance —
+the one required fixture change (below) was adding an `a2a_origin`
+declaration to a mock `ActionSource`, not weakening any assertion.
+
+`$ cargo build -p daemon` — clean, no warnings.
+
+**One required fixture fix, not a workaround:** `plan_test.rs`'s mock
+`PlanTools` `ActionSource` declared a `delegate_to_toy` action but (being a
+pre-ADR-0022 fixture) had no way to declare its origin. Once governance
+requires resolving a target origin before authorizing a delegation, an
+`ActionSource` that can't answer `a2a_origin` correctly gets refused (the
+"internal error: no origin declared… refusing rather than dialing an
+unverified target" branch — a deliberate fail-closed default, not a bug).
+The fixture now implements `a2a_origin` (`"delegate_to_toy" ->
+Some("mock://toy-agent")`), exactly the same contract `A2aActionSource`
+already satisfies for real. This is the ONLY behavior-shaping edit made to
+an existing test file.
+
+## Real measured timing: parallel vs. sequential
+
+```
+$ cargo test -p kernel-core --test parallel_plan_test -- --nocapture --test-threads=1
+test parallel_independent_nodes_run_concurrently ...
+  delegate_to_a started at 487.583µs
+  delegate_to_b started at 552.916µs
+  delegate_to_c started at 614.666µs
+parallel_independent_nodes_run_concurrently: 3 nodes x 250ms delay each, wall clock = 252.88775ms (sequential would be ~750ms)
+ok
+```
+All three independent A2A nodes start within ~130µs of each other (genuine
+concurrent dispatch, not staggered) and the WHOLE plan completes in
+~253ms — close to the single 250ms delay, not the ~750ms three sequential
+250ms delays would need. Repeated 5x locally for stability (range observed:
+252ms–348ms, always comfortably under the 600ms assertion threshold set in
+the test, always well under the 750ms sequential bound).
+
+`dependent_node_waits_for_its_dependency` proves the OTHER half — a
+downstream node still cannot start before its dependency completes, even
+though the scheduler is no longer strictly sequential: execution order
+recorded as exactly `["step_a", "step_b"]` every run (deterministic, not
+timing-dependent, since admission itself is gated on `node_outputs`
+containing the dependency's result).
+
+## Governance refusal transcripts (exact reason strings)
+
+```
+$ cargo test -p kernel-core --test parallel_plan_test -- --nocapture --test-threads=1
+delegation_budget_exhausted_is_governed_rejected: reason = delegation budget exhausted (2/2 this run)
+delegation_cycle_detected_via_ancestry: reason = delegation cycle detected: 'mock://toy' already appears in this run's A2A ancestry ["mock://toy"]
+delegation_depth_limit_enforced_on_inbound_seeded_run: reason = delegation depth limit exceeded (would reach 4, max 3)
+```
+Each is a real `RunEvent::Rejected.reason` captured off the kernel's own
+event bus (`kernel.subscribe()`), not a hand-constructed string. Each test
+also asserts the run's terminal state is `Failed` with an error mentioning
+"refused by delegation governance" — the SAME fail-fast shape an ordinary
+node failure already has (ADR 0010), never a special-cased governance
+failure path. The budget test additionally asserts exactly 2 delegations
+executed (not 0, not 3) — proving the over-budget node was the ONLY one
+refused, siblings admitted earlier in the same pass ran to completion.
+
+## Durable multi-branch resume — full transcript
+
+```
+$ cargo test -p daemon --test multiagent_durable_resume_test -- --nocapture
+durable_multi_branch_resume_reconnects_all_in_flight: run 959b8ee1-322a-4620-9acd-19fb2f820cfe completed after reconnecting to both in-flight branches; a2a_task_id notes proved both were in-flight at the crash point
+test durable_multi_branch_resume_reconnects_all_in_flight ... ok
+```
+Mechanics (see `crates/daemon/tests/multiagent_durable_resume_test.rs`):
+two REAL mock A2A HTTP servers (axum, not a mock `ActionSource`), a
+2-independent-A2A-node plan, a real `storage::SqliteRunStore` at a shared
+temp-file path. Session 1 spawns `execute_run` in the background, polls the
+journal until BOTH branches have written their `a2a_task_id` `Note` (proof
+both `SendMessage`s fired and both are durably in-flight — asserted
+`send_calls == 1` per agent immediately after), then `handle.abort()`s the
+task mid-poll (both remote mocks held at `TASK_STATE_WORKING`, so NEITHER
+branch has a `Receipt` at the abort point — asserted directly against the
+journal: `receipts == 0`). Session 2 reopens the SAME SQLite file, releases
+both mocks to report `TASK_STATE_COMPLETED`, and calls `execute_run` again
+— the load-bearing assertion is `send_calls == 1` per agent measured AFTER
+session 2 too: reconnect via `GetTask`, zero re-delegation, for BOTH
+branches, not just the first one found.
+
+## Sample event JSON — the `branch` field
+
+```json
+{"type":"executed","step":0,"action":"step_a","ok":true,"result":{"ran":"step_a"},"branch":"n1"}
+```
+Captured via `serde_json::to_string` on a real `RunEvent::Executed` off the
+kernel's event bus during `event_carries_branch_dimension`. The same test
+also confirms the plan-level `propose_plan` proposal event (not a node)
+carries `"branch":null`, and a separate `step_mode_events_carry_no_branch`
+test confirms an ordinary step-mode `RunEvent::Proposed` also carries
+`"branch":null` — the field is `None` everywhere except an actual plan-node
+event, exactly per the ADR 0022 contract.
+
+## Outbound A2A lineage metadata — real wire capture
+
+```
+$ cargo test -p a2a --test a2a_client_test delegation_lineage_rides_the_outbound_a2a_metadata -- --nocapture
+test delegation_lineage_rides_the_outbound_a2a_metadata ... ok
+```
+`crates/a2a/tests/a2a_client_test.rs` extends the existing mock-server
+harness to capture the raw `message.metadata` object off a real
+`SendMessage` HTTP request. With depth=2 and ancestry=`["http://origin-a:9000",
+"http://origin-b:9000"]` injected into the `ValidatedAction`'s arguments
+(mirroring what `inject_a2a_lineage` produces, constructed directly since
+that method is rightfully `pub(crate)` to kernel-core), the captured
+outbound JSON is exactly:
+```json
+{"kelter_a2a_depth": 2, "kelter_a2a_ancestry": ["http://origin-a:9000", "http://origin-b:9000"]}
+```
+
+## Deviations / judgment calls (for Eryk)
+
+1. **Budget counter threaded explicitly, not recomputed from `run.steps`
+   per the design doc's literal pseudocode.** The pseudocode's
+   `authorize_delegation` recomputed `attempted` from `run.steps.iter()...
+   count()` on every call — correct for step mode (exactly one action in
+   flight at a time) but WRONG for the concurrent plan executor: several
+   A2A nodes admitted in the same pass haven't appended a `StepRecord` yet
+   (that only happens on completion), so recomputing from `run.steps` would
+   under-count in-flight siblings and let more delegations through than the
+   configured budget. Fixed by threading an explicit local counter,
+   incremented the instant each A2A node is considered — admitted or
+   refused — strictly before any `tokio::spawn`. Caught by writing
+   `delegation_budget_exhausted_is_governed_rejected` against 3
+   simultaneously-admissible nodes and a budget of 2 — the exact scenario
+   that exposes the gap.
+2. **Lineage injection decoupled from the governance check.** Rather than
+   threading a computed `(depth, ancestry)` value from the admission-time
+   check through to the dispatch/execution point (what the design doc's
+   pseudocode implied), lineage values are recomputed fresh, unconditionally,
+   right before every A2A dispatch — a pure function of the run's own fixed
+   `a2a_depth`/`a2a_ancestry` plus the target's origin. This sidesteps a
+   real correctness gap the literal design would have hit on resume: a
+   dangling-intent reconnect takes the replay path (no governance re-check,
+   "replay is law"), so a value computed only inside the governance check
+   would never reach the reconnect's dispatch call. Recomputing is safe
+   specifically because depth/ancestry never change over a run's lifetime
+   (unlike the budget counter, which does), and the a2a crate only reads
+   the injected values on an actual fresh `SendMessage` — never on a
+   reconnect (which polls, never re-sends).
+3. **Test 4 (depth-limit-via-a2a-metadata) split into two smaller, focused
+   tests rather than standing up a real two-hop chain of two live Kelter
+   daemon processes.** `delegation_lineage_rides_the_outbound_a2a_metadata`
+   (a2a crate) proves the OUTBOUND wire shape against a real mock server;
+   `delegation_depth_limit_enforced_on_inbound_seeded_run` (kernel-core)
+   proves the INBOUND refusal against a run seeded exactly the way
+   `a2a_send` + `message_lineage` would seed it. The design doc explicitly
+   left this choice to the implementer ("prefer the more convincing version
+   if it's not much more work") — two live daemon processes was judged
+   disproportionate given the two focused tests already exercise the real
+   parse/inject/refuse code paths without a hand-wave.
+4. **`crates/api` needed genuinely zero code changes for the `branch`
+   field**, confirmed by grep (no hand-written JSON shape duplicating
+   `RunEvent`'s fields anywhere in that crate) — the design doc's own claim
+   held up exactly as stated, nothing to report differently here. `a2a_send`
+   DID need a change (unrelated to `branch`): threading `message_lineage`'s
+   parsed `(depth, ancestry)` into `create_run_with_lineage` instead of the
+   plain `create_run` — this was already an explicit, planned part of the
+   design (Part 3.3), not a deviation.

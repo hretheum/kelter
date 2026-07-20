@@ -41,6 +41,8 @@ pub struct Config {
     pub tls: Option<TlsConfig>,
     #[serde(default)]
     pub skills: SkillsConfig,
+    #[serde(default)]
+    pub delegation: DelegationConfig,
 }
 
 /// Skills (ADR 0019): advisory procedural knowledge in the OpenSkills /
@@ -95,6 +97,27 @@ impl Default for SkillsConfig {
             model_activation: "trusted".into(),
             ask_fallback: "deny".into(),
             ask_timeout_secs: 300,
+        }
+    }
+}
+
+/// Governed A2A delegation limits (ADR 0022): a per-run attempt budget, a
+/// chain-depth cap, and (kernel-side, via `Run::a2a_ancestry`) cycle
+/// detection. Defaults mirror `kernel_core::DelegationLimits::default()` —
+/// reasonable-but-arbitrary, not derived from any measurement; see ADR 0022
+/// for the honest framing and the sign-off note.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct DelegationConfig {
+    pub max_per_run: u32,
+    pub max_depth: u32,
+}
+
+impl Default for DelegationConfig {
+    fn default() -> Self {
+        Self {
+            max_per_run: 10,
+            max_depth: 3,
         }
     }
 }

@@ -119,6 +119,14 @@ impl ActionSource for PlanTools {
             .push(action.action().to_string());
         Ok(json!({"ran": action.action()}))
     }
+
+    // Mirrors `A2aActionSource::a2a_origin` (ADR 0022): a mock a2a-shaped
+    // action still needs to declare a pinned origin, or the kernel's
+    // delegation governance correctly refuses to dial an unverified
+    // target — the same requirement a real A2A source has to meet.
+    fn a2a_origin(&self, action: &str) -> Option<String> {
+        (action == "delegate_to_toy").then(|| "mock://toy-agent".to_string())
+    }
 }
 
 fn kernel(oracle: Arc<PlanOracle>, tools: Arc<PlanTools>, store: Arc<dyn RunStore>) -> Kernel {

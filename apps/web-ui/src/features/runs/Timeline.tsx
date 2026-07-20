@@ -12,6 +12,7 @@ import { formatCost, formatElapsed, shortPolicy } from "@/lib/format";
 import { cancelRun } from "@/store/app";
 import { useAppState, useAxis } from "@/store/hooks";
 import type { Run } from "@/lib/api";
+import { FanoutLanes } from "./FanoutLanes";
 import { SkillActivationPrompt } from "./SkillActivationPrompt";
 import { StepCard } from "./StepCard";
 
@@ -21,6 +22,10 @@ export function Timeline({ run }: { run: Run }) {
   const s = useAppState();
   const { axis } = useAxis(run.id);
   const steps = axisSteps(axis);
+  // Branch-tagged steps (parallel plan fan-out, ADR 0022) render as
+  // swimlanes via FanoutLanes below, not in the ordinary flat list — same
+  // underlying axis, just grouped differently, never both.
+  const flatSteps = steps.filter((st) => st.branch === null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
   const [showPill, setShowPill] = useState(false);
@@ -179,9 +184,10 @@ export function Timeline({ run }: { run: Run }) {
         {steps.length === 0 && (
           <p className="text-body text-muted-foreground">Starting…</p>
         )}
-        {steps.map((st) => (
+        {flatSteps.map((st) => (
           <StepCard key={st.step} step={st} />
         ))}
+        <FanoutLanes axis={axis} now={now} />
         {axis.pendingSkillActivation && (
           <SkillActivationPrompt runId={run.id} pending={axis.pendingSkillActivation} />
         )}

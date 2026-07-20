@@ -108,6 +108,30 @@ pub fn message_text(params: &Value) -> String {
         .to_string()
 }
 
+/// Extract A2A delegation lineage (ADR 0022) from a `message/send` params
+/// object's `message.metadata` — `(0, [])` when absent. Absence is NOT
+/// evidence of anything to refuse: a non-Kelter or older-version caller
+/// simply never sends this, and from this server's perspective the inbound
+/// task is, correctly, the start of a fresh chain.
+pub fn message_lineage(params: &Value) -> (u32, Vec<String>) {
+    let metadata = params.get("message").and_then(|m| m.get("metadata"));
+    let depth = metadata
+        .and_then(|m| m.get("kelter_a2a_depth"))
+        .and_then(|v| v.as_u64())
+        .map(|d| d as u32)
+        .unwrap_or(0);
+    let ancestry = metadata
+        .and_then(|m| m.get("kelter_a2a_ancestry"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    (depth, ancestry)
+}
+
 /// Build the Agent Card served at `/.well-known/agent-card.json`.
 ///
 /// `base_url` is the externally reachable origin (e.g. `http://127.0.0.1:7466`)
@@ -188,6 +212,8 @@ mod tests {
             cost_usd: None,
             active_skills: Vec::new(),
             pending_skill_activation: None,
+            a2a_depth: 0,
+            a2a_ancestry: Vec::new(),
         }
     }
 

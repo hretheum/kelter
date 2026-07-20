@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use futures::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tracing::Instrument;
@@ -104,6 +105,15 @@ pub trait ActionSource: Send + Sync {
         action: &ValidatedAction,
         ctx: &ExecutionContext,
     ) -> Result<serde_json::Value, ExecutionError>;
+
+    /// The pinned origin `action` would dial, if it is an A2A delegation
+    /// this source declares (ADR 0022) — `None` for a non-A2A source
+    /// (the default) or an action this source does not recognize. Lets the
+    /// kernel enforce depth/cycle governance without knowing anything
+    /// about the A2A protocol itself.
+    fn a2a_origin(&self, _action: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Merge several action sources into one space; execution routes to the
@@ -153,6 +163,10 @@ impl ActionSource for CompositeActionSource {
             "no source declares action '{}'",
             action.action()
         )))
+    }
+
+    fn a2a_origin(&self, action: &str) -> Option<String> {
+        self.sources.iter().find_map(|s| s.a2a_origin(action))
     }
 }
 
@@ -229,6 +243,19 @@ pub struct Run {
     /// `status == AwaitingSkillDecision` (ADR 0021). `None` otherwise.
     #[serde(default)]
     pub pending_skill_activation: Option<PendingSkillActivation>,
+    /// Chain depth reached by THIS run via inbound A2A delegation (ADR
+    /// 0022): 0 for a run started directly (CLI/API/local), N for a run
+    /// that arrived as the Nth hop of an A2A delegation chain. Fixed at run
+    /// creation, never mutated afterward — any delegation THIS run attempts
+    /// computes its own depth as `a2a_depth + 1`.
+    #[serde(default)]
+    pub a2a_depth: u32,
+    /// Origins (`scheme://host:port`, NOT display names — ADR 0022) of
+    /// every Kelter instance in this run's inbound delegation chain, oldest
+    /// first. Fixed at run creation. A fresh delegation this run attempts
+    /// is refused as a cycle if its target origin already appears here.
+    #[serde(default)]
+    pub a2a_ancestry: Vec<String>,
 }
 
 /// A durable snapshot of one pending human skill-activation decision (ADR
@@ -267,17 +294,25 @@ pub enum RunEvent {
         action: String,
         arguments: serde_json::Value,
         rationale: Option<String>,
+        /// The plan node id this event belongs to (ADR 0022), so a client
+        /// can bucket a fan-out's events into lanes. `None` for ordinary
+        /// step-mode events and the plan-level proposal event.
+        branch: Option<String>,
     },
     Rejected {
         step: u32,
         reason: String,
         attempt: u32,
+        /// See [`RunEvent::Proposed::branch`].
+        branch: Option<String>,
     },
     Executed {
         step: u32,
         action: String,
         ok: bool,
         result: serde_json::Value,
+        /// See [`RunEvent::Proposed::branch`].
+        branch: Option<String>,
     },
     ReflectionWritten {
         episode_id: Uuid,
@@ -344,6 +379,8 @@ pub struct KernelConfig {
     /// dollar cost. Default empty → every run's `cost_usd` is `null` until
     /// prices are configured.
     pub pricing: crate::cost::PricingTable,
+    /// Governed A2A delegation limits (ADR 0022).
+    pub delegation: DelegationLimits,
 }
 
 impl Default for KernelConfig {
@@ -355,6 +392,32 @@ impl Default for KernelConfig {
             mode: RunMode::Step,
             trust_posture: Vec::new(),
             pricing: crate::cost::PricingTable::default(),
+            delegation: DelegationLimits::default(),
+        }
+    }
+}
+
+/// Governed limits on A2A delegation (ADR 0022): a per-run attempt budget,
+/// a chain-depth cap, and (via `Run::a2a_ancestry`) cycle detection. The
+/// kernel enforces these the same way it enforces the action schema — as a
+/// hard, journaled/emitted refusal, never a silent skip and never a
+/// runaway. Defaults are reasonable-but-arbitrary, not derived from any
+/// measurement — see ADR 0022 for the honest framing and the sign-off note.
+#[derive(Debug, Clone, Copy)]
+pub struct DelegationLimits {
+    /// Max `delegate_to_*` attempts (admitted or refused) a single run may
+    /// make.
+    pub max_delegations_per_run: u32,
+    /// Max A2A chain depth a run may extend to (a direct delegation reaches
+    /// depth 1).
+    pub max_depth: u32,
+}
+
+impl Default for DelegationLimits {
+    fn default() -> Self {
+        Self {
+            max_delegations_per_run: 10,
+            max_depth: 3,
         }
     }
 }
@@ -621,6 +684,21 @@ impl Kernel {
 
     /// Create a pending run without executing it yet.
     pub async fn create_run(&self, task: String) -> Result<Uuid, KernelError> {
+        self.create_run_with_lineage(task, 0, Vec::new()).await
+    }
+
+    /// Create a pending run seeded with A2A delegation lineage (ADR 0022):
+    /// used by the inbound A2A handler when an incoming `SendMessage`
+    /// carries lineage metadata from an upstream Kelter hop. `a2a_depth`/
+    /// `a2a_ancestry` default to `0`/`[]` (the start of a fresh chain) when
+    /// no lineage metadata is present — [`Self::create_run`] is exactly
+    /// that case. Otherwise identical to [`Self::create_run`].
+    pub async fn create_run_with_lineage(
+        &self,
+        task: String,
+        a2a_depth: u32,
+        a2a_ancestry: Vec<String>,
+    ) -> Result<Uuid, KernelError> {
         let run = Run {
             id: Uuid::new_v4(),
             task: task.clone(),
@@ -636,6 +714,8 @@ impl Kernel {
             cost_usd: None,
             active_skills: Vec::new(),
             pending_skill_activation: None,
+            a2a_depth,
+            a2a_ancestry,
         };
         let id = run.id;
         self.store.put(run).await?;
@@ -753,6 +833,52 @@ impl Kernel {
     fn emit(&self, run_id: Uuid, seq: u64, event: RunEvent) {
         // A send error only means no subscriber is listening right now.
         let _ = self.events.send(RunEventEnvelope { run_id, seq, event });
+    }
+
+    /// Governed check before a run may attempt one more A2A delegation (ADR
+    /// 0022): budget, chain depth, and cycle detection — the kernel's
+    /// admission-control point, mirroring the ADR 0020/0021 skill-gate Deny
+    /// pattern. `attempted` is the caller-computed count of delegation
+    /// attempts so far THIS CALL (not re-derived from `run.steps` here):
+    /// step mode has exactly one action in flight at a time, so counting
+    /// straight from `run.steps` is correct there; the concurrent plan
+    /// executor (ADR 0022 Part 2) admits several nodes in one pass before
+    /// any of them completes and appends a `StepRecord`, so it threads an
+    /// explicit running counter instead — recomputing from `run.steps`
+    /// there would under-count in-flight siblings admitted earlier in the
+    /// same pass and let more than the budget through.
+    ///
+    /// Depth and cycle checks need no such counter: `run.a2a_depth` and
+    /// `run.a2a_ancestry` are fixed for the whole run (set once at
+    /// creation), so they can never be under- or over-counted by
+    /// concurrent admission — only the attempt budget can.
+    fn authorize_delegation(
+        &self,
+        run: &Run,
+        attempted: u32,
+        target_origin: &str,
+    ) -> Result<(), String> {
+        if attempted >= self.config.delegation.max_delegations_per_run {
+            return Err(format!(
+                "delegation budget exhausted ({attempted}/{} this run)",
+                self.config.delegation.max_delegations_per_run
+            ));
+        }
+        let next_depth = run.a2a_depth + 1;
+        if next_depth > self.config.delegation.max_depth {
+            return Err(format!(
+                "delegation depth limit exceeded (would reach {next_depth}, max {})",
+                self.config.delegation.max_depth
+            ));
+        }
+        if run.a2a_ancestry.iter().any(|o| o == target_origin) {
+            return Err(format!(
+                "delegation cycle detected: '{target_origin}' already appears in this run's \
+                 A2A ancestry {:?}",
+                run.a2a_ancestry
+            ));
+        }
+        Ok(())
     }
 
     /// The state machine. Deterministic control flow; the model only picks
@@ -1022,6 +1148,7 @@ impl Kernel {
                         action: action.clone(),
                         arguments: arguments.clone(),
                         rationale: Some("replayed from journal".into()),
+                        branch: None,
                     },
                 );
                 seq += 1;
@@ -1083,6 +1210,7 @@ impl Kernel {
                                     step: step_index,
                                     reason: reason.clone(),
                                     attempt,
+                                    branch: None,
                                 },
                             );
                             seq += 1;
@@ -1101,6 +1229,7 @@ impl Kernel {
                             action: proposed.action.clone(),
                             arguments: proposed.arguments.clone(),
                             rationale: proposed.rationale.clone(),
+                            branch: None,
                         },
                     );
                     seq += 1;
@@ -1149,11 +1278,57 @@ impl Kernel {
                                         step: step_index,
                                         reason: reason.clone(),
                                         attempt,
+                                        branch: None,
                                     },
                                 );
                                 seq += 1;
                                 last_error = Some(reason);
                                 continue;
+                            }
+
+                            // Governed delegation limits (ADR 0022): authorize
+                            // ONE fresh A2A proposal before it is journaled as
+                            // a Decision — mirrors the skill-activation gate
+                            // exactly (Deny → rejected with feedback, no
+                            // journaled decision, the model retries). Does NOT
+                            // run on the journal-replay path (replay is law:
+                            // the decision was authorized when first made) —
+                            // this whole `else` arm only runs for a fresh
+                            // proposal, never for a replayed one.
+                            if is_a2a_action(v.action()) {
+                                let target_origin = self.tools.a2a_origin(v.action());
+                                let attempted = run
+                                    .steps
+                                    .iter()
+                                    .filter(|s| is_a2a_action(&s.action))
+                                    .count() as u32;
+                                let refusal = match &target_origin {
+                                    None => Some(format!(
+                                        "internal error: no origin declared for a2a action \
+                                         '{}' (plan/schema offered it but the action source \
+                                         cannot resolve its origin) — refusing rather than \
+                                         dialing an unverified target",
+                                        v.action()
+                                    )),
+                                    Some(origin) => {
+                                        self.authorize_delegation(&run, attempted, origin).err()
+                                    }
+                                };
+                                if let Some(reason) = refusal {
+                                    self.emit(
+                                        run_id,
+                                        seq,
+                                        RunEvent::Rejected {
+                                            step: step_index,
+                                            reason: reason.clone(),
+                                            attempt,
+                                            branch: None,
+                                        },
+                                    );
+                                    seq += 1;
+                                    last_error = Some(reason);
+                                    continue;
+                                }
                             }
 
                             // Self-activation gate (ADR 0020): authorize ONE
@@ -1181,6 +1356,7 @@ impl Kernel {
                                                     step: step_index,
                                                     reason: reason.clone(),
                                                     attempt,
+                                                    branch: None,
                                                 },
                                             );
                                             seq += 1;
@@ -1273,6 +1449,7 @@ impl Kernel {
                                     step: step_index,
                                     reason: reason.clone(),
                                     attempt,
+                                    branch: None,
                                 },
                             );
                             seq += 1;
@@ -1378,6 +1555,7 @@ impl Kernel {
                         action: validated.action().to_string(),
                         ok: true,
                         result,
+                        branch: None,
                     },
                 );
                 seq += 1;
@@ -1451,6 +1629,26 @@ impl Kernel {
                 if keyed {
                     exec_action.inject_idempotency_key(&idempotency_key);
                 }
+                // Lineage injection (ADR 0022) is recomputed fresh here,
+                // unconditionally, for every A2A dispatch — a pure function
+                // of `run.a2a_depth`/`run.a2a_ancestry` (fixed for the
+                // run's whole lifetime) and the target's origin, so it is
+                // correct whether this is a brand-new dispatch or a
+                // dangling-intent reconnect after a crash (which took the
+                // journal-replay path above and so never re-ran the
+                // authorize_delegation gate). The gate above already
+                // decided whether this attempt is ALLOWED; this only
+                // computes the VALUES to embed in the outbound A2A
+                // metadata, which the a2a crate only reads when a fresh
+                // `SendMessage` actually goes out (a reconnect never
+                // resends it — see `a2a::A2aActionSource::execute`).
+                if is_a2a_action(validated.action()) {
+                    if let Some(origin) = self.tools.a2a_origin(validated.action()) {
+                        let mut ancestry = run.a2a_ancestry.clone();
+                        ancestry.push(origin);
+                        exec_action.inject_a2a_lineage(run.a2a_depth + 1, &ancestry);
+                    }
+                }
 
                 let exec_ctx = ExecutionContext::new(
                     run_id,
@@ -1522,6 +1720,7 @@ impl Kernel {
                     action: validated.action().to_string(),
                     ok,
                     result,
+                    branch: None,
                 },
             );
             seq += 1;
@@ -1732,6 +1931,7 @@ impl Kernel {
                 action: crate::plan::PROPOSE_PLAN_ACTION.into(),
                 arguments: serde_json::json!({ "nodes": validated_plan.len() }),
                 rationale: Some("validated plan".into()),
+                branch: None,
             },
         );
         seq += 1;
@@ -1743,70 +1943,223 @@ impl Kernel {
             parameters: crate::plan::review_schema(),
         });
 
-        // 4. Execute nodes in topological order, each durably, keyed by its
-        //    node index so a resume skips completed nodes.
-        let mut node_outputs: std::collections::HashMap<String, serde_json::Value> =
-            std::collections::HashMap::new();
-        let mut failure: Option<String> = None;
-
-        for (node_index, node) in validated_plan
+        // 4. Execute nodes: a readiness-driven admission loop (ADR 0022,
+        //    Part 2). Independent nodes run CONCURRENTLY once their
+        //    dependencies are satisfied; this orchestrator is the single
+        //    writer of `run`/`node_outputs` (no locking needed) — the
+        //    durable intent→execute→receipt tail for each admitted node
+        //    runs inside a spawned task (`dispatch_plan_node_execution`).
+        //    Governance (delegation budget/depth/cycle, ADR 0022 Part 3)
+        //    runs HERE, on the orchestrator, strictly before spawning: the
+        //    admission-control point that makes a race on the budget
+        //    counter structurally impossible (checked+incremented before
+        //    any concurrent work starts).
+        let nodes: Vec<(usize, crate::plan::PlanNode)> = validated_plan
             .nodes_in_order()
             .map(|(i, n)| (i, n.clone()))
-            .collect::<Vec<_>>()
-        {
-            let step = node_index as u32;
-            let folded = fold_step(&journal, step);
-            let node_span = tracing::info_span!("kelter.plan_node", node = %node.id, step);
+            .collect();
 
-            // Completed already (resume)? Use the journaled receipt.
-            if let Some((ok, result)) = folded.receipt.clone() {
-                tracing::info!(
-                    %run_id, node = %node.id,
-                    "resume: node receipt found — skipping execution"
-                );
-                node_outputs.insert(node.id.clone(), result.clone());
-                self.record_node_step(&mut run, step, &node, result, ok)
-                    .await?;
-                if !ok {
-                    failure = Some(format!("node '{}' had failed before the crash", node.id));
-                    break;
+        let mut node_outputs: std::collections::HashMap<String, serde_json::Value> =
+            std::collections::HashMap::new();
+        let mut completed: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut dispatched: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut failure: Option<String> = None;
+        let mut in_flight: FuturesUnordered<
+            tokio::task::JoinHandle<Result<PlanNodeOutcome, KernelError>>,
+        > = FuturesUnordered::new();
+
+        // Delegation-attempt counter for THIS call (ADR 0022): a plain
+        // local, incremented the moment an A2A node is considered —
+        // admitted or refused — strictly BEFORE any spawn, so concurrent
+        // admission within one pass can never under-count and over-admit
+        // past the budget (recomputing from `run.steps` on every check, as
+        // step mode does, would under-count siblings admitted earlier in
+        // the same pass that haven't completed/recorded a `StepRecord`
+        // yet). Seeded from every A2A node this run already has a Receipt
+        // OR a dangling Intent for (from a prior crashed session), so a
+        // resume does not reset the budget.
+        let mut a2a_attempts: u32 = nodes
+            .iter()
+            .filter(|(i, n)| {
+                n.node_type == crate::plan::NodeType::A2a && {
+                    let f = fold_step(&journal, *i as u32);
+                    f.intent.is_some() || f.receipt.is_some()
                 }
-                continue;
+            })
+            .count() as u32;
+
+        loop {
+            for (node_index, node) in &nodes {
+                if completed.contains(node_index) || dispatched.contains(node_index) {
+                    continue;
+                }
+                if failure.is_some() {
+                    // Fail-fast (ADR 0010): no NEW node is admitted once
+                    // any node has failed — but already in-flight siblings
+                    // are left to drain naturally below, never orphaned.
+                    continue;
+                }
+                if !validated_plan
+                    .deps_of(*node_index)
+                    .iter()
+                    .all(|d| node_outputs.contains_key(d))
+                {
+                    continue;
+                }
+
+                let step = *node_index as u32;
+                let folded = fold_step(&journal, step);
+
+                // Resume fast-path: already has a receipt from before a
+                // crash — apply it inline, no need to spawn/await anything.
+                if let Some((ok, result)) = folded.receipt.clone() {
+                    tracing::info!(
+                        %run_id, node = %node.id,
+                        "resume: node receipt found — skipping execution"
+                    );
+                    node_outputs.insert(node.id.clone(), result.clone());
+                    self.record_node_step(&mut run, step, node, result, ok)
+                        .await?;
+                    completed.insert(*node_index);
+                    dispatched.insert(*node_index);
+                    if !ok {
+                        failure = Some(format!("node '{}' had failed before the crash", node.id));
+                    }
+                    continue;
+                }
+
+                // Governed delegation limits (ADR 0022): only for a FRESH
+                // admission — a node with a dangling Intent already passed
+                // this gate before a crash ("replay is law": re-checking it
+                // now could spuriously refuse an already-in-flight, maybe
+                // already fired-over-the-wire delegation and orphan it).
+                let is_a2a_node = node.node_type == crate::plan::NodeType::A2a;
+                let has_dangling_intent = folded.intent.is_some();
+                if is_a2a_node && !has_dangling_intent {
+                    let action_name = node.action.clone().unwrap_or_default();
+                    let target_origin = self.tools.a2a_origin(&action_name);
+                    let refusal = match &target_origin {
+                        None => Some(format!(
+                            "internal error: no origin declared for a2a action '{action_name}' \
+                             (plan validation should have caught this) — refusing rather than \
+                             dialing an unverified target"
+                        )),
+                        Some(origin) => self.authorize_delegation(&run, a2a_attempts, origin).err(),
+                    };
+                    a2a_attempts += 1;
+                    if let Some(reason) = refusal {
+                        self.emit(
+                            run_id,
+                            seq,
+                            RunEvent::Rejected {
+                                step,
+                                reason: reason.clone(),
+                                attempt: 0,
+                                branch: Some(node.id.clone()),
+                            },
+                        );
+                        seq += 1;
+                        let result = serde_json::json!({ "error": reason });
+                        self.record_node_step(&mut run, step, node, result.clone(), false)
+                            .await?;
+                        node_outputs.insert(node.id.clone(), result);
+                        completed.insert(*node_index);
+                        dispatched.insert(*node_index);
+                        failure = Some(format!(
+                            "plan node '{}' refused by delegation governance",
+                            node.id
+                        ));
+                        continue;
+                    }
+                }
+
+                dispatched.insert(*node_index);
+                let deps_context: Vec<serde_json::Value> = node
+                    .deps
+                    .iter()
+                    .filter_map(|d| node_outputs.get(d).cloned())
+                    .collect();
+                let handle = tokio::spawn(dispatch_plan_node_execution(
+                    run_id,
+                    step,
+                    node.clone(),
+                    deps_context,
+                    folded,
+                    schema.clone(),
+                    run.active_skills.clone(),
+                    run.a2a_depth,
+                    run.a2a_ancestry.clone(),
+                    latitude,
+                    self.store.clone(),
+                    self.tools.clone(),
+                    self.oracle.clone(),
+                ));
+                in_flight.push(handle);
             }
 
-            let deps_context: Vec<serde_json::Value> = node
-                .deps
-                .iter()
-                .filter_map(|d| node_outputs.get(d).cloned())
-                .collect();
+            if in_flight.is_empty() {
+                break;
+            }
 
-            let (result, ok) = self
-                .execute_plan_node(&mut run, step, &node, &deps_context, &folded, &schema)
-                .instrument(node_span)
-                .await?;
+            // Readiness-driven: await the NEXT completion (not all) — as
+            // soon as one branch finishes, its dependents may become ready
+            // this same loop iteration.
+            let joined = in_flight
+                .next()
+                .await
+                .expect("in_flight is non-empty (just checked above)");
+            let outcome = match joined {
+                Ok(Ok(o)) => o,
+                Ok(Err(kernel_err)) => return Err(kernel_err),
+                Err(join_err) => {
+                    return Err(KernelError::Execution(ExecutionError::Tool(format!(
+                        "plan node task panicked: {join_err}"
+                    ))));
+                }
+            };
+            let node_index = outcome.node_index as usize;
+            let node = validated_plan.node(node_index);
 
-            node_outputs.insert(node.id.clone(), result.clone());
+            if let Some(u) = outcome.usage {
+                run.usage.add(&u);
+            }
+            for (agent, elapsed_ms) in &outcome.agent_usage {
+                let entry = run.agent_usage.entry(agent.clone()).or_default();
+                entry.delegations += 1;
+                entry.remote_ms += elapsed_ms;
+            }
+            node_outputs.insert(node.id.clone(), outcome.result.clone());
+            self.record_node_step(
+                &mut run,
+                outcome.node_index,
+                node,
+                outcome.result.clone(),
+                outcome.ok,
+            )
+            .await?;
             self.emit(
                 run_id,
                 seq,
                 RunEvent::Executed {
-                    step,
+                    step: outcome.node_index,
                     action: node
                         .action
                         .clone()
                         .unwrap_or_else(|| format!("{:?}", node.node_type).to_lowercase()),
-                    ok,
-                    result,
+                    ok: outcome.ok,
+                    result: outcome.result,
+                    branch: Some(node.id.clone()),
                 },
             );
             seq += 1;
-
-            if !ok {
+            completed.insert(node_index);
+            if !outcome.ok {
                 // Fail-on-node-error: adaptive re-planning is deliberately
                 // deferred (ADR 0010) — a node failure fails the plan
                 // explicitly rather than silently guessing a new plan.
+                // Already-in-flight siblings (tracked in `in_flight`) are
+                // left to drain naturally rather than aborted.
                 failure = Some(format!("plan node '{}' failed", node.id));
-                break;
             }
         }
 
@@ -1847,194 +2200,228 @@ impl Kernel {
         self.store.put(run.clone()).await?;
         Ok(())
     }
+}
 
-    /// Execute one plan node through the appropriate existing seam, inside
-    /// the durable intent→receipt boundary keyed by the node's index.
-    async fn execute_plan_node(
-        &self,
-        run: &mut Run,
-        step: u32,
-        node: &crate::plan::PlanNode,
-        deps_context: &[serde_json::Value],
-        folded: &crate::journal::StepJournal,
-        schema: &ActionSchema,
-    ) -> Result<(serde_json::Value, bool), KernelError> {
-        let run_id = run.id;
+/// One plan node's outcome from the durable intent→execute→receipt tail
+/// (ADR 0022), returned to the single orchestrator (`Kernel::execute_plan`)
+/// — the only writer of `run`/`node_outputs` — which applies it via
+/// `record_node_step` in completion order, so no locking is needed there.
+struct PlanNodeOutcome {
+    node_index: u32,
+    result: serde_json::Value,
+    ok: bool,
+    agent_usage: Vec<(String, u64)>,
+    /// Model-call usage — only a review node's `review_verdict` call
+    /// produces this; `None` for tool/a2a nodes.
+    usage: Option<Usage>,
+}
 
-        // Build the node's validated action. Every node — tool, a2a, review
-        // — goes through kernel-side schema validation (governance is NOT
-        // bypassed by planning).
-        let (validated, action_label) = match node.node_type {
-            crate::plan::NodeType::Review => {
-                // A review node is a kernel-owned decision. It calls the
-                // oracle (memoized via the receipt) for an approve/reject
-                // verdict over its upstream outputs.
-                let review_schema = ActionSchema {
-                    actions: vec![schema
-                        .spec(crate::plan::REVIEW_ACTION)
-                        .expect("review action present")
-                        .clone()],
-                };
-                let context = PolicyContext {
-                    task: format!(
-                        "Review the following upstream results and decide whether the work is \
-                         acceptable:\n{}",
-                        serde_json::to_string(deps_context).unwrap_or_default()
-                    ),
-                    steps: Vec::new(),
-                    memory: Vec::new(),
-                    last_error: None,
-                    latitude: self.config.latitude,
-                    guidance: Some(
-                        "Call review_verdict with approve=true only if the results look correct."
-                            .into(),
-                    ),
-                    active_skills: run.active_skills.clone(),
-                };
-                let proposal = self
-                    .oracle
-                    .propose(&context, &review_schema)
-                    .await
-                    .map_err(|e| ExecutionError::Tool(format!("review failed: {e}")))?;
-                if let Some(u) = proposal.usage {
-                    run.usage.add(&u);
-                }
-                let validated = review_schema
-                    .validate(proposal.action)
-                    .map_err(|e| ExecutionError::Tool(format!("review verdict invalid: {e}")))?;
-                let approved = validated.arguments()["approve"].as_bool().unwrap_or(false);
-                // A review node has no external side effect: journal its
-                // verdict directly as the receipt (memoized decision).
-                let result = validated.arguments().clone();
-                self.store
-                    .append_journal(
-                        run_id,
-                        JournalEntry::Receipt {
-                            step,
-                            ok: approved,
-                            result: result.clone(),
-                        },
-                    )
-                    .await?;
-                self.record_node_step(run, step, node, result.clone(), approved)
-                    .await?;
-                return Ok((result, approved));
-            }
-            crate::plan::NodeType::Tool | crate::plan::NodeType::A2a => {
-                let action = node.action.clone().unwrap_or_default();
-                let proposed = crate::action::ProposedAction {
-                    action: action.clone(),
-                    arguments: node.arguments.clone(),
-                    rationale: Some(format!("plan node '{}'", node.id)),
-                };
-                let validated = schema.validate(proposed).map_err(|e| {
-                    // Should not happen (plan validation checked existence),
-                    // but arguments are validated here per-action.
-                    ExecutionError::Tool(format!("node '{}' action invalid: {e}", node.id))
-                })?;
-                (validated, action)
-            }
+/// The durable intent→execute→receipt tail for one plan node (ADR 0022,
+/// Part 2), split out of the orchestrator so it can run inside
+/// `tokio::spawn` — concurrently with sibling nodes whose dependencies are
+/// also already satisfied — while `Kernel::execute_plan` stays the sole
+/// writer of `run`/`node_outputs`. Takes no `&mut Run`: owned/`Arc` clones
+/// only, so the future is `'static` as `tokio::spawn` requires.
+///
+/// Mirrors the former `execute_plan_node`'s per-node-type logic exactly
+/// (review vs tool/a2a; idempotency; A2A lineage injection) — the only
+/// structural difference is that bookkeeping which needs `&mut Run`
+/// (`StepRecord` append, usage/agent_usage aggregation) is returned via
+/// [`PlanNodeOutcome`] instead of applied here.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_plan_node_execution(
+    run_id: Uuid,
+    step: u32,
+    node: crate::plan::PlanNode,
+    deps_context: Vec<serde_json::Value>,
+    folded: crate::journal::StepJournal,
+    schema: ActionSchema,
+    active_skills: Vec<String>,
+    a2a_depth: u32,
+    a2a_ancestry: Vec<String>,
+    latitude: Latitude,
+    store: Arc<dyn RunStore>,
+    tools: Arc<dyn ActionSource>,
+    oracle: Arc<dyn PolicyOracle>,
+) -> Result<PlanNodeOutcome, KernelError> {
+    // Build the node's validated action. Every node — tool, a2a, review —
+    // goes through kernel-side schema validation (governance is NOT
+    // bypassed by planning).
+    if node.node_type == crate::plan::NodeType::Review {
+        // A review node is a kernel-owned decision. It calls the oracle
+        // (memoized via the receipt) for an approve/reject verdict over its
+        // upstream outputs.
+        let review_schema = ActionSchema {
+            actions: vec![schema
+                .spec(crate::plan::REVIEW_ACTION)
+                .expect("review action present")
+                .clone()],
         };
-
-        // Durable intent → execute → receipt (identical contract to step
-        // mode; idempotency + A2A reconnect apply).
-        let keyed = schema
-            .spec(validated.action())
-            .map(|s| s.supports_idempotency_key())
-            .unwrap_or(false);
-
-        let idempotency_key = match folded.intent.clone() {
-            Some((_, _, journaled_key)) => {
-                if !keyed {
-                    let reason = format!(
-                        "cannot safely resume plan node '{}': action '{}' was dispatched before \
-                         the crash but wrote no receipt and declares no idempotency_key — manual \
-                         check required.",
-                        node.id, action_label
-                    );
-                    self.store
-                        .append_journal(
-                            run_id,
-                            JournalEntry::Receipt {
-                                step,
-                                ok: false,
-                                result: serde_json::json!({ "error": reason }),
-                            },
-                        )
-                        .await?;
-                    self.record_node_step(
-                        run,
-                        step,
-                        node,
-                        serde_json::json!({"error": reason}),
-                        false,
-                    )
-                    .await?;
-                    return Ok((
-                        serde_json::json!({ "error": "manual check required" }),
-                        false,
-                    ));
-                }
-                tracing::info!(
-                    %run_id, node = %node.id,
-                    "resume: dangling node intent — re-dispatching with the journaled key"
-                );
-                journaled_key
-            }
-            None => {
-                let key = format!("{run_id}:plan:{step}");
-                self.store
-                    .append_journal(
-                        run_id,
-                        JournalEntry::Intent {
-                            step,
-                            action: validated.action().to_string(),
-                            arguments: validated.arguments().clone(),
-                            idempotency_key: key.clone(),
-                        },
-                    )
-                    .await?;
-                key
-            }
+        let context = PolicyContext {
+            task: format!(
+                "Review the following upstream results and decide whether the work is \
+                 acceptable:\n{}",
+                serde_json::to_string(&deps_context).unwrap_or_default()
+            ),
+            steps: Vec::new(),
+            memory: Vec::new(),
+            last_error: None,
+            latitude,
+            guidance: Some(
+                "Call review_verdict with approve=true only if the results look correct.".into(),
+            ),
+            active_skills,
         };
-
-        crash_point("after_intent", validated.action());
-
-        let mut exec_action = validated.clone();
-        if keyed {
-            exec_action.inject_idempotency_key(&idempotency_key);
-        }
-        let exec_ctx =
-            ExecutionContext::new(run_id, step, self.store.clone(), folded.notes.clone());
-        let (result, ok) = match self.tools.execute(&exec_action, &exec_ctx).await {
-            Ok(v) => (v, true),
-            Err(e) => (serde_json::json!({ "error": e.to_string() }), false),
-        };
-
-        crash_point("after_execute", validated.action());
-
-        if let Ok(attributions) = exec_ctx.agent_usage.into_inner() {
-            for (agent, elapsed_ms) in attributions {
-                let entry = run.agent_usage.entry(agent).or_default();
-                entry.delegations += 1;
-                entry.remote_ms += elapsed_ms;
-            }
-        }
-
-        self.store
+        let proposal = oracle
+            .propose(&context, &review_schema)
+            .await
+            .map_err(|e| ExecutionError::Tool(format!("review failed: {e}")))?;
+        let validated = review_schema
+            .validate(proposal.action)
+            .map_err(|e| ExecutionError::Tool(format!("review verdict invalid: {e}")))?;
+        let approved = validated.arguments()["approve"].as_bool().unwrap_or(false);
+        // A review node has no external side effect: journal its verdict
+        // directly as the receipt (memoized decision).
+        let result = validated.arguments().clone();
+        store
             .append_journal(
                 run_id,
                 JournalEntry::Receipt {
                     step,
-                    ok,
+                    ok: approved,
                     result: result.clone(),
                 },
             )
             .await?;
-        self.record_node_step(run, step, node, result.clone(), ok)
-            .await?;
-        Ok((result, ok))
+        return Ok(PlanNodeOutcome {
+            node_index: step,
+            result,
+            ok: approved,
+            agent_usage: Vec::new(),
+            usage: proposal.usage,
+        });
     }
+
+    // Tool / A2a node — the SAME per-action seam as step mode.
+    let action = node.action.clone().unwrap_or_default();
+    let proposed = crate::action::ProposedAction {
+        action: action.clone(),
+        arguments: node.arguments.clone(),
+        rationale: Some(format!("plan node '{}'", node.id)),
+    };
+    let validated = schema.validate(proposed).map_err(|e| {
+        // Should not happen (plan validation checked existence), but
+        // arguments are validated here per-action.
+        ExecutionError::Tool(format!("node '{}' action invalid: {e}", node.id))
+    })?;
+
+    // Durable intent → execute → receipt (identical contract to step mode;
+    // idempotency + A2A reconnect apply).
+    let keyed = schema
+        .spec(validated.action())
+        .map(|s| s.supports_idempotency_key())
+        .unwrap_or(false);
+
+    let idempotency_key = match folded.intent.clone() {
+        Some((_, _, journaled_key)) => {
+            if !keyed {
+                let reason = format!(
+                    "cannot safely resume plan node '{}': action '{}' was dispatched before \
+                     the crash but wrote no receipt and declares no idempotency_key — manual \
+                     check required.",
+                    node.id, action
+                );
+                store
+                    .append_journal(
+                        run_id,
+                        JournalEntry::Receipt {
+                            step,
+                            ok: false,
+                            result: serde_json::json!({ "error": reason }),
+                        },
+                    )
+                    .await?;
+                return Ok(PlanNodeOutcome {
+                    node_index: step,
+                    result: serde_json::json!({ "error": "manual check required" }),
+                    ok: false,
+                    agent_usage: Vec::new(),
+                    usage: None,
+                });
+            }
+            tracing::info!(
+                %run_id, node = %node.id,
+                "resume: dangling node intent — re-dispatching with the journaled key"
+            );
+            journaled_key
+        }
+        None => {
+            let key = format!("{run_id}:plan:{step}");
+            store
+                .append_journal(
+                    run_id,
+                    JournalEntry::Intent {
+                        step,
+                        action: validated.action().to_string(),
+                        arguments: validated.arguments().clone(),
+                        idempotency_key: key.clone(),
+                    },
+                )
+                .await?;
+            key
+        }
+    };
+
+    crash_point("after_intent", validated.action());
+
+    let mut exec_action = validated.clone();
+    if keyed {
+        exec_action.inject_idempotency_key(&idempotency_key);
+    }
+    // Lineage injection (ADR 0022): recomputed fresh here, unconditionally,
+    // for every A2A dispatch — a pure function of the run's own (fixed)
+    // depth/ancestry and the target's origin. Correct for both a brand-new
+    // dispatch and a dangling-intent reconnect: the admission loop already
+    // decided whether this attempt is ALLOWED before spawning this task;
+    // this only computes the VALUES the a2a crate embeds in a fresh
+    // outbound `SendMessage` — never read on a reconnect (which polls an
+    // existing remote task instead of sending a new message).
+    if node.node_type == crate::plan::NodeType::A2a {
+        if let Some(origin) = tools.a2a_origin(validated.action()) {
+            let mut ancestry = a2a_ancestry;
+            ancestry.push(origin);
+            exec_action.inject_a2a_lineage(a2a_depth + 1, &ancestry);
+        }
+    }
+
+    let exec_ctx = ExecutionContext::new(run_id, step, store.clone(), folded.notes.clone());
+    let (result, ok) = match tools.execute(&exec_action, &exec_ctx).await {
+        Ok(v) => (v, true),
+        Err(e) => (serde_json::json!({ "error": e.to_string() }), false),
+    };
+
+    crash_point("after_execute", validated.action());
+
+    let agent_usage = exec_ctx.agent_usage.into_inner().unwrap_or_default();
+
+    store
+        .append_journal(
+            run_id,
+            JournalEntry::Receipt {
+                step,
+                ok,
+                result: result.clone(),
+            },
+        )
+        .await?;
+
+    Ok(PlanNodeOutcome {
+        node_index: step,
+        result,
+        ok,
+        agent_usage,
+        usage: None,
+    })
 }
 
 /// Test/ops hook for crash-injection smokes: when `KELTER_CRASH_POINT` is

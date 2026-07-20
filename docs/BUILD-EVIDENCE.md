@@ -1314,3 +1314,76 @@ slow wall-clock run; `cancel_run_with_reason` needing zero code changes to
 cancel a paused run; and the Part 6 addendum's router contract (5 tests,
 real HTTP) plus the policy-RwLock unit test. Gates: **172 workspace tests
 (15 new, 0 regressions)**, clippy `-D warnings` clean, fmt clean.
+
+## Phase 14 — parallel plan fan-out + governed delegation (ADR 0022)
+
+Plan mode's `execute_plan` becomes a readiness-driven concurrent admission
+loop instead of a strict sequential `for` loop, shipped together with a
+per-run delegation budget, chain-depth cap, and kernel-side cycle
+detection — the source plan's own reasoning (`docs/multi-agent-expansion-
+plan.md`, P1+P2) is that parallelism makes a runaway delegation chain
+easier to trigger, so the limits become necessary the moment concurrency
+ships, not a follow-up.
+
+- **Concurrency confined to an already-validated plan, unchanged trust
+  boundary.** `crate::plan::validate` still runs before any node executes;
+  the model still proposes exactly one plan. Only the EXECUTOR changed:
+  `execute_plan_node` was split along its existing seam into
+  orchestrator-side admission/governance (needs `&mut Run`) and a
+  free-standing `dispatch_plan_node_execution` (owned/`Arc` clones only,
+  `'static`, runs inside `tokio::spawn`). The single orchestrator applies
+  every completion's bookkeeping (`record_node_step`, `RunEvent::Executed`,
+  `node_outputs`) sequentially as results arrive via
+  `futures::stream::FuturesUnordered` — no locking needed since `run` is
+  never shared across concurrent tasks. Real wall-clock proof, not
+  estimated: 3 independent 250ms-delayed A2A nodes complete in ~250-350ms
+  (vs. ~750ms sequential); a downstream node still provably cannot start
+  before its dependency completes even under the new scheduler.
+- **Governed delegation, mirroring the ADR 0020/0021 gate pattern exactly.**
+  `KernelConfig.delegation: DelegationLimits { max_delegations_per_run,
+  max_depth }` (defaults 10/3 — flagged in ADR 0022 as reasonable, not
+  derived, for the maintainer's sign-off); `Run.a2a_depth`/`a2a_ancestry`
+  fixed at creation. A refusal is always a loud, journaled/emitted
+  `RunEvent::Rejected`, never a silent skip, and fails the whole plan the
+  SAME way an ordinary node failure already does — no special-cased
+  governance-failure behavior. One correctness fix over the source design's
+  literal pseudocode: the budget check threads an explicit counter
+  incremented at admission time (before any spawn) rather than recomputing
+  from `run.steps` — the latter would under-count A2A nodes admitted
+  earlier in the same concurrent admission pass and let more delegations
+  through than configured.
+- **Lineage rides the real A2A wire protocol.** Depth/ancestry are injected
+  into the validated action's execution-copy arguments after schema
+  validation (`ValidatedAction::inject_a2a_lineage`, mirroring
+  `inject_idempotency_key`'s precedent exactly) and embedded as a
+  `metadata` object on the outbound `SendMessage` — additive, not a
+  protocol break. Ancestry tokens are SSRF-pinned origin strings
+  (`A2aClient::allowed_origin`), not agent display names, for
+  cross-deployment robustness. Honest, disclosed limit: only a chain of
+  Kelter-to-Kelter hops can actually enforce this — a third-party A2A agent
+  in the middle is exactly as opaque as it already was.
+- **Durable multi-branch resume, proven against real infrastructure.** A
+  crash with MULTIPLE in-flight A2A branches (each with a dangling Intent,
+  no Receipt) reconnects to ALL of them concurrently on restart and never
+  re-delegates — proven with two real mock A2A HTTP servers (not a mock
+  `ActionSource`) and a real `SqliteRunStore` across two dropped-and-
+  reopened sessions, mirroring the two-session SQLite idiom
+  (`apps/desktop/src-tauri/tests/durable_store.rs`, ADR 0021's
+  `paused_run_survives_a_restart`).
+- **`RunEvent` gains `branch: Option<String>`** (the plan node's own id;
+  `None` for step-mode and the plan-level proposal event) — `crates/api`
+  needed zero code changes, confirmed by grep rather than assumed
+  (`stream_events` already serializes whatever `RunEvent` is, verbatim).
+
+**Proof (full detail: `docs/evidence/multiagent-fanout.log`, backend
+section):** real measured parallel-vs-sequential timing (~253ms actual vs.
+~750ms sequential for 3×250ms delayed nodes); exact `RunEvent::Rejected`
+reason strings for all three governance refusals (budget/depth/cycle); the
+full durable-multi-branch-resume transcript including the mid-flight
+journal assertion (`receipts == 0` at the simulated crash point) and the
+post-resume `send_calls == 1` per agent (reconnect, never re-delegate); a
+captured sample `branch`-carrying event JSON; and a real outbound
+`SendMessage` HTTP body showing the injected `kelter_a2a_depth`/
+`kelter_a2a_ancestry` metadata. Gates: **181 workspace tests (9 new, 0
+regressions — 172 → 181)**, clippy `-D warnings` clean, fmt clean,
+`cargo build -p daemon` clean.

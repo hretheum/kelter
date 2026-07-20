@@ -13,8 +13,8 @@ use serde_json::{json, Value};
 
 use a2a::{A2aActionSource, RemoteAgent};
 use kernel_core::{
-    ActionSchema, ActionSource, ExecutionContext, InMemoryRunStore, JournalEntry, RunStore,
-    ValidatedAction,
+    ActionSchema, ActionSource, ActionSpec, ExecutionContext, InMemoryRunStore, JournalEntry,
+    ProposedAction, RunStore, ValidatedAction, A2A_ANCESTRY_ARG, A2A_DEPTH_ARG,
 };
 
 #[derive(Default)]
@@ -30,6 +30,9 @@ struct MockState {
     /// an explicit value (SSRF tests) overrides self-pointing.
     endpoint: std::sync::Mutex<String>,
     endpoint_override: Option<String>,
+    /// The `message.metadata` object from the most recent SendMessage call
+    /// (ADR 0022) — `None` if no SendMessage carried one.
+    last_send_metadata: std::sync::Mutex<Option<Value>>,
 }
 
 async fn card(State(st): State<Arc<MockState>>) -> Json<Value> {
@@ -56,6 +59,8 @@ async fn rpc(State(st): State<Arc<MockState>>, Json(req): Json<Value>) -> Json<V
     match method {
         "SendMessage" => {
             st.send_calls.fetch_add(1, Ordering::SeqCst);
+            *st.last_send_metadata.lock().unwrap() =
+                req["params"]["message"].get("metadata").cloned();
             // Always return a Task to poll (id fixed so reconnect is testable).
             Json(reply(json!({
                 "task": {"id": "task-42", "status": {"state": "TASK_STATE_SUBMITTED"}, "artifacts": []}
@@ -246,6 +251,84 @@ async fn ssrf_refuses_endpoint_outside_declared_host() {
     assert!(
         err.to_string().contains("SSRF allowlist violation"),
         "expected SSRF refusal, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn delegation_lineage_rides_the_outbound_a2a_metadata() {
+    // ADR 0022: depth/ancestry the kernel injected into the validated
+    // action's execution-copy arguments (mirroring
+    // `ValidatedAction::inject_idempotency_key`'s precedent — see
+    // `kernel_core::action::inject_a2a_lineage`, `pub(crate)` there, so this
+    // test constructs an equivalent `ValidatedAction` directly via a schema
+    // that allows the reserved keys, exactly what a validated+injected
+    // action looks like from `A2aActionSource::execute`'s point of view)
+    // must ride the outbound `SendMessage` as a `metadata` object — the
+    // ONLY mechanism a downstream Kelter hop has to enforce depth/cycle
+    // limits across a multi-hop chain.
+    let state = Arc::new(MockState::default());
+    let base = spawn_server(state.clone()).await;
+    let state2 = state.clone();
+
+    let src = A2aActionSource::new(vec![RemoteAgent {
+        name: "toy".into(),
+        card_url: base,
+        token: None,
+    }])
+    .unwrap();
+    let action_name = src
+        .action_schema(kernel_core::Latitude::Wide)
+        .await
+        .unwrap()
+        .actions[0]
+        .name
+        .clone();
+
+    // A schema permissive enough to admit the reserved lineage keys, so the
+    // resulting `ValidatedAction` matches what the kernel hands
+    // `A2aActionSource::execute` after `inject_a2a_lineage` runs.
+    let lineage_schema = ActionSchema {
+        actions: vec![ActionSpec {
+            name: action_name.clone(),
+            description: "".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string"},
+                    A2A_DEPTH_ARG: {"type": "integer"},
+                    A2A_ANCESTRY_ARG: {"type": "array"}
+                },
+                "required": ["task"]
+            }),
+        }],
+    };
+    let action = lineage_schema
+        .validate(ProposedAction {
+            action: action_name,
+            arguments: json!({
+                "task": "chained sub-task",
+                A2A_DEPTH_ARG: 2,
+                A2A_ANCESTRY_ARG: ["http://origin-a:9000", "http://origin-b:9000"],
+            }),
+            rationale: None,
+        })
+        .unwrap();
+
+    let store: Arc<dyn RunStore> = Arc::new(InMemoryRunStore::new());
+    let ctx = ctx_with_notes(store, &[]);
+    let result = src.execute(&action, &ctx).await.unwrap();
+    assert_eq!(result["state"], "TASK_STATE_COMPLETED");
+
+    let metadata = state2
+        .last_send_metadata
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("SendMessage must carry a metadata object when lineage is present");
+    assert_eq!(metadata["kelter_a2a_depth"], json!(2));
+    assert_eq!(
+        metadata["kelter_a2a_ancestry"],
+        json!(["http://origin-a:9000", "http://origin-b:9000"])
     );
 }
 

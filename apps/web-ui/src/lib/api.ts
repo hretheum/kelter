@@ -119,14 +119,18 @@ export type RunEvent =
       action: string;
       arguments: unknown;
       rationale: string | null;
+      // Plan node id for a parallel-plan-fanout node (P1, ADR 0022); `null`
+      // for ordinary step-mode events — today's single-lane behavior.
+      branch: string | null;
     }
-  | { type: "rejected"; step: number; reason: string; attempt: number }
+  | { type: "rejected"; step: number; reason: string; attempt: number; branch: string | null }
   | {
       type: "executed";
       step: number;
       action: string;
       ok: boolean;
       result: unknown;
+      branch: string | null;
     }
   | { type: "reflection_written"; episode_id: string }
   | { type: "completed"; output: unknown }

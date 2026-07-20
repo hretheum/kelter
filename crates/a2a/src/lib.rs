@@ -30,7 +30,7 @@ use serde_json::json;
 
 use kernel_core::{
     crash_point, ActionSchema, ActionSource, ActionSpec, ExecutionContext, ExecutionError,
-    Latitude, ValidatedAction, IDEMPOTENCY_KEY_ARG,
+    Latitude, ValidatedAction, A2A_ANCESTRY_ARG, A2A_DEPTH_ARG, IDEMPOTENCY_KEY_ARG,
 };
 
 pub const A2A_VERSION: &str = "1.0";
@@ -219,6 +219,15 @@ impl A2aClient {
         &self.agent
     }
 
+    /// The pinned origin (`scheme://host:port`) this client dials — the
+    /// SSRF allowlist pin, reused as the ancestry token for A2A delegation
+    /// lineage (ADR 0022): origins, not agent display names, are the right
+    /// identity for cross-deployment cycle detection (a display name is
+    /// locally chosen per-deployment and not globally unique).
+    pub fn allowed_origin(&self) -> &str {
+        &self.allowed_origin
+    }
+
     /// Resolve the Agent Card and pick the JSONRPC interface — refusing any
     /// endpoint outside the declared origin.
     async fn endpoint(&self) -> Result<&str, A2aError> {
@@ -337,19 +346,30 @@ impl A2aClient {
     }
 
     /// `SendMessage`: returns either a completed-inline Message (text) or a
-    /// Task to poll.
-    pub async fn send_message(&self, text: &str) -> Result<SendOutcome, A2aError> {
+    /// Task to poll. `lineage`, when present (ADR 0022), embeds the A2A
+    /// delegation chain depth + ancestry this run is extending as a
+    /// `metadata` object on the outbound message — additive to the A2A wire
+    /// shape (an unknown JSON field is expected to be ignored by a
+    /// non-Kelter peer, never a protocol break), read back on the inbound
+    /// side by `server::message_lineage`.
+    pub async fn send_message(
+        &self,
+        text: &str,
+        lineage: Option<(u32, &[String])>,
+    ) -> Result<SendOutcome, A2aError> {
+        let mut message = json!({
+            "messageId": uuid::Uuid::new_v4().to_string(),
+            "role": "ROLE_USER",
+            "parts": [{"text": text}],
+        });
+        if let Some((depth, ancestry)) = lineage {
+            message["metadata"] = json!({
+                "kelter_a2a_depth": depth,
+                "kelter_a2a_ancestry": ancestry,
+            });
+        }
         let result = self
-            .rpc(
-                "SendMessage",
-                json!({
-                    "message": {
-                        "messageId": uuid::Uuid::new_v4().to_string(),
-                        "role": "ROLE_USER",
-                        "parts": [{"text": text}],
-                    }
-                }),
-            )
+            .rpc("SendMessage", json!({ "message": message }))
             .await?;
 
         if let Some(task) = result.get("task") {
@@ -506,6 +526,30 @@ impl ActionSource for A2aActionSource {
         let task_text = action.arguments()["task"].as_str().unwrap_or_default();
         let started = std::time::Instant::now();
 
+        // A2A delegation lineage (ADR 0022): present only when the kernel
+        // injected it (i.e. only for an actual `delegate_to_*` action,
+        // which this function only ever handles anyway). Only read here —
+        // never used on the reconnect path below, since a reconnect polls
+        // an existing remote task instead of sending a fresh message.
+        let lineage_depth = action
+            .arguments()
+            .get(A2A_DEPTH_ARG)
+            .and_then(|v| v.as_u64())
+            .map(|d| d as u32);
+        let lineage_ancestry: Option<Vec<String>> = action
+            .arguments()
+            .get(A2A_ANCESTRY_ARG)
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            });
+        let lineage: Option<(u32, &[String])> = match (lineage_depth, &lineage_ancestry) {
+            (Some(depth), Some(ancestry)) => Some((depth, ancestry.as_slice())),
+            _ => None,
+        };
+
         let outcome: Result<(String, String, String), A2aError> = async {
             // Durable reconnect: if this step already created a remote task
             // before a crash, reattach to it — never delegate twice.
@@ -517,7 +561,7 @@ impl ActionSource for A2aActionSource {
                 );
                 self.poll_to_terminal(client, existing).await?
             } else {
-                match client.send_message(task_text).await? {
+                match client.send_message(task_text, lineage).await? {
                     SendOutcome::Message(text) => {
                         return Ok(("(inline)".to_string(), "TASK_STATE_COMPLETED".into(), text));
                     }
@@ -571,6 +615,13 @@ impl ActionSource for A2aActionSource {
             ))),
             Err(e) => Err(ExecutionError::Tool(e.to_string())),
         }
+    }
+
+    fn a2a_origin(&self, action: &str) -> Option<String> {
+        self.agents
+            .iter()
+            .find(|(name, _)| name == action)
+            .map(|(_, client)| client.allowed_origin().to_string())
     }
 }
 

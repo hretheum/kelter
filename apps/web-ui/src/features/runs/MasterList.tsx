@@ -5,6 +5,7 @@ import { useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/badge";
 import { cn, focusRing } from "@/lib/cn";
+import { hasFanout } from "@/lib/events";
 import {
   absoluteTime,
   formatCost,
@@ -13,7 +14,26 @@ import {
   STATUS_GLYPH,
 } from "@/lib/format";
 import { selectRun } from "@/store/app";
-import { useAppState } from "@/store/hooks";
+import { useAppState, useAxis } from "@/store/hooks";
+
+/* Fan-out indicator (P1, ADR 0022): a run whose axis has observed any
+ * branch-tagged event. Best-effort, not authoritative — the axis is only
+ * populated by events actually seen this session (live WS broadcast, or a
+ * prior visit's replay), so a fan-out run nobody has opened or watched live
+ * since reconnecting won't show the badge yet. No backend field exists to
+ * answer "did this run fork" retroactively from the run-list endpoint
+ * alone; this is a known, disclosed limitation, not a bug (design/08
+ * honesty convention) — see design/03 R-3 parallel variant. */
+function FanoutBadge({ runId }: { runId: string }) {
+  const { axis } = useAxis(runId);
+  if (!hasFanout(axis)) return null;
+  return (
+    <span className="shrink-0 text-primary" title="This run forked into parallel branches">
+      <span aria-hidden="true">⑂</span>
+      <span className="sr-only"> forked</span>
+    </span>
+  );
+}
 
 const STATUS_CLS: Record<string, string> = {
   pending: "text-muted-foreground",
@@ -130,6 +150,7 @@ export function MasterList({
                     {STATUS_GLYPH[run.status]}
                     <span className="sr-only"> {run.status}</span>
                   </span>
+                  <FanoutBadge runId={run.id} />
                   <span className="flex-1 truncate text-body" title={run.task}>
                     {run.task}
                   </span>

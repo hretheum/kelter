@@ -152,6 +152,7 @@ async fn run_scenario(label: &str, skill_name: &str, src_body: &str) {
                 action,
                 ok,
                 result,
+                ..
             } => println!("  step {step}: Executed  {action} ok={ok} result={result}"),
             _ => {}
         }
@@ -224,6 +225,7 @@ async fn run_budget_scenario() {
                 action,
                 ok,
                 result,
+                ..
             } => println!("  step {step}: Executed  {action} ok={ok} result={result}"),
             _ => {}
         }

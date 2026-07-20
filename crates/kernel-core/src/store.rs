@@ -219,6 +219,8 @@ mod tests {
             cost_usd: None,
             active_skills: Vec::new(),
             pending_skill_activation: None,
+            a2a_depth: 0,
+            a2a_ancestry: Vec::new(),
         }
     }
 

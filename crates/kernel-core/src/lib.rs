@@ -22,13 +22,14 @@ pub mod skill_gate;
 pub mod store;
 
 pub use action::{
-    ActionSchema, ActionSpec, ProposedAction, ValidatedAction, ValidationError, IDEMPOTENCY_KEY_ARG,
+    ActionSchema, ActionSpec, ProposedAction, ValidatedAction, ValidationError, A2A_ANCESTRY_ARG,
+    A2A_DEPTH_ARG, IDEMPOTENCY_KEY_ARG,
 };
 pub use cost::{ModelPrice, PricingTable};
 pub use engine::{
-    crash_point, is_a2a_action, ActionSource, AgentUsage, CompositeActionSource, ExecutionContext,
-    ExecutionError, Kernel, KernelConfig, KernelError, PendingSkillActivation, Run, RunEvent,
-    RunEventEnvelope, RunMode, RunStatus, StepRecord, ACTIVATE_SKILL_ACTION,
+    crash_point, is_a2a_action, ActionSource, AgentUsage, CompositeActionSource, DelegationLimits,
+    ExecutionContext, ExecutionError, Kernel, KernelConfig, KernelError, PendingSkillActivation,
+    Run, RunEvent, RunEventEnvelope, RunMode, RunStatus, StepRecord, ACTIVATE_SKILL_ACTION,
     DEACTIVATE_SKILL_ACTION, FINISH_ACTION,
 };
 pub use journal::{JournalEntry, PendingActivationFold, Usage};

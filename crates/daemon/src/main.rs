@@ -798,6 +798,10 @@ async fn main() -> anyhow::Result<()> {
             trust_posture,
             // Built-in dated prices, extended/overridden by [pricing] config.
             pricing: kernel_core::PricingTable::builtin().merged_with(cfg.pricing.clone()),
+            delegation: kernel_core::DelegationLimits {
+                max_delegations_per_run: cfg.delegation.max_per_run,
+                max_depth: cfg.delegation.max_depth,
+            },
         },
     );
     if let Some(learned) = learned {

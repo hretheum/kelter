@@ -1090,7 +1090,16 @@ async fn a2a_send(
     if text.is_empty() {
         return rpc_error(id, -32602, "invalid params: message has no text");
     }
-    let run_id = match state.kernel.create_run(text).await {
+    // A2A delegation lineage (ADR 0022): an upstream Kelter hop may carry
+    // its chain depth + ancestry in the message metadata; absent for a
+    // non-Kelter caller or the start of a fresh chain — both mean depth 0,
+    // empty ancestry, which `message_lineage` already defaults to.
+    let (a2a_depth, a2a_ancestry) = a2a::server::message_lineage(params);
+    let run_id = match state
+        .kernel
+        .create_run_with_lineage(text, a2a_depth, a2a_ancestry)
+        .await
+    {
         Ok(r) => r,
         Err(e) => return rpc_error(id, -32000, &format!("cannot create run: {e}")),
     };

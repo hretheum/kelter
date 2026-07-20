@@ -106,6 +106,30 @@ swappable policy engine, and it stays reliable even on small local models.
   policy, closing a gap the frontend implementer correctly flagged rather
   than guessed at. Durability proven against real SQLite across a
   restart; 15 new tests, 0 regressions (157 → 172). Done.
+- **Phase 14 — parallel plan fan-out + governed delegation (ADR 0022).**
+  Plan mode's `execute_plan` is now a readiness-driven admission loop
+  (`futures::stream::FuturesUnordered` + `tokio::spawn`) instead of a
+  strict sequential `for` loop — independent DAG nodes (tool/A2A/review
+  alike) run concurrently once their dependencies are satisfied, proven
+  with real wall-clock timing (3 independent 250ms-delayed A2A nodes
+  complete in ~250-350ms, not the ~750ms sequential would need). Ships
+  together with governed delegation limits — `KernelConfig.delegation`
+  (`max_delegations_per_run`, `max_depth`, defaults 10/3, operator-tunable
+  via `[delegation]`), plus kernel-side cycle detection via
+  `Run.a2a_ancestry` — enforced as a hard, journaled/emitted refusal
+  (mirroring the ADR 0020/0021 skill-gate `Deny` pattern), never a silent
+  skip. Depth/ancestry ride the actual A2A wire protocol as a `metadata`
+  object on `SendMessage` (origin strings, not agent display names — the
+  same SSRF-pinned identity `A2aClient::allowed_origin` already computes),
+  so a chain of Kelter-to-Kelter hops enforces the limit correctly; a
+  non-Kelter hop in the middle is exactly as opaque as it already was.
+  `RunEvent` gains a `branch: Option<String>` dimension so a fan-out's
+  timeline can be split into swimlanes — `crates/api` needed zero code
+  changes (confirmed by grep, not assumed). Durable multi-branch resume
+  (a crash with MULTIPLE in-flight A2A branches reconnects to ALL of them,
+  never re-delegates) proven against real SQLite + two real mock A2A HTTP
+  servers, not just reasoned about. 9 new tests, 0 regressions
+  (172 → 181). Done.
 
 ## Phase 4 — the governed extension platform (delivered)
 
