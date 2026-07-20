@@ -1559,3 +1559,53 @@ still-loud agent+wasm refusal. Full `cargo test --workspace` **exit 0, 47
 suites `test result: ok`, 0 failures**; `cargo clippy --workspace
 --all-targets` clean; `cargo fmt --all --check` clean. `git grep -i <codename>`
 = 0. No live model/network needed — every crux is deterministic.
+
+## Phase 17 — plan-mode delegation ask (drain-then-pause), P5 enabler (ADR 0025)
+
+Closes the ADR 0023 plan-mode gap: an `AskHuman` on a plan-mode a2a node no
+longer degrades to a deny/failure — the concurrent admission loop (ADR 0022)
+**drains already-in-flight siblings, then durably suspends** the run as
+`AwaitingDelegationDecision`, resolvable through the SAME journal→replay→apply
+machinery step mode uses (ADR 0021/0023).
+
+- **The budget stays single-writer — it is ALREADY atomic and durable.** The
+  P5 brief framed the enabler as a "cross-task-shareable budget counter";
+  reading the code first showed the premise needed correcting. The per-run
+  `a2a_attempts` counter is single-writer on the orchestrator
+  (checked+incremented before any spawn → race structurally impossible) and
+  journal-reconstructed on resume (durable across restart). A shared atomic
+  counter would replace a provably-safe design with shared mutable state for
+  zero benefit — deliberately NOT done, disclosed to the human as a
+  premise-vs-reality correction (ADR 0025 decision 1).
+- **Drain-then-pause keeps the resume budget seed EXACT.** Suspending only
+  after in-flight siblings drain to receipts means every dialed sibling is in
+  the journal when the run pauses, so the journal-derived seed never
+  under-counts (which would let resume over-admit past budget). A sibling
+  failure during the drain takes priority (the plan is doomed) and the ask is
+  abandoned unjournaled.
+- **Three-way gate + replay consumption.** Plan-mode gate is now
+  Allow/Deny/AskHuman like step mode; on resume a decided ask is consumed from
+  the journal (replay is law), never re-gated — Deny fails the node/plan,
+  Allow* counts one slot and dispatches, AllowAlways also elevates trust once.
+- **`record_node_step` made idempotent by node index** — a clean pause
+  persists `run.steps` and the resume fast-path re-applies journaled receipts,
+  so a drained sibling would otherwise be recorded twice across the pause.
+  Exactly-once, and it hardens ordinary crash-resume too.
+
+**Proof (`docs/evidence/multiagent-p5.log`):** 6 new deterministic tests
+(`crates/kernel-core/tests/plan_delegation_ask_test.rs`) against a real
+`Kernel` in plan mode + a scripted `DelegationGate` — pause-not-deny,
+allow_once resume+dispatch, deny fails node/plan, **drain-in-flight-sibling
+before pausing**, **pause survives a restart (second Kernel over the same
+store) with the budget not double-counted**, and **budget atomic across
+concurrent branches with a pause (budget 2, 3 branches → exactly 2 dial)**.
+Regressions green: `parallel_plan_test` 7/7 (ADR 0022 fan-out/governance),
+`plan_test` 5/5 (sequential + durability). Full `cargo test --workspace`
+**exit 0, 48 suites, 0 failures**; clippy + fmt clean.
+
+**Honestly deferred (the rest of P5, each an independently-gateable slice built
+on this same paused-waiting machinery):** interactive multi-turn delegation
+(pausing awaiting the *remote* agent — needs an A2A multi-turn protocol
+extension); remote-progress streaming (A2A SSE → journaled/attributed timeline
+steps); the frontend (swimlane streamed-progress + multi-turn pause states +
+a plan-mode delegation-ask prompt). Sequenced behind the enabler by design.

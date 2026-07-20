@@ -2799,15 +2799,41 @@ impl Kernel {
             })
             .count() as u32;
 
+        // Drain-then-pause holder (ADR 0025): set when a FRESH a2a node's
+        // trust gate returns `AskHuman`. Once set, no new node is admitted
+        // (the admission guard below also checks it), so already-in-flight
+        // siblings drain to receipts — keeping the resume budget seed exact —
+        // and then the run suspends durably as `AwaitingDelegationDecision`
+        // rather than degrading the ask to a deny (the ADR 0023 plan-mode
+        // gap). Only ONE node's ask is surfaced at a time: with the loop
+        // frozen to new admissions, a second ask-worthy node simply waits its
+        // turn on the next resume — the single-decision-at-a-time contract
+        // step mode already has.
+        struct PlanAsk {
+            step: u32,
+            branch: String,
+            agent: String,
+            origin: String,
+            arguments: serde_json::Value,
+            trust: String,
+            description: String,
+            provenance_source_kind: String,
+            provenance_source: String,
+            requested_at: u64,
+        }
+        let mut pending_ask: Option<PlanAsk> = None;
+
         loop {
             for (node_index, node) in &nodes {
                 if completed.contains(node_index) || dispatched.contains(node_index) {
                     continue;
                 }
-                if failure.is_some() {
-                    // Fail-fast (ADR 0010): no NEW node is admitted once
-                    // any node has failed — but already in-flight siblings
-                    // are left to drain naturally below, never orphaned.
+                if failure.is_some() || pending_ask.is_some() {
+                    // No NEW node is admitted once the plan has failed
+                    // (fail-fast, ADR 0010) OR a node is awaiting human
+                    // delegation authorization (drain-then-pause, ADR 0025) —
+                    // but already in-flight siblings are left to drain
+                    // naturally below, never orphaned.
                     continue;
                 }
                 if !validated_plan
@@ -2839,16 +2865,102 @@ impl Kernel {
                     continue;
                 }
 
-                // Governed delegation limits (ADR 0022): only for a FRESH
-                // admission — a node with a dangling Intent already passed
-                // this gate before a crash ("replay is law": re-checking it
-                // now could spuriously refuse an already-in-flight, maybe
-                // already fired-over-the-wire delegation and orphan it).
                 let is_a2a_node = node.node_type == crate::plan::NodeType::A2a;
+
+                // Resume path (ADR 0025): this a2a node reached an `AskHuman`
+                // gate in a prior session and the human has since decided.
+                // Consume the recorded decision — replay is law, the gate is
+                // NOT re-consulted. `Deny` fails the node (and the plan);
+                // `Allow*` counts one budget slot and falls through to a
+                // normal dispatch. An undecided ask should have been
+                // re-surfaced by `execute_run`'s `still_awaiting` check before
+                // reaching here; treat it defensively as a re-pause.
+                if is_a2a_node {
+                    if let Some(fold) = folded.delegation.clone() {
+                        match fold.decision {
+                            Some(AgentDelegationDecision::Deny) => {
+                                let reason = format!(
+                                    "the operator declined to authorize delegating to '{}' for \
+                                     this run",
+                                    fold.agent
+                                );
+                                self.emit(
+                                    run_id,
+                                    seq,
+                                    RunEvent::Rejected {
+                                        step,
+                                        reason: reason.clone(),
+                                        attempt: 0,
+                                        branch: Some(node.id.clone()),
+                                    },
+                                );
+                                seq += 1;
+                                let result = serde_json::json!({ "error": reason });
+                                self.record_node_step(&mut run, step, node, result.clone(), false)
+                                    .await?;
+                                node_outputs.insert(node.id.clone(), result);
+                                completed.insert(*node_index);
+                                dispatched.insert(*node_index);
+                                failure = Some(format!(
+                                    "plan node '{}' delegation denied by the operator",
+                                    node.id
+                                ));
+                                continue;
+                            }
+                            Some(AgentDelegationDecision::AllowAlways) => {
+                                if let Some(gate) = &self.delegation_gate {
+                                    if let Err(e) = gate.elevate_trust(&fold.agent) {
+                                        tracing::warn!(
+                                            %run_id, agent = %fold.agent,
+                                            "trust elevation failed (delegation still applies \
+                                             for this run): {e}"
+                                        );
+                                    }
+                                }
+                                a2a_attempts += 1;
+                                // Fall through to dispatch (gate NOT re-checked).
+                            }
+                            Some(AgentDelegationDecision::AllowOnce) => {
+                                a2a_attempts += 1;
+                                // Fall through to dispatch (gate NOT re-checked).
+                            }
+                            None => {
+                                // Defensive re-pause: keep the run suspended
+                                // rather than silently proceeding.
+                                pending_ask = Some(PlanAsk {
+                                    step,
+                                    branch: node.id.clone(),
+                                    agent: fold.agent.clone(),
+                                    origin: fold.target_origin.clone(),
+                                    arguments: fold.arguments.clone(),
+                                    trust: fold.meta.trust.clone(),
+                                    description: fold.meta.description.clone(),
+                                    provenance_source_kind: fold
+                                        .meta
+                                        .provenance_source_kind
+                                        .clone(),
+                                    provenance_source: fold.meta.provenance_source.clone(),
+                                    requested_at: fold.requested_at,
+                                });
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                // Fresh admission — governed delegation limits (ADR 0022) +
+                // trust gate (ADR 0023). Skipped for a node with a dangling
+                // Intent (already passed this gate before a crash; "replay is
+                // law") and for a node whose ask was pre-decided above
+                // (`folded.delegation` present → handled by the resume arm).
                 let has_dangling_intent = folded.intent.is_some();
-                if is_a2a_node && !has_dangling_intent {
+                let ask_already_recorded = folded.delegation.is_some();
+                if is_a2a_node && !has_dangling_intent && !ask_already_recorded {
                     let action_name = node.action.clone().unwrap_or_default();
                     let target_origin = self.tools.a2a_origin(&action_name);
+                    // P2 (budget/depth/cycle) FIRST — a hard refusal fails the
+                    // plan (a run-scoped governance fact); the counter is
+                    // incremented exactly once per considered a2a node.
                     let refusal = match &target_origin {
                         None => Some(format!(
                             "internal error: no origin declared for a2a action '{action_name}' \
@@ -2858,31 +2970,21 @@ impl Kernel {
                         Some(origin) => self.authorize_delegation(&run, a2a_attempts, origin).err(),
                     };
                     a2a_attempts += 1;
-                    // Agent-trust gate + circuit-breaker (ADR 0023): both run
-                    // SECOND, only once P2 already allowed this delegation
-                    // structurally — same ordering as step mode. Plan-mode
-                    // does NOT implement the interactive `AskHuman` pause or
-                    // the retry/fallback resilience loop this round (a
-                    // disclosed scope decision, see ADR 0023): the
-                    // readiness-driven concurrent admission loop has no
-                    // single well-defined "the run is paused" moment when
-                    // several nodes may be ask-worthy at once, so an
-                    // `AskHuman` outcome here is treated as a refusal
-                    // (Rejected, node fails) rather than a durable pause —
-                    // only step mode's single-decision-at-a-time proposal
-                    // point implements the pause.
+                    // Circuit-breaker (ADR 0023): an open circuit is a node
+                    // failure here — plan-mode does not retry/fall back within
+                    // a node this round (disclosed scope, ADR 0025).
                     let refusal = refusal.or_else(|| {
-                        let origin = target_origin.as_deref()?;
-                        if matches!(
+                        target_origin.as_deref()?;
+                        matches!(
                             self.tools.circuit_state(&action_name),
                             CircuitCheck::Open { .. }
-                        ) {
-                            return Some(format!(
+                        )
+                        .then(|| {
+                            format!(
                                 "agent circuit open for '{action_name}' — refusing to dial \
                                  (plan-mode does not retry/fall back within a node this round)"
-                            ));
-                        }
-                        self.delegation_gate_refusal(&action_name, origin)
+                            )
+                        })
                     });
                     if let Some(reason) = refusal {
                         self.emit(
@@ -2907,6 +3009,59 @@ impl Kernel {
                             node.id
                         ));
                         continue;
+                    }
+
+                    // Trust gate (ADR 0023) — now THREE-way in plan-mode
+                    // (ADR 0025): Allow → dispatch; Deny → node/plan fail;
+                    // AskHuman → drain-then-pause (no degrade-to-deny). Runs
+                    // SECOND, only once P2 already allowed this delegation
+                    // structurally — same ordering as step mode.
+                    if let Some(gate) = &self.delegation_gate {
+                        let origin = target_origin
+                            .clone()
+                            .expect("target_origin is Some: the None arm above already refused");
+                        match gate.authorize_delegation_to(&action_name, &origin) {
+                            DelegationDecisionOutcome::Allow(_) => { /* dispatch below */ }
+                            DelegationDecisionOutcome::Deny(reason) => {
+                                self.emit(
+                                    run_id,
+                                    seq,
+                                    RunEvent::Rejected {
+                                        step,
+                                        reason: reason.clone(),
+                                        attempt: 0,
+                                        branch: Some(node.id.clone()),
+                                    },
+                                );
+                                seq += 1;
+                                let result = serde_json::json!({ "error": reason });
+                                self.record_node_step(&mut run, step, node, result.clone(), false)
+                                    .await?;
+                                node_outputs.insert(node.id.clone(), result);
+                                completed.insert(*node_index);
+                                dispatched.insert(*node_index);
+                                failure = Some(format!(
+                                    "plan node '{}' refused by delegation governance",
+                                    node.id
+                                ));
+                                continue;
+                            }
+                            DelegationDecisionOutcome::AskHuman(meta) => {
+                                pending_ask = Some(PlanAsk {
+                                    step,
+                                    branch: node.id.clone(),
+                                    agent: action_name.clone(),
+                                    origin,
+                                    arguments: node.arguments.clone(),
+                                    trust: meta.trust.clone(),
+                                    description: meta.description.clone(),
+                                    provenance_source_kind: meta.provenance_source_kind.clone(),
+                                    provenance_source: meta.provenance_source.clone(),
+                                    requested_at: now_secs(),
+                                });
+                                continue;
+                            }
+                        }
                     }
                 }
 
@@ -3000,6 +3155,63 @@ impl Kernel {
             }
         }
 
+        // Drain-then-pause resolution (ADR 0025): a fresh a2a node's trust
+        // gate asked for human authorization. The loop only exits once
+        // `in_flight` is empty, so every sibling has drained to a receipt —
+        // the resume budget seed is therefore exact — and the run now suspends
+        // durably as `AwaitingDelegationDecision`. A concurrent sibling
+        // FAILURE during the drain takes priority (the plan is doomed anyway),
+        // so the pause is only taken when `failure` is still None; otherwise
+        // the ask is abandoned unjournaled (its node never ran) and the plan
+        // finalizes as failed below.
+        if failure.is_none() {
+            if let Some(ask) = pending_ask {
+                self.store
+                    .append_journal(
+                        run_id,
+                        JournalEntry::AgentDelegationRequested {
+                            step: ask.step,
+                            agent: ask.agent.clone(),
+                            target_origin: ask.origin.clone(),
+                            arguments: ask.arguments.clone(),
+                            trust: ask.trust.clone(),
+                            description: ask.description.clone(),
+                            provenance_source_kind: ask.provenance_source_kind.clone(),
+                            provenance_source: ask.provenance_source.clone(),
+                            requested_at: ask.requested_at,
+                        },
+                    )
+                    .await?;
+                run.status = RunStatus::AwaitingDelegationDecision;
+                run.pending_delegation = Some(PendingDelegation {
+                    step: ask.step,
+                    agent: ask.agent.clone(),
+                    target_origin: ask.origin.clone(),
+                    trust: ask.trust.clone(),
+                    description: ask.description.clone(),
+                    provenance_source_kind: ask.provenance_source_kind.clone(),
+                    provenance_source: ask.provenance_source.clone(),
+                    requested_at: ask.requested_at,
+                });
+                self.store.put(run.clone()).await?;
+                self.emit(
+                    run_id,
+                    seq,
+                    RunEvent::AgentDelegationRequested {
+                        step: ask.step,
+                        agent: ask.agent,
+                        target_origin: ask.origin,
+                        description: ask.description,
+                        trust: ask.trust,
+                        provenance_source_kind: ask.provenance_source_kind,
+                        provenance_source: ask.provenance_source,
+                        branch: Some(ask.branch),
+                    },
+                );
+                return Ok(run);
+            }
+        }
+
         let (status, output, error) = match failure {
             None => (
                 RunStatus::Completed,
@@ -3024,6 +3236,14 @@ impl Kernel {
         result: serde_json::Value,
         ok: bool,
     ) -> Result<(), KernelError> {
+        // Idempotent by node index: a durable ask-pause (ADR 0025) persists
+        // `run.steps` before suspending, and the resume fast-path re-applies
+        // each journaled receipt — without this guard a drained sibling would
+        // be recorded twice across the pause. Node indices are unique, so
+        // skipping an already-present index is exactly-once, not lossy.
+        if run.steps.iter().any(|s| s.index == step) {
+            return Ok(());
+        }
         run.steps.push(StepRecord {
             index: step,
             action: node

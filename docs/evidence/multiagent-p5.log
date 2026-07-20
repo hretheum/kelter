@@ -1,0 +1,26 @@
+# P5 enabler + plan-mode delegation ask (ADR 0025) — evidence
+# ac71244 working tree, generated 2026-07-21
+# Correctness-critical core proven deterministically (no model, no network).
+
+## Plan-mode delegation AskHuman: drain-then-pause + durable budget
+running 6 tests
+test plan_mode_deny_fails_the_node_and_plan ... ok
+test plan_mode_askhuman_pauses_instead_of_denying ... ok
+test plan_mode_allow_once_resumes_and_dispatches ... ok
+test budget_is_atomic_across_concurrent_branches_with_a_pause ... ok
+test ask_pause_survives_a_restart_and_budget_stays_exact ... ok
+test plan_mode_drains_inflight_siblings_before_pausing ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+## Regression: fan-out + governance (ADR 0022) unchanged
+test step_mode_events_carry_no_branch ... ok
+test delegation_depth_limit_enforced_on_inbound_seeded_run ... ok
+test delegation_cycle_detected_via_ancestry ... ok
+test event_carries_branch_dimension ... ok
+test delegation_budget_exhausted_is_governed_rejected ... ok
+test dependent_node_waits_for_its_dependency ... ok
+test parallel_independent_nodes_run_concurrently ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+## Regression: sequential plan-mode + durability (plan_test)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
