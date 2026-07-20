@@ -1,0 +1,215 @@
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_481f404e294904 1390-1499
+apps/web-ui/src/features/settings/AgentsSettings.tsx
+  s_ebdbabe3e659c2::t_54dc80a367543c 1-295
+crates/kernel-core/src/journal.rs
+  s_ebdbabe3e659c2::t_b0fdb564e13af3 168-171
+  s_ebdbabe3e659c2::t_c4db6fe764ecee 13
+  s_ebdbabe3e659c2::t_e95c8bacf4d326 185-196
+  s_ebdbabe3e659c2::t_caf75009560d7e 259-295
+  s_ebdbabe3e659c2::t_ed9a276b5d2b56 110-136,147-149
+crates/a2a/src/gate.rs
+  s_ebdbabe3e659c2::t_8d4f2d318fe8d4 1-238
+crates/a2a/tests/delegation_governance_test.rs
+  s_ebdbabe3e659c2::t_86c45745f6213e 1-15,17-20,22-75,77-81,83-284,286-300,302-310,312-315,317-323,325-391
+  s_ebdbabe3e659c2::t_405ebb9712f3b8 16
+  s_ebdbabe3e659c2::t_482ee9d7bae33a 285
+  s_ebdbabe3e659c2::t_361bcd72648acb 301,311,316,324
+  s_ebdbabe3e659c2::t_5636d37f0e4585 21
+  s_ebdbabe3e659c2::t_0758d3beedd4e9 76
+  s_ebdbabe3e659c2::t_31ab9efd9e8a34 82
+crates/daemon/src/lib.rs
+  s_ebdbabe3e659c2::t_b4fbc13fe02f03 5,7
+crates/a2a/src/registry.rs
+  s_ebdbabe3e659c2::t_26915b8118a946 101
+  s_ebdbabe3e659c2::t_dd83a4553e3d8d 28-33
+  s_ebdbabe3e659c2::t_0425d64510c500 1-27,34-100,102-157,170-178,180-183,194-195,197,199-252
+  s_ebdbabe3e659c2::t_f001e009e0a861 158-169,179,184-193,196,198
+apps/web-ui/src/lib/events.ts
+  s_ebdbabe3e659c2::t_c16ad9a7f6c60e 78
+  s_ebdbabe3e659c2::t_094474830ca455 273-298
+  s_ebdbabe3e659c2::t_39ca8293169dd0 161-176
+  s_ebdbabe3e659c2::t_148b56202481d8 61-65
+  s_ebdbabe3e659c2::t_7deee0caaf2382 115-124
+  s_ebdbabe3e659c2::t_2311729606e78b 16
+  s_ebdbabe3e659c2::t_6e1623976f766b 18
+crates/kernel-core/src/engine.rs
+  s_ebdbabe3e659c2::t_3e9108c8e8cbff 1067
+  s_ebdbabe3e659c2::t_48c4d0200dbe38 419-424,433,443
+  s_ebdbabe3e659c2::t_9a62f777fa16d6 1527-1547,1549-1556
+  s_ebdbabe3e659c2::t_aeb2ae75a0407c 323-331,336-344
+  s_ebdbabe3e659c2::t_654a86a0e5e632 16
+  s_ebdbabe3e659c2::t_3b00a8d2f5abd1 415-418,425-432,434-442,444
+  s_ebdbabe3e659c2::t_892abf887339e4 1548
+  s_ebdbabe3e659c2::t_a2cbe8cc3a4342 1714-1770,2501-2502
+  s_ebdbabe3e659c2::t_a507ff7003fe41 2478
+  s_ebdbabe3e659c2::t_d640e0bef0ea3a 332-335
+  s_ebdbabe3e659c2::t_a926770b4433ae 196-205
+  s_ebdbabe3e659c2::t_6d18979ca33351 1163,1165-1171
+  s_ebdbabe3e659c2::t_0342735c8100da 591-594
+  s_ebdbabe3e659c2::t_f04d9f382b36a3 702
+  s_ebdbabe3e659c2::t_b99de4163b2a69 2412-2428,2430-2445,2450,2459-2477,2479-2500
+  s_ebdbabe3e659c2::t_7a021d55c65fe7 232-238
+  s_ebdbabe3e659c2::t_e4e705241a6d36 724-732
+  s_ebdbabe3e659c2::t_eaffe64bc1812b 905
+  s_ebdbabe3e659c2::t_d27c62a8b3940b 288-291
+  s_ebdbabe3e659c2::t_77ccc4ba77c1f2 645-685
+  s_ebdbabe3e659c2::t_34f43b027cebed 1022-1066,1068-1073
+  s_ebdbabe3e659c2::t_f0b9e7e598ea40 1125-1162,1164,1172-1458
+  s_ebdbabe3e659c2::t_48b6eb5270637c 1994-2071,2073-2078
+  s_ebdbabe3e659c2::t_ce83b574b2be2d 2072
+  s_ebdbabe3e659c2::t_8e82c6a0c0cd14 118-141
+  s_ebdbabe3e659c2::t_72606560bd8ca3 482-483,496-508,510-521
+  s_ebdbabe3e659c2::t_c4a93d0dbab476 2861-2886
+  s_ebdbabe3e659c2::t_9791ec816f69dd 509,522-528
+  s_ebdbabe3e659c2::t_810af57e9a83a3 2503
+docs/adr/0023-agent-trust-policy-resilience.md
+  s_ebdbabe3e659c2::t_50438909472b66 1-378
+apps/web-ui/src/lib/api.ts
+  s_ebdbabe3e659c2::t_e8a7a7bf122e51 75
+  s_ebdbabe3e659c2::t_f09c54dcb7834a 165-173
+  s_ebdbabe3e659c2::t_d1b643a2482f56 115-133
+  s_ebdbabe3e659c2::t_9b06b4ee72f813 212-240
+crates/api/src/lib.rs
+  s_ebdbabe3e659c2::t_87a1e45cbd8967 433-434,444-453
+  s_ebdbabe3e659c2::t_5dd6cc20894403 837-898
+  s_ebdbabe3e659c2::t_f5b8988b7a7964 454,1031-1122
+  s_ebdbabe3e659c2::t_e0962d8faec50a 271-274
+  s_ebdbabe3e659c2::t_107fba23f515c0 378-387
+  s_ebdbabe3e659c2::t_a0175c0e8cade1 139-200
+  s_ebdbabe3e659c2::t_eaa98c193d9823 302-306,312-323,332
+  s_ebdbabe3e659c2::t_f72e7e0fccfeca 455
+  s_3b429e45c62c6c::t_d43fa7e1d93f5c 349-353
+apps/web-ui/src/features/runs/RunDetail.tsx
+  s_ebdbabe3e659c2::t_875fd65a4fa290 34-35
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_ff7f5665c19e8e 972-990,992-1009
+  s_ebdbabe3e659c2::t_091880376c3398 9,11
+  s_ebdbabe3e659c2::t_d4043d4a87c847 1074-1080
+  s_ebdbabe3e659c2::t_72b5c37beb172c 404-407
+  s_ebdbabe3e659c2::t_010273d7920edf 581-592,619-624,626-639
+  s_ebdbabe3e659c2::t_78615796d987c7 808-854,875-878,888
+  s_ebdbabe3e659c2::t_928595225de616 991
+crates/kernel-core/src/store.rs
+  s_ebdbabe3e659c2::t_8f7216e9477a07 155-158
+  s_ebdbabe3e659c2::t_ab9f831cc8a3d5 225
+crates/kernel-core/src/lib.rs
+  s_ebdbabe3e659c2::t_d620f6c00f268b 15,30-32,34-37,39
+apps/web-ui/src/features/runs/DelegationAuthorizationPrompt.tsx
+  s_ebdbabe3e659c2::t_b5208710f5afc1 1-109
+crates/daemon/src/agents_controller.rs
+  s_ebdbabe3e659c2::t_a942071709ce81 1-132,134-203
+  s_ebdbabe3e659c2::t_8cf31601756c66 133
+crates/a2a/tests/delegation_resilience_test.rs
+  s_ebdbabe3e659c2::t_540431217c33f0 1-24,26-76,78-82,84-306,312-628
+  s_ebdbabe3e659c2::t_0c9855de746de4 307-311
+  s_ebdbabe3e659c2::t_295a4a5d7fbaeb 25
+  s_ebdbabe3e659c2::t_272ed3d6ae803c 77
+  s_ebdbabe3e659c2::t_68772f29e5cb7a 83
+apps/desktop/src-tauri/tests/durable_store.rs
+  s_ebdbabe3e659c2::t_27cfa341937aa6 42
+crates/a2a/Cargo.toml
+  s_ebdbabe3e659c2::t_afe5dc94918875 23-24
+  s_ebdbabe3e659c2::t_a4d3f3db55263b 13
+crates/a2a/tests/delegation_durability_test.rs
+  s_ebdbabe3e659c2::t_9b741f0fc259c0 1-18,20-22,24-207,209-246,248-259
+  s_ebdbabe3e659c2::t_8fbd9873017ac8 19
+  s_ebdbabe3e659c2::t_b1ea1cc3317bb4 23
+  s_ebdbabe3e659c2::t_106e45a1a0ddfd 208
+  s_ebdbabe3e659c2::t_eb7d6dc4de8e15 247
+apps/web-ui/src/features/runs/FanoutLanes.tsx
+  s_ebdbabe3e659c2::t_933a09267e41dc 60-66,71-75
+  s_ebdbabe3e659c2::t_1e51d0324e5740 18,23,33
+apps/web-ui/src/store/app.ts
+  s_ebdbabe3e659c2::t_9394fd606ec4de 464-472
+  s_ebdbabe3e659c2::t_e4ce1a401b4140 308-365
+  s_ebdbabe3e659c2::t_92b6265ea23c58 84
+  s_ebdbabe3e659c2::t_7a2fa7e5492f9a 55-61
+  s_ebdbabe3e659c2::t_93ea03a67a4874 170
+  s_ebdbabe3e659c2::t_3cb2e89f87a605 82-83
+  s_ebdbabe3e659c2::t_36f40963b01806 62-65
+  s_ebdbabe3e659c2::t_9e2ab86ce5d9ef 12-15,17
+apps/web-ui/design/03-screens/R-3-live-timeline.md
+  s_ebdbabe3e659c2::t_a1468dc3d9b25f 240-290
+  s_ebdbabe3e659c2::t_916b6b92776b8c 210-239
+docs/evidence/agent-trust-resilience.log
+  s_ebdbabe3e659c2::t_4d0c0c1b8b5694 458-512
+  s_ebdbabe3e659c2::t_c54295d8090c4f 300,343-457,513-514
+  s_ebdbabe3e659c2::t_74f973dedb6c7f 301-342
+  s_ebdbabe3e659c2::t_3f67e1a8e1f1e9 1-299
+crates/daemon/src/config.rs
+  s_ebdbabe3e659c2::t_b0022ee2315b3e 104-111,117-160,168-175
+crates/daemon/src/delegation_sweep.rs
+  s_ebdbabe3e659c2::t_8f25a7317e1d2a 1-61
+crates/a2a/src/server.rs
+  s_ebdbabe3e659c2::t_230d14580a20f0 54-56
+  s_ebdbabe3e659c2::t_d5629dc4efa32a 218
+apps/web-ui/src/lib/format.ts
+  s_ebdbabe3e659c2::t_a07a6083a9045e 50
+crates/storage/src/lib.rs
+  s_ebdbabe3e659c2::t_773b9a16da3943 520
+  s_ebdbabe3e659c2::t_74663c61deda52 213
+apps/web-ui/design/07-open-decisions.md
+  s_ebdbabe3e659c2::t_8a43d8cabd5f22 21
+  s_ebdbabe3e659c2::t_7d24603caffb64 22
+crates/a2a/src/lib.rs
+  s_ebdbabe3e659c2::t_a7f2d29bbb010e 228
+  s_ebdbabe3e659c2::t_084711e50961d7 183-186
+  s_ebdbabe3e659c2::t_f4016cbfec391e 313-319
+  s_ebdbabe3e659c2::t_e84e853d3eef42 308-312,320-321
+  s_ebdbabe3e659c2::t_40858621731d67 86-93
+  s_ebdbabe3e659c2::t_d5e53b1afbe675 454-458
+  s_ebdbabe3e659c2::t_e9757cd488427b 101-102
+  s_ebdbabe3e659c2::t_84e3795adf82f4 612-613
+  s_ebdbabe3e659c2::t_9ba2f7b3a14f89 472-488,490,493-495,502,505,508-510,514-522,524-569,793
+  s_ebdbabe3e659c2::t_98a173f8833554 644,646-647,650,654
+  s_ebdbabe3e659c2::t_528a465466a8e4 25-27,34-36,43-44,47-51
+  s_ebdbabe3e659c2::t_aadbf5d1a1ab18 733-740,759-760,765-792
+  s_ebdbabe3e659c2::t_d4490be44b8d06 293-295
+  s_ebdbabe3e659c2::t_9a6eda678a7e7b 52
+crates/kernel-core/src/delegation_gate.rs
+  s_ebdbabe3e659c2::t_83b60c8991eebc 1-96
+apps/web-ui/src/features/runs/MasterList.tsx
+  s_ebdbabe3e659c2::t_2937d7121a8ee4 42
+apps/web-ui/src/features/runs/StepCard.tsx
+  s_ebdbabe3e659c2::t_7964bdbb3057e3 127-132
+  s_ebdbabe3e659c2::t_75716a8cd13d24 22-37
+  s_ebdbabe3e659c2::t_a1f6dfbe3cf9c4 66
+  s_ebdbabe3e659c2::t_52bc8799a9c2e3 113-118,120
+apps/web-ui/src/features/runs/Timeline.tsx
+  s_ebdbabe3e659c2::t_3f5fb751c8612f 38
+  s_ebdbabe3e659c2::t_3d35161d04a46d 142-143
+  s_ebdbabe3e659c2::t_a5a0b1cf58c376 15
+  s_ebdbabe3e659c2::t_bccd493b7ab176 56
+  s_ebdbabe3e659c2::t_91699bc6e429dc 91-104
+  s_ebdbabe3e659c2::t_696519e207fe01 211-213
+apps/web-ui/src/app.tsx
+  s_ebdbabe3e659c2::t_7282cab3b7bc39 14
+  s_ebdbabe3e659c2::t_a7b40f4930fe4e 69-72
+Cargo.lock
+  s_ebdbabe3e659c2::t_6bda086891d3e8 12,16,19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "df2ebb34369bf5c8f03b530dfee23d65ed985dc3",
+  "prompts": {},
+  "sessions": {
+    "s_3b429e45c62c6c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-aagent-trust-backend-impl-632d155d3c7cd47a",
+        "model": "unknown"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    },
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
