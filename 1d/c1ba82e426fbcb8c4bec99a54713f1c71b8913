@@ -1,0 +1,232 @@
+crates/kernel-core/src/store.rs
+  s_ebdbabe3e659c2::t_6dcbf7cc7a1892 221
+  s_ebdbabe3e659c2::t_5fdf1e5a42a979 152-157
+  s_ebdbabe3e659c2::t_78ef3b8c2230e9 220
+crates/policy/src/prompt.rs
+  s_ebdbabe3e659c2::t_acfc1d50fc104a 140
+crates/daemon/src/skill_sweep.rs
+  s_ebdbabe3e659c2::t_ba4d7b686b7dc5 1-58
+apps/web-ui/src/lib/format.ts
+  s_ebdbabe3e659c2::t_4769c9e12b6282 49
+crates/skills/src/lib.rs
+  s_ebdbabe3e659c2::t_781608db7f191a 25
+  s_ebdbabe3e659c2::t_03b80e43dc1411 29-32
+crates/skills/tests/skills_test.rs
+  s_ebdbabe3e659c2::t_237d307c207020 664
+  s_ebdbabe3e659c2::t_5a17d3b134aa45 484-494,501-542,547-663,665-682,686-695,700-799,801-804,806-807
+  s_ebdbabe3e659c2::t_f0029b6b59ea58 26,28-34,36,41-42
+  s_ebdbabe3e659c2::t_6f35ccc113fed4 495-500,543-546,683-685,696-699
+  s_ebdbabe3e659c2::t_f8198579e56169 5,15
+  s_ebdbabe3e659c2::t_d6cfcece9b2ebd 55-72
+  s_ebdbabe3e659c2::t_03aa10346522cc 800,805
+  s_ebdbabe3e659c2::t_3b418484e560ca 154-227
+  s_ebdbabe3e659c2::t_3699f76e72e252 9-11
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_e724f89366506b 876
+  s_ebdbabe3e659c2::t_314ab44654e13c 398-400,402
+  s_ebdbabe3e659c2::t_a54456fba62cd7 11
+  s_ebdbabe3e659c2::t_e9ccb8b74dbd7b 716-722,757,760,764
+  s_ebdbabe3e659c2::t_e85539b8d73d36 747-749,752,755,761-763
+  s_ebdbabe3e659c2::t_6cf3035a4d439b 807-809
+  s_ebdbabe3e659c2::t_aedaf8b6ce9e31 401
+  s_ebdbabe3e659c2::t_7b890236861e91 779-781
+  s_ebdbabe3e659c2::t_040ab002903dcf 723-728,746,750-751,753-754,756,758-759
+  s_ebdbabe3e659c2::t_b290bb02c094ac 773-778,782-784
+  s_ebdbabe3e659c2::t_083826716e1e53 855-875,877-892
+  s_ebdbabe3e659c2::t_d05ccdb0f3efc6 957
+  s_ebdbabe3e659c2::t_4b1cb1cb431fdd 9-10
+apps/web-ui/src/features/runs/MasterList.tsx
+  s_ebdbabe3e659c2::t_450f975573ad3e 21
+apps/web-ui/src/features/runs/SkillActivationPrompt.tsx
+  s_ebdbabe3e659c2::t_acbef5c7a90a12 1-106
+crates/skills/Cargo.toml
+  s_ebdbabe3e659c2::t_6968c261f1691e 25
+crates/a2a/src/server.rs
+  s_ebdbabe3e659c2::t_6993ce457d684f 50-53
+  s_ebdbabe3e659c2::t_d4f3e3a1a98d14 190
+  s_ebdbabe3e659c2::t_9a00461518f2be 189
+docs/evidence/skills-ask-and-ui.log
+  s_ebdbabe3e659c2::t_2eaccff5ce22be 309-572
+  s_ebdbabe3e659c2::t_b67a29273da469 26-30,32-34
+  s_ebdbabe3e659c2::t_d962ca19047f5e 161-166,171-210,215-217
+  s_ebdbabe3e659c2::t_db6468408bbf23 1-4,10,19-25,31,35-70,74,103-160,211-214,218-261,283-284,300,307-308
+  s_ebdbabe3e659c2::t_4a6b82138aea1b 167-170
+  s_ebdbabe3e659c2::t_86f6ea2802c52d 5-9,11-18
+  s_ebdbabe3e659c2::t_73508b802d26ce 262-282
+  s_ebdbabe3e659c2::t_fbd6ab4fb82f9e 285-299,301-306
+  s_ebdbabe3e659c2::t_3e48f1074c84f4 71-73,75-102
+apps/web-ui/design/07-open-decisions.md
+  s_ebdbabe3e659c2::t_f4b9af1dc19d1b 19-20
+crates/kernel-core/src/journal.rs
+  s_ebdbabe3e659c2::t_90fcdd54fd56f0 86-108
+  s_ebdbabe3e659c2::t_5582276c58d577 117-119
+  s_ebdbabe3e659c2::t_a27b88c26cd80b 14
+  s_ebdbabe3e659c2::t_723d02100b4178 134-148,178-212
+docs/ROADMAP.md
+  s_ebdbabe3e659c2::t_d35c09dd1b50b0 76-89
+  s_ebdbabe3e659c2::t_2724774e028fa8 68-75
+  s_ebdbabe3e659c2::t_c56bd6e8bedd2e 90-108
+crates/skills/tests/ask_activation_test.rs
+  s_ebdbabe3e659c2::t_06136ded3e2c97 1-14,16-215,222-503,505-571
+  s_ebdbabe3e659c2::t_e724f89366506b 216-221
+  s_ebdbabe3e659c2::t_b208e10a0b00f5 15
+  s_ebdbabe3e659c2::t_27e75a0b0520ac 504
+crates/api/tests/skills_controller_test.rs
+  s_ebdbabe3e659c2::t_a5bbba248c084f 12,224
+  s_ebdbabe3e659c2::t_96d0e157b02ab5 1-11,13-223,225-443
+docs/adr/0020-skills-model-activation.md
+  s_ebdbabe3e659c2::t_8145e6acff37a4 1-219
+crates/policy/tests/openrouter_mock_test.rs
+  s_ebdbabe3e659c2::t_e7c3bb8715553d 80
+crates/storage/src/lib.rs
+  s_ebdbabe3e659c2::t_875138af3ab4bc 213
+  s_ebdbabe3e659c2::t_e5948dd8ff47d2 518
+  s_ebdbabe3e659c2::t_b0d6906d8ee343 519
+docs/adr/0021-skills-interactive-activation.md
+  s_ebdbabe3e659c2::t_ad790ae6a0acc9 1-255
+crates/kernel-core/src/skill_gate.rs
+  s_ebdbabe3e659c2::t_9655bd8b01f0a2 1-2,12-36,38-67,77-86
+  s_ebdbabe3e659c2::t_ae3f1fd78101ad 3-11,37,68-76,87
+crates/kernel-core/src/oracle.rs
+  s_ebdbabe3e659c2::t_f95f0985a1bb12 71-76
+apps/web-ui/src/store/app.ts
+  s_ebdbabe3e659c2::t_b367092705a0f7 65
+  s_ebdbabe3e659c2::t_c37cfe37ad008d 46-49
+  s_ebdbabe3e659c2::t_ca988beecbc13a 265-287
+  s_ebdbabe3e659c2::t_2d794c5d850b06 64
+  s_ebdbabe3e659c2::t_58584750eb4019 43-45
+  s_ebdbabe3e659c2::t_c183c8e162ac3c 16
+  s_ebdbabe3e659c2::t_01fc5ea4efa583 17-20
+  s_ebdbabe3e659c2::t_ac216bf693c39a 288-327
+crates/daemon/src/config.rs
+  s_ebdbabe3e659c2::t_cfecc43b8f260e 63-67,74,95
+  s_ebdbabe3e659c2::t_be4684e79243db 68-73,75-86,96-97
+crates/daemon/src/lib.rs
+  s_ebdbabe3e659c2::t_3ce0656c9091cf 7
+  s_ebdbabe3e659c2::t_562fe149e8389a 1-6
+crates/skills/examples/model-activation-demo.rs
+  s_ebdbabe3e659c2::t_8d12631e05d1dd 167-192,197-207,212-222,227-236,256-258
+  s_ebdbabe3e659c2::t_f16f857100d866 123-126,151-154,193-196,208-211,223-226,240-245
+  s_ebdbabe3e659c2::t_fcab9056613018 1-122,127-150,155-166,237-239,246-255,259
+apps/web-ui/src/features/settings/SkillsSettings.tsx
+  s_ebdbabe3e659c2::t_567510554d5195 1-345
+docs/evidence/skills-model-activation.log
+  s_ebdbabe3e659c2::t_9265d2fcfb3d1a 1-248
+apps/web-ui/src/lib/api.ts
+  s_ebdbabe3e659c2::t_426d698ca125d8 149-178
+  s_ebdbabe3e659c2::t_96164b48fa4013 74,97-111,133-141
+apps/web-ui/src/features/runs/RunDetail.tsx
+  s_ebdbabe3e659c2::t_e4ecbd8c4ca3ee 31-34
+crates/skills/src/registry.rs
+  s_ebdbabe3e659c2::t_c6788b1b3f747c 293-315
+  s_ebdbabe3e659c2::t_f8aa76c64dae7a 392-393,395-414,416-465,468-475
+crates/daemon/src/skills_controller.rs
+  s_ebdbabe3e659c2::t_7ed29c9ba7ead3 1-179
+apps/web-ui/design/06-implementation-handoff.md
+  s_ebdbabe3e659c2::t_01925c863a2ccf 40
+  s_ebdbabe3e659c2::t_ef719989b108ab 41-46
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_b248e0ac6bbc10 1259-1316
+  s_ebdbabe3e659c2::t_550bcf7843f393 1212-1258
+crates/daemon/tests/skill_sweep_test.rs
+  s_ebdbabe3e659c2::t_bb8f1724a8c818 1-169
+crates/kernel-core/src/lib.rs
+  s_ebdbabe3e659c2::t_c2940da7a02691 21
+  s_ebdbabe3e659c2::t_4ab5df4c1183bd 30-32,34,41-43
+crates/skills/src/gate.rs
+  s_ebdbabe3e659c2::t_4faaaa57afcd87 95-134,137-139,142,149-153,158-159,161-177,184-196
+  s_ebdbabe3e659c2::t_cbaa954bb630d3 271-272,277-278
+  s_ebdbabe3e659c2::t_acfd40efdce1ea 299-325,330-369
+  s_ebdbabe3e659c2::t_e724f89366506b 48,273-276
+  s_ebdbabe3e659c2::t_0c33bc63743ee2 246-247,250,260,264
+  s_ebdbabe3e659c2::t_81f239fbc08eb1 13
+  s_ebdbabe3e659c2::t_12978e7f4e4b67 202-203,212
+  s_ebdbabe3e659c2::t_a5bbba248c084f 326-329
+  s_ebdbabe3e659c2::t_afa8a7821ef52b 3-12,14,16,18-31,39-42,45-47,49-50,93-94,135,140-141,143-146,197-201,214-215,217,219-222,225-238,240-243,290,292,297-298
+  s_ebdbabe3e659c2::t_fd399c6fd80e7d 51-79
+  s_ebdbabe3e659c2::t_7b890236861e91 178-183
+  s_ebdbabe3e659c2::t_f3e563356377db 1-2,15,32-38,43-44,80-92,136,147-148,154-157,160,204-211,213,216,218,223-224,239,244-245,248-249,251-259,261-263,265-270,279-289,291,293-296
+  s_ebdbabe3e659c2::t_339c5dd24305ed 17
+crates/skills/src/oracle.rs
+  s_ebdbabe3e659c2::t_76790938d744cb 36-41,43-49
+  s_ebdbabe3e659c2::t_7b134396f4d800 85
+crates/kernel-core/src/engine.rs
+  s_ebdbabe3e659c2::t_941c3f46c417eb 228-247
+  s_ebdbabe3e659c2::t_4570a54980f479 637
+  s_ebdbabe3e659c2::t_1497cac7242717 997-1004
+  s_ebdbabe3e659c2::t_c5ebd9d455c6d3 390-394
+  s_ebdbabe3e659c2::t_a7b1e74f2afaeb 178-182
+  s_ebdbabe3e659c2::t_bac0fdad574ed2 17
+  s_ebdbabe3e659c2::t_ebfb836bc84783 920,923-981
+  s_ebdbabe3e659c2::t_9681844d69b4d1 1061
+  s_ebdbabe3e659c2::t_70731444175f1f 1159-1168,1242-1245
+  s_ebdbabe3e659c2::t_6f35ccc113fed4 1169-1173
+  s_ebdbabe3e659c2::t_161eaaf27fccd6 701-752
+  s_ebdbabe3e659c2::t_62b4b0707e668d 1174-1220,1224-1241
+  s_ebdbabe3e659c2::t_3b9b73e7e6dde9 1314-1340,1347-1386
+  s_ebdbabe3e659c2::t_fa20e640807a47 375-379
+  s_ebdbabe3e659c2::t_2c520edc492903 795-825
+  s_ebdbabe3e659c2::t_0d63fcc9bc29f3 1892
+  s_ebdbabe3e659c2::t_ab02028778585e 291-311
+  s_ebdbabe3e659c2::t_803054a18077c0 434-437
+  s_ebdbabe3e659c2::t_1a2f5e8fbe4c79 223-227
+  s_ebdbabe3e659c2::t_e724f89366506b 1221-1223,1341-1346
+  s_ebdbabe3e659c2::t_52e8eea33cceb9 406-433,438-444
+  s_ebdbabe3e659c2::t_95cc1ccee67921 608-611
+  s_ebdbabe3e659c2::t_ff254272651699 1684
+  s_ebdbabe3e659c2::t_2e1b0fea380b6a 24-33
+  s_ebdbabe3e659c2::t_a137ad4aa56cff 460,473-478
+  s_ebdbabe3e659c2::t_980289df61af0f 480,2073-2118
+  s_ebdbabe3e659c2::t_02c619538e65ad 638
+  s_ebdbabe3e659c2::t_35ccb2769d1c3e 479
+  s_ebdbabe3e659c2::t_42e8057e439101 481
+  s_ebdbabe3e659c2::t_b36c49d5f6d9c4 982
+apps/desktop/src-tauri/tests/durable_store.rs
+  s_ebdbabe3e659c2::t_51963cfd9eea6c 40
+  s_ebdbabe3e659c2::t_759433d7cd7f64 41
+crates/api/src/lib.rs
+  s_ebdbabe3e659c2::t_20ef5de15754b1 78
+  s_ebdbabe3e659c2::t_177a6a570b87e4 99
+  s_ebdbabe3e659c2::t_e3e8df0b900dec 203-208,225-226,231-244,252,279-292
+  s_ebdbabe3e659c2::t_d058a7d008ebba 262-268
+  s_ebdbabe3e659c2::t_a6516757ba9d36 105
+  s_ebdbabe3e659c2::t_662ade42047c22 72-77,79-98,100-104,106-138
+  s_ebdbabe3e659c2::t_dfdef771a540dd 664-729
+  s_ebdbabe3e659c2::t_9a657eb79b248a 347,730-861
+  s_ebdbabe3e659c2::t_2bec432277eaf0 328-329,338-346
+  s_ebdbabe3e659c2::t_c0528520becf3d 348
+apps/web-ui/src/lib/events.ts
+  s_ebdbabe3e659c2::t_1395f293184134 46-49
+  s_ebdbabe3e659c2::t_ea63e037aac250 116-130
+  s_ebdbabe3e659c2::t_50423227a57e2e 15-20
+  s_ebdbabe3e659c2::t_fb7d759c7e61e3 61
+apps/web-ui/src/app.tsx
+  s_ebdbabe3e659c2::t_ab74930b92d8d1 64-66
+  s_ebdbabe3e659c2::t_264cbddb14070a 67
+  s_ebdbabe3e659c2::t_ee4bb632be602e 15
+apps/web-ui/src/features/runs/Timeline.tsx
+  s_ebdbabe3e659c2::t_c836c7f5aa0cfb 31
+  s_ebdbabe3e659c2::t_59de8e4bbd9fe3 71-83
+  s_ebdbabe3e659c2::t_c9e3203d1ffad4 15
+  s_ebdbabe3e659c2::t_41d6a201e79be7 121-129
+  s_ebdbabe3e659c2::t_229c0855b2d51e 185-187
+  s_ebdbabe3e659c2::t_7f55ae5698b030 49
+Cargo.lock
+  s_ebdbabe3e659c2::t_507a6eb5477c9b 2861
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "1dc1ba82e426fbcb8c4bec99a54713f1c71b8913",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
