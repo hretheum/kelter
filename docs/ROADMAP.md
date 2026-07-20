@@ -56,6 +56,15 @@ swappable policy engine, and it stays reliable even on small local models.
 - **Phase 11 — security hardening.** Bearer-gate/allowlist the config
   connection-test, WebSocket auth, per-caller principals, and opt-in TLS
   (tailnet stays the default transport). Queued.
+- **Web-UI redesign.** Full IA + UX respec (`apps/web-ui/design/`, both human
+  gates passed) and its implementation: the vanilla web UI replaced by a React
+  19 + Tailwind v4 + shadcn-style app (Vite → RustEmbed, same single artifact
+  across all topologies, ADR 0004) — run-centric master–detail with a bucketed
+  live execution axis (kernel rejections visible), honest 501/read-only and
+  reconnection states, Lighthouse a11y 100, 300 KB bundle — plus two additive
+  bearer-gated endpoints: journal-replay history (`GET /runs/{id}/events`) and
+  Stop (`POST /runs/{id}/cancel`). The 3-user "input vs output" test stays a
+  human evidence task. Done.
 
 ## Phase 4 — the governed extension platform (delivered)
 
