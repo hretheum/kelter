@@ -18,6 +18,7 @@ pub mod learned;
 pub mod oracle;
 pub mod plan;
 pub mod redact;
+pub mod skill_gate;
 pub mod store;
 
 pub use action::{
@@ -26,14 +27,18 @@ pub use action::{
 pub use cost::{ModelPrice, PricingTable};
 pub use engine::{
     crash_point, is_a2a_action, ActionSource, AgentUsage, CompositeActionSource, ExecutionContext,
-    ExecutionError, Kernel, KernelConfig, KernelError, Run, RunEvent, RunEventEnvelope, RunMode,
-    RunStatus, StepRecord, FINISH_ACTION,
+    ExecutionError, Kernel, KernelConfig, KernelError, PendingSkillActivation, Run, RunEvent,
+    RunEventEnvelope, RunMode, RunStatus, StepRecord, ACTIVATE_SKILL_ACTION,
+    DEACTIVATE_SKILL_ACTION, FINISH_ACTION,
 };
-pub use journal::{JournalEntry, Usage};
+pub use journal::{JournalEntry, PendingActivationFold, Usage};
 pub use learned::{
     DistillReport, InMemoryLearnedStore, LearnedFact, LearnedProvenance, LearnedStore,
     LEARNED_LEVEL,
 };
 pub use oracle::{Latitude, PolicyContext, PolicyError, PolicyOracle, Proposal};
 pub use plan::{Plan, PlanNode, ValidatedPlan};
+pub use skill_gate::{
+    ActivationAuthorization, ActivationRequestMeta, SkillActivationDecision, SkillGate,
+};
 pub use store::{InMemoryRunStore, PruneReport, RetentionPolicy, RunStore, StoreError};

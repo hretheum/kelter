@@ -22,9 +22,14 @@
 //! skill (untrusted by default) and surfaced, never inferred from skill
 //! content itself.
 
+mod gate;
 mod oracle;
 mod registry;
 
+pub use gate::{
+    parse_ask_fallback, parse_model_activation_policy, AskFallback, AskPolicyConfig,
+    ModelActivationPolicy, RegistrySkillGate,
+};
 pub use oracle::SkillContextOracle;
 pub use registry::{
     InstallReport, SkillRegistry, MAX_CATALOG_BYTES, MAX_INSTRUCTIONS_BYTES, MAX_TOTAL_ACTIVE_BYTES,

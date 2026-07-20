@@ -290,6 +290,29 @@ impl SkillRegistry {
         Ok(())
     }
 
+    /// Elevate (or otherwise change) a skill's trust label, preserving its
+    /// other provenance fields. ADR 0019 says only an operator's direct edit
+    /// of the sidecar file changes trust; ADR 0021 adds this as the ONE
+    /// deliberate, explicitly-documented exception — reachable only through
+    /// a human's bearer-gated `allow_always` decision on a specific pending
+    /// activation request (never model-initiated, never a skill
+    /// self-elevating via its own frontmatter, which stays ignored). Takes
+    /// effect immediately (no restart) via the existing mtime-based cache
+    /// invalidation (`touch`).
+    pub fn set_trust(&self, name: &str, trust: &str) -> Result<(), SkillError> {
+        let dir = self.root.join(dir_name(name));
+        if !dir.is_dir() {
+            return Err(SkillError::NotFound(name.into()));
+        }
+        let mut prov = self.read_sidecar(&dir);
+        prov.trust = trust.to_string();
+        let raw = toml::to_string_pretty(&prov)
+            .map_err(|e| SkillError::Invalid(format!("sidecar: {e}")))?;
+        std::fs::write(dir.join(SIDECAR_NAME), raw)?;
+        self.touch();
+        Ok(())
+    }
+
     fn touch(&self) {
         // Bump the root mtime so with_fresh() reloads even on filesystems
         // with coarse timestamps.
@@ -366,32 +389,89 @@ impl SkillRegistry {
 
     /// Full instructions of ACTIVE skills only, each capped at
     /// [`MAX_INSTRUCTIONS_BYTES`], total capped at [`MAX_TOTAL_ACTIVE_BYTES`].
-    /// Bodies are read from disk here — the ACTIVATION tier.
+    /// Bodies are read from disk here — the ACTIVATION tier. Delegates to
+    /// [`Self::active_instructions_for`] with the operator-active set.
     pub fn active_instructions(&self) -> String {
-        self.with_fresh(|skills, active| {
-            let mut out = String::new();
-            for name in active {
-                let Some(skill) = skills.iter().find(|s| &s.name == name) else {
-                    continue;
-                };
-                let Ok(raw) = std::fs::read_to_string(skill.dir.join("SKILL.md")) else {
-                    continue;
-                };
-                let (_fm, body) = parse_skill_md(&raw);
-                let body = truncate(body.trim(), MAX_INSTRUCTIONS_BYTES);
-                let block = format!("## Skill: {name}\n{body}\n\n");
-                if out.len() + block.len() > MAX_TOTAL_ACTIVE_BYTES {
-                    tracing::warn!(
-                        "skills: active-instructions budget reached; '{name}' truncated/omitted"
-                    );
-                    let remaining = MAX_TOTAL_ACTIVE_BYTES.saturating_sub(out.len());
-                    out.push_str(&truncate(&block, remaining));
-                    break;
-                }
-                out.push_str(&block);
+        self.with_fresh(|skills, active| self.render_instructions_for(skills, active))
+    }
+
+    /// Full instructions for an EXPLICIT set of names (e.g. the union of the
+    /// operator-active set and a run's self-activated set — ADR 0020), under
+    /// the same per-skill and total budgets as [`Self::active_instructions`].
+    /// This is the render-time backstop: even if authorization is somehow
+    /// bypassed, the rendered context can never exceed the budget.
+    pub fn active_instructions_for(&self, names: &[String]) -> String {
+        self.with_fresh(|skills, _active| self.render_instructions_for(skills, names))
+    }
+
+    fn render_instructions_for(&self, skills: &[SkillManifest], names: &[String]) -> String {
+        let mut out = String::new();
+        // De-duplicate while preserving first-seen order (a name may appear
+        // in both the operator-active and run-active sets).
+        let mut seen = std::collections::HashSet::new();
+        for name in names {
+            if !seen.insert(name.as_str()) {
+                continue;
             }
-            out
+            let Some(skill) = skills.iter().find(|s| &s.name == name) else {
+                continue;
+            };
+            let Ok(raw) = std::fs::read_to_string(skill.dir.join("SKILL.md")) else {
+                continue;
+            };
+            let (_fm, body) = parse_skill_md(&raw);
+            let body = truncate(body.trim(), MAX_INSTRUCTIONS_BYTES);
+            let block = format!("## Skill: {name}\n{body}\n\n");
+            if out.len() + block.len() > MAX_TOTAL_ACTIVE_BYTES {
+                tracing::warn!(
+                    "skills: active-instructions budget reached; '{name}' truncated/omitted"
+                );
+                let remaining = MAX_TOTAL_ACTIVE_BYTES.saturating_sub(out.len());
+                out.push_str(&truncate(&block, remaining));
+                break;
+            }
+            out.push_str(&block);
+        }
+        out
+    }
+
+    // ---- activation-gate probes (ADR 0020) ---------------------------------
+
+    /// Whether a skill by this exact name is installed.
+    pub fn is_installed(&self, name: &str) -> bool {
+        self.with_fresh(|skills, _| skills.iter().any(|s| s.name == name))
+    }
+
+    /// A skill's recorded trust label, if installed.
+    pub fn trust_of(&self, name: &str) -> Option<String> {
+        self.with_fresh(|skills, _| {
+            skills
+                .iter()
+                .find(|s| s.name == name)
+                .map(|s| s.provenance.trust.clone())
         })
+    }
+
+    /// The byte size of a skill's instructions AFTER per-skill truncation —
+    /// i.e. exactly what would be added to the rendered context if this skill
+    /// were included. Used by the gate's budget math; `None` if not
+    /// installed or its SKILL.md cannot be read.
+    pub fn instruction_bytes(&self, name: &str) -> Option<usize> {
+        self.with_fresh(|skills, _| {
+            let skill = skills.iter().find(|s| s.name == name)?;
+            let raw = std::fs::read_to_string(skill.dir.join("SKILL.md")).ok()?;
+            let (_fm, body) = parse_skill_md(&raw);
+            let body = truncate(body.trim(), MAX_INSTRUCTIONS_BYTES);
+            Some(format!("## Skill: {name}\n{body}\n\n").len())
+        })
+    }
+
+    /// Convenience probe for the activation gate: `(trust, instruction_bytes)`
+    /// for one installed skill, or `None` if it does not exist.
+    pub fn activation_probe(&self, name: &str) -> Option<(String, usize)> {
+        let trust = self.trust_of(name)?;
+        let bytes = self.instruction_bytes(name).unwrap_or(0);
+        Some((trust, bytes))
     }
 }
 

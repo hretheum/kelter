@@ -46,6 +46,7 @@ export function pretty(value: unknown): string {
 export const STATUS_GLYPH: Record<string, string> = {
   pending: "◔",
   running: "◐",
+  awaiting_skill_decision: "◉",
   completed: "✓",
   failed: "✕",
   canceled: "⊘",

@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine::RunStatus;
+use crate::skill_gate::{ActivationRequestMeta, SkillActivationDecision};
 
 /// Token accounting for one model call (also aggregated per run).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +83,29 @@ pub enum JournalEntry {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// A fresh `activate_skill` proposal was gated `AskHuman` (ADR 0021): the
+    /// run pauses here, durably, until a matching `SkillActivationDecided`
+    /// entry appears. Carries the model's original arguments verbatim so a
+    /// later Allow* decision can replay them through the existing decision
+    /// mechanism without re-querying the model.
+    SkillActivationRequested {
+        step: u32,
+        skill: String,
+        arguments: serde_json::Value,
+        trust: String,
+        description: String,
+        provenance_source_kind: String,
+        provenance_source: String,
+        requested_at: u64,
+    },
+    /// A human (or the timeout sweeper, principal `"system:timeout"`)
+    /// resolved a pending `SkillActivationRequested`.
+    SkillActivationDecided {
+        step: u32,
+        skill: String,
+        decision: SkillActivationDecision,
+        principal: String,
+    },
 }
 
 impl JournalEntry {
@@ -90,7 +114,9 @@ impl JournalEntry {
             JournalEntry::Decision { step, .. }
             | JournalEntry::Intent { step, .. }
             | JournalEntry::Note { step, .. }
-            | JournalEntry::Receipt { step, .. } => Some(*step),
+            | JournalEntry::Receipt { step, .. }
+            | JournalEntry::SkillActivationRequested { step, .. }
+            | JournalEntry::SkillActivationDecided { step, .. } => Some(*step),
             JournalEntry::TrustPosture { .. }
             | JournalEntry::PlanProposed { .. }
             | JournalEntry::Terminal { .. } => None,
@@ -105,6 +131,21 @@ pub struct StepJournal {
     pub intent: Option<(String, serde_json::Value, String)>,
     pub notes: std::collections::HashMap<String, serde_json::Value>,
     pub receipt: Option<(bool, serde_json::Value)>,
+    /// A pending or decided `activate_skill` ask-request for this step (ADR
+    /// 0021). `None` when this step never triggered an `AskHuman` gate
+    /// outcome.
+    pub skill_activation: Option<PendingActivationFold>,
+}
+
+/// Folded view of one `SkillActivationRequested` (+ optional matching
+/// `SkillActivationDecided`) for a step.
+#[derive(Debug, Clone)]
+pub struct PendingActivationFold {
+    pub skill: String,
+    pub arguments: serde_json::Value,
+    pub meta: ActivationRequestMeta,
+    pub requested_at: u64,
+    pub decision: Option<SkillActivationDecision>,
 }
 
 /// Fold a run's journal into the per-step view for `step_index`.
@@ -133,6 +174,41 @@ pub fn fold_step(journal: &[JournalEntry], step_index: u32) -> StepJournal {
             }
             JournalEntry::Receipt { step, ok, result } if *step == step_index => {
                 folded.receipt = Some((*ok, result.clone()));
+            }
+            JournalEntry::SkillActivationRequested {
+                step,
+                skill,
+                arguments,
+                trust,
+                description,
+                provenance_source_kind,
+                provenance_source,
+                requested_at,
+            } if *step == step_index => {
+                folded.skill_activation = Some(PendingActivationFold {
+                    skill: skill.clone(),
+                    arguments: arguments.clone(),
+                    meta: ActivationRequestMeta {
+                        trust: trust.clone(),
+                        description: description.clone(),
+                        provenance_source_kind: provenance_source_kind.clone(),
+                        provenance_source: provenance_source.clone(),
+                    },
+                    requested_at: *requested_at,
+                    decision: None,
+                });
+            }
+            JournalEntry::SkillActivationDecided {
+                step,
+                skill,
+                decision,
+                ..
+            } if *step == step_index => {
+                if let Some(pending) = folded.skill_activation.as_mut() {
+                    if &pending.skill == skill {
+                        pending.decision = Some(*decision);
+                    }
+                }
             }
             _ => {}
         }

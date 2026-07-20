@@ -1,0 +1,572 @@
+<!-- provenance: ai_authored | agent: claude-sonnet-5 | session_date: 2026-07-20 | human_validated: false | context: ADR 0021 skill-activation "ask" flow — frontend evidence. Backend section (kernel-core/skills/api/daemon) is appended separately below this header by the backend agent working the same design doc in parallel; do not overwrite either section. -->
+
+# Frontend evidence — interactive skill-activation UI (ADR 0021)
+
+Scope: `apps/web-ui/` only (design/skills-ask-design.md Parts 5 and the
+mid-flight Part 6 addendum). Backend endpoints (`POST
+/api/v1/runs/{id}/skill-activation`, plus the six `/api/v1/skills*` CRUD
+routes from Part 6) were implemented concurrently by a separate agent, in
+the same tree; the two halves were not integration-tested against each
+other end-to-end as part of this evidence (see "Honest limitations" below).
+
+**Update, same session:** the design doc originally gave `SkillsSettings.tsx`
+(list/install/activate/deactivate/policy) no backend to talk to. That gap
+was flagged to the team lead instead of guessed at; the team lead closed it
+with a Part 6 addendum specifying six `/api/v1/skills*` routes. This log now
+covers both pieces — the inline ask/decide prompt (original scope) and the
+Settings management panel (closed gap) — built in the same pass, once the
+contract existed.
+
+## Build
+
+```
+$ pnpm --dir apps/web-ui build
+tsc -b && vite build
+vite v7.3.6 building client environment for production...
+✓ 55 modules transformed.
+dist/index.html                   0.62 kB │ gzip:  0.35 kB
+dist/assets/index-BOgtrQ8a.css   26.85 kB │ gzip:  5.76 kB
+dist/assets/index-CRCrtnWv.js   269.09 kB │ gzip: 82.68 kB
+✓ built in 698ms
+```
+Clean (re-run after adding `SkillsSettings.tsx`), no new tooling added,
+`tsc -b` strict mode (noUnusedLocals / noUnusedParameters /
+noFallthroughCasesInSwitch) passes.
+
+## Files changed
+
+- `src/lib/api.ts` — `RunStatus` gains `"awaiting_skill_decision"`; `Run`
+  gains `active_skills: string[]`; new `SkillActivationDecision` type and
+  `PendingSkillActivationUi` interface; `RunEvent` gains
+  `skill_activation_requested` / `skill_activation_decided` variants (field
+  names match the Rust structs' literal serde output verbatim, no
+  camelCasing).
+- `src/lib/events.ts` — `AxisState.pendingSkillActivation`; two new
+  `applyEvent` cases (set on requested, cleared on decided — keyed by skill
+  name so a stale/duplicate decided event is a no-op).
+- `src/store/app.ts` — `skillActivationSupported` capability flag (default
+  `true`, flips `false` on a 404/405 from the new endpoint, mirroring
+  `cancelSupported` exactly); `decideSkillActivation(runId, skill, decision)`.
+  Unlike `cancelRun`, no manual axis patch on success — the kernel emits its
+  own `SkillActivationDecided` from `decide_skill_activation`, so the WS
+  event clears the pending state and flips `run.status` back to `running`
+  on its own.
+- `src/features/runs/SkillActivationPrompt.tsx` (new) — the inline prompt.
+- `src/features/runs/Timeline.tsx` — renders the prompt when
+  `axis.pendingSkillActivation` is set; header badge branches on
+  `run.status === "awaiting_skill_decision"`; `aria-live` announce on
+  pause (assertive) and resolution (polite); scroll-follow effect also
+  triggers on the prompt's arrival.
+- `src/features/runs/RunDetail.tsx` — **load-bearing fix, not optional
+  polish**: the `live` check (which decides Timeline vs. Result) did not
+  include the new status. Without this, a paused run would render `Result`
+  instead of `Timeline`, and `Result.tsx`'s status switch defaults anything
+  it doesn't recognize to `"completed"` — a paused, undecided run would have
+  shown a green "Completed" badge. Fixed by adding
+  `run.status === "awaiting_skill_decision"` to the `live` predicate.
+- `src/features/runs/MasterList.tsx`, `src/lib/format.ts` — added the new
+  status to `STATUS_CLS` / `STATUS_GLYPH` so the run-list row shows a glyph
+  (`◉`, warning-tone) instead of silently rendering nothing for an unmapped
+  status key.
+- `apps/web-ui/design/07-open-decisions.md` — new rows D-9, D-10.
+- `apps/web-ui/design/06-implementation-handoff.md` §1a — new endpoint rows
+  (the decide-activation endpoint + the six Part 6 CRUD routes).
+
+**Part 6 addendum (skills CRUD), added once the team lead closed the
+contract gap:**
+- `src/lib/api.ts` — `SkillView`, `SkillInstallReport` (note:
+  `skipped: [string, string][]` — a Rust `Vec<(String, String)>` tuple
+  serializes as a 2-element JSON array, not an object), `SkillsPolicyView`,
+  `SkillsPolicyUpdate`.
+- `src/store/app.ts` — `skillsManagementSupported` capability flag
+  (independent of `skillActivationSupported`, per the team lead's explicit
+  suggestion — a deployment can have one endpoint family without the other
+  during rollout); a small shared `skillsApiCall` helper (the same
+  404/405-off body was about to be repeated six times verbatim, so it was
+  factored once — not a new abstraction layer, just avoiding six copies of
+  one `if`) backing `fetchSkills`, `fetchSkillsPolicy`, `installSkill`,
+  `removeSkill`, `activateSkill`, `deactivateSkill`, `setSkillsPolicy`.
+- `src/features/settings/SkillsSettings.tsx` (new) — the management panel.
+  Data (skill list, policy) is kept in **local component state**, fetched
+  on mount, not in the global store — unlike `ModelConfig`'s config view,
+  nothing else in the app needs to read the skills list, so there's no
+  cross-cutting reason to lift it. Only the capability flag is global,
+  matching the reasoning `cancelSupported`/`replaySupported` already
+  established (other components need to react to those; nothing but this
+  one component needs to react to `skillsManagementSupported` either, but
+  it was still put in the store per the team lead's explicit ask for
+  consistency with the existing flag family).
+- `src/app.tsx` — renders `<SkillsSettings />` stacked below `<ModelConfig
+  />` with a plain `<hr>` divider inside the existing settings branch — no
+  new routing, per the standing `§5.0` decision (no Section/Card primitive
+  exists in this app).
+
+## Rendered states — plain-text description (see "Honest limitations")
+
+**Timeline header, live run, no pending activation** (unchanged from
+before this change): task title, a pulsing accent badge reading
+"◐ Kelter working…", policy/elapsed/cost line below, Stop button top-right
+when `cancelSupported`.
+
+**Timeline header, `run.status === "awaiting_skill_decision"`:** the same
+badge slot instead reads a static (non-pulsing) warning-tone badge
+"◉ Awaiting your decision". Stop remains available (cancel is valid on a
+paused run per the backend contract) — no code change was needed there,
+`cancelRun`'s only gate is the capability flag, not run status.
+
+**Inline prompt, appearing at the end of the step list** (`role="status"`,
+`animate-slide-in`, same 150ms motion token as `StepCard`): a bordered card,
+visually identical in weight/radius/padding to a `StepCard`, containing:
+- Line 1 (body text, `font-mono` on the skill name): `"{skill} wants to
+  advise on this run — {description}"`.
+- Line 2 (caption2, muted): a trust `Badge` — `"✓ trusted"` (success tone,
+  green) or `"○ untrusted"` (quiet tone, gray) — followed by
+  `"{provenance_source_kind}: {provenance_source}"` as plain muted text.
+- Line 3: three buttons, left to right — `Button variant="ghost"` labeled
+  "Not this run", `Button variant="primary"` labeled "Allow this run",
+  `Button variant="secondary"` labeled "Always allow". Deliberately NOT
+  colored `danger`/`warning` on any button — none of the three is a
+  destructive or alarming action.
+
+**Prompt, mid-decision (`resolving` set):** the clicked button shows its
+loading spinner (`Button`'s existing `loading` prop) and text; all three
+buttons are `disabled` (prevents a double-submit / conflicting second
+decision on the same request) until the paired WS event lands or the call
+errors.
+
+**Prompt, after the paired `skill_activation_decided` event:**
+`axis.pendingSkillActivation` clears via `applyEvent`, the whole card
+unmounts — no explicit "resolved" state is rendered because the run's own
+next timeline event (a fresh `proposed`/`rejected`/`executed`, or the header
+badge reverting to "Kelter working…") IS the resolution, matching the
+brief's instruction to treat the decision as an ordinary journaled event
+rather than a dialog with its own close animation.
+
+**Prompt, decide-call failure while `skillActivationSupported` is still
+true** (e.g. a transient network error): buttons re-enable, a
+`role="alert"` caption-danger line appears below them:
+`"Couldn't send that — {message}"`.
+
+**Prompt, on a daemon without the endpoint** (`skillActivationSupported ===
+false`, set after one real 404/405): the three buttons are replaced
+entirely by a muted caption line, `"This daemon doesn't support
+skill-activation decisions."` — never a dead/disabled button, per the
+config-501 convention this repo already uses for Stop/replay.
+
+**Run-list row (`MasterList`):** status glyph column shows `◉` in
+`text-warning` for a paused run, same row shape as every other status (glyph
++ `sr-only` status text + task + relative time), so B-7 (glyph+text+color)
+holds here too, not just in the prompt itself.
+
+**Settings — Skills section, loading:** three shimmering `Skeleton` bars
+(`h-8`), same shape as `ModelConfig`'s own loading state, directly below the
+model-config block and its `<hr>` divider.
+
+**Settings — Skills section, unsupported daemon
+(`skillsManagementSupported === false`):** the component renders nothing at
+all — not a disabled panel, not a banner, just absent. The divider above it
+in `app.tsx` is also conditioned on the same flag, so Settings falls back to
+looking exactly like it did before this feature existed (just `ModelConfig`,
+no stray trailing `<hr>`).
+
+**Settings — Skills section, transient load error (non-404/405):** heading
+"Skills" plus a `Banner tone="warning"`: `"Couldn't load skills — {message}"`.
+
+**Settings — Skills section, loaded, policy form:** a `Select` labeled "When
+the model wants an untrusted skill" with three options ("Only use
+already-trusted skills" / "Allow any installed skill" / "Ask before an
+untrusted skill"). Choosing "Ask before an untrusted skill" reveals a second
+`Select` ("If no one is watching": "Skip the skill automatically" / "Pause
+the run and wait"), and choosing "Pause the run and wait" reveals a number
+`Input` ("Give up waiting after (seconds)"). A "Save policy" button below,
+same loading/disabled pattern as every other button in this component.
+
+**Settings — Skills section, install form:** a URL `Input` + "Install"
+button on one row, with a muted caption below: `"A local folder or bundle
+installs from the command line (`kelter skill add`) — this form only takes
+a URL."` — the scope-narrowing note the team lead asked for.
+
+**Settings — Skills section, shared result line:** one `role="status"
+aria-live="polite"` caption line below the install form, reused by every
+action in the panel (policy save, install, activate, deactivate, remove) —
+mirrors `ModelConfig`'s single result line; since every button in the
+section disables while any one action is in flight, only one action's
+outcome is ever showing at a time.
+
+**Settings — Skills section, installed list, empty:** "No skills installed
+yet."
+
+**Settings — Skills section, installed list, populated:** one bordered card
+per skill (same visual weight as a `StepCard`/the ask prompt): skill name
+(`font-mono`), description (caption, muted), a trust `Badge`
+(`✓ trusted`/success or `○ untrusted`/quiet) and an active `Badge`
+(`◉ active`/accent or `○ inactive`/quiet) stacked top-right, then a muted
+provenance line (`{source_kind}: {source}`), then a button row: Activate or
+Deactivate (whichever applies) plus Remove. Clicking Remove swaps it inline
+for `"Remove this skill? [Confirm (danger)] [Cancel (ghost)]"` — the exact
+Stop-confirm idiom from `Timeline.tsx`, reused rather than reinvented, since
+deleting an installed skill is the one destructive action in this panel and
+deserves the same two-step guard Stop already uses.
+
+## Copy audit
+
+`grep -inE "permission|grant|authoriz" src/features/runs/SkillActivationPrompt.tsx
+src/features/runs/Timeline.tsx src/lib/api.ts src/lib/events.ts
+src/store/app.ts src/features/settings/SkillsSettings.tsx` — zero matches in
+any new/changed copy. (Two incidental hits in `api.ts` are the pre-existing
+`Authorization` HTTP header / comment, unrelated to consent framing.)
+
+## Manual accessibility pass (no automated a11y gate exists in this repo —
+pre-existing residual per `design/08` Part D, not newly introduced by this
+change; confirmed absent: no axe/Lighthouse/playwright/test runner anywhere
+in `package.json` or the repo)
+
+- **Keyboard operability:** all three buttons are native `<button>`
+  elements via the shared `Button` component — reachable by Tab in DOM
+  order (ghost → primary → secondary), activatable by Enter/Space, and
+  covered by the same global `focus-visible` ring utility (`focusRing`,
+  2px accent + 2px offset) as every other control in the app. No custom
+  keydown handling was added, so no new keyboard trap or dead zone was
+  introduced. Verified by reading `Button`'s implementation
+  (`components/ui/button.tsx`) — it renders a real `<button>`, not a `div`
+  with a click handler — and confirming `SkillActivationPrompt` passes no
+  `tabIndex`/`role` overrides that would remove it from the tab order.
+- **`aria-live` wiring:** the pause announces via `announce(..., "assertive")`
+  (the existing `lib/announcer.ts` singleton, same aria-live region every
+  other milestone in `Timeline.tsx` already uses) so a screen-reader user
+  does not have to be reading the log at the exact moment the run pauses.
+  The resolution announces `"polite"` (default), consistent with the
+  brief's instruction that only the pause itself must not be missed.
+  `announce()` clears its live region's `textContent` before setting it
+  (50ms later) specifically so a repeat announcement — e.g. the SAME skill
+  being asked about twice in one run — still fires; this pre-existing
+  behavior was not touched.
+- **Color + glyph + text (B-7):** every place this feature adds a status
+  signal pairs a glyph with a text label and a color, never color alone —
+  the trust badge (`✓ trusted` / `○ untrusted`), the header badge
+  (`◉ Awaiting your decision`), and the run-list glyph (`◉` + `sr-only`
+  status text, matching the existing pattern for every other status).
+- **Focus behavior when the prompt appears:** deliberately does NOT steal
+  focus — it mounts inside the existing `role="log"` region the same way a
+  new `StepCard` does, and relies on the assertive live-region announcement
+  (above) rather than a focus jump, matching the brief's explicit
+  instruction that this must not read as a modal/security dialog (no focus
+  trap, no forced focus). This is a considered choice, not an oversight: a
+  focus jump on an unpredictable async WS event would be disorienting if
+  the user is mid-typing in the composer of a *different* selected run.
+- **Reduced motion:** `animate-slide-in` is the same globally-gated
+  keyframe every other timeline element uses
+  (`@media (prefers-reduced-motion: reduce)` in `design/05`'s `@theme`
+  block) — no new motion path was introduced.
+
+**`SkillsSettings.tsx` specifically:**
+- Every field uses the shared `Input`/`Select`/`Label` components, which
+  already wire real `<label for>`/`id` pairs (`ModelConfig.tsx` established
+  this pattern; `SkillsSettings` follows it verbatim for the policy
+  selects, the timeout input, and the install URL field) — reachable and
+  operable by keyboard alone, no custom widgets.
+- The per-skill Remove confirm reuses the Stop-confirm shape exactly
+  (danger "Confirm" + ghost "Cancel" swapped in for the single "Remove"
+  button) — same keyboard/focus properties already verified for that
+  pattern in `Timeline.tsx`, not a new interaction to separately audit.
+- The shared result line is `role="status" aria-live="polite"`, same as
+  `ModelConfig`'s — a screen-reader user gets the outcome of whichever
+  action just ran without needing to locate it visually.
+- Trust and active badges both pair glyph + text + color (B-7): `✓
+  trusted`/`○ untrusted`, `◉ active`/`○ inactive`.
+- Buttons disable as a group while any one action is in flight
+  (`busy && busyKey !== "…"`), preventing a second concurrent mutation from
+  a stray keyboard activation while a request is pending — not an a11y
+  requirement per se, but prevents a race that would otherwise produce a
+  confusing announced result.
+
+## Honest limitations
+
+- **No real screenshots, for either piece.** For the inline prompt: the
+  backend code path that actually pauses a run and emits
+  `skill_activation_requested` was still mid-implementation when this
+  evidence was first written — no live paused run existed to point a
+  browser at. For the Settings panel: even once the backend's Part 0-4 work
+  finished, the Part 6 CRUD endpoints (`/api/v1/skills*`) were assigned to
+  the backend agent to build AFTER that, and this evidence was written
+  without waiting to confirm they'd landed — so there was no live
+  `/api/v1/skills` response to screenshot against either. Rigging synthetic
+  browser state to screenshot against (e.g. exposing the store's internal
+  `state` on `window` for console injection) would have meant adding
+  test-only instrumentation to production code as a side effect of this
+  task, which is exactly the kind of scope creep the brief told me not to
+  introduce silently. The "Rendered states" sections above are instead
+  precise, code-derived textual descriptions of every state, written from
+  the actual JSX/class names rather than from memory or invention.
+- **No end-to-end integration test** of this frontend against either real
+  backend surface — by design (concurrent-implementation constraint), not
+  an oversight. Both wire contracts were followed to the letter from the
+  design doc's field lists (Parts 1/2/3 for the ask flow, Part 6 for the
+  CRUD routes); a first real integration pass should happen once all pieces
+  are merged.
+- **axe/Lighthouse:** genuinely absent from this repo (confirmed, see
+  above) — not run, not claimed.
+
+<!-- provenance: ai_authored | agent: claude-sonnet-5 | session_date: 2026-07-20 | human_validated: false | context: ADR 0021 skill-activation "ask" flow — backend evidence (kernel-core/skills/api/daemon). Appended below the frontend section per its own header instruction; neither section overwritten. -->
+
+# Backend evidence — interactive skill-activation ("ask") flow + skills management HTTP surface (ADR 0021)
+
+Scope: `crates/kernel-core`, `crates/skills`, `crates/api`, `crates/daemon`,
+`crates/storage`, `crates/a2a` (one `RunStatus` match-arm fix). Covers both
+Parts 0-4 of the design doc (the ask/decide flow) and the mid-flight Part 6
+addendum (skills CRUD + runtime-mutable policy over HTTP) — the addendum was
+assigned to this same agent specifically to avoid two agents racing edits on
+`crates/skills/src/gate.rs`.
+
+## Build / lint / test — bottom line
+
+```
+$ cargo fmt --all              # clean
+$ cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy: No issues found
+$ cargo build -p daemon
+cargo build (4 crates compiled)
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 17.13s
+$ cargo test --workspace
+...
+test result: ok. (41 suites; 172 tests total, 0 failed, 0 ignored)
+```
+
+**Before this change: 157 passing tests workspace-wide (confirmed by
+running the pre-existing suite unmodified). After: 172 (+15).** Breakdown of
+the 15 new tests:
+- 8 in `crates/skills/tests/ask_activation_test.rs` (the ask/decide flow,
+  design doc items 1-6 + 9)
+- 1 in `crates/daemon/tests/skill_sweep_test.rs` (design doc item 8, the
+  timeout sweeper)
+- 5 in `crates/api/tests/skills_controller_test.rs` (Part 6 addendum: router
+  contract + 404-when-unwired)
+- 1 in `crates/skills/src/gate.rs` (`#[cfg(test)]` unit test: the
+  runtime-policy RwLock actually threads through to gating behavior, not
+  just getter/setter echo)
+
+(Design doc item 7, `paused_run_survives_a_restart`, is counted in the 8
+above — it lives in the same file as the others since it needed
+`storage::SqliteRunStore` as a dev-dependency, which was added to
+`crates/skills/Cargo.toml`.)
+
+Zero regressions: every pre-existing test still passes, unmodified in
+behavior (three existing tests needed call-site updates for the
+`SkillGate::authorize_activation` signature change — `unwrap_err()` /
+`unwrap()` on the old `Result` became `deny_reason(...)` /
+`allow_trust(...)` helpers matching against the new
+`ActivationAuthorization` enum; behavior asserted is identical).
+
+## 1. The pause, and all three decisions — real transcripts
+
+All 8 tests in `ask_activation_test.rs`, run individually:
+
+```
+$ cargo test -p skills --test ask_activation_test -- --nocapture
+running 8 tests
+test cancel_works_on_a_paused_run ... ok
+test ask_pauses_and_surfaces_the_request ... ok
+test ask_fallback_deny_never_pauses ... ok
+test deny_lets_the_model_continue_without_the_skill ... ok
+test allow_once_activates_for_this_run_only_no_trust_change ... ok
+test allow_always_activates_and_elevates_trust_persistently ... ok
+test paused_run_survives_a_restart ... ok
+test invariant_holds_through_every_ask_decision ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+- **`ask_pauses_and_surfaces_the_request`** — a model self-activates an
+  untrusted skill under `Ask`+`Queue`. Asserts, on the run RETURNED FROM
+  `execute_run` itself (not a follow-up poll): `status ==
+  AwaitingSkillDecision`, `pending_skill_activation.skill == "urge-echo"`,
+  `run.steps.is_empty()` (nothing executed — the gate said "ask", not
+  "allow"), and a `RunEvent::SkillActivationRequested` was actually emitted
+  on the subscribed event channel.
+- **`deny_lets_the_model_continue_without_the_skill`** — after
+  `decide_skill_activation(.., Deny, "operator")` and a second
+  `execute_run`, the run reaches `Completed` with `active_skills` never
+  containing the denied skill, and the registry's trust is unchanged
+  (`Some("untrusted")`).
+- **`allow_once_activates_for_this_run_only_no_trust_change`** — after
+  AllowOnce: `active_skills` contains the skill, a `activate_skill`
+  `StepRecord` is present, `registry.trust_of(..)` is BYTE-FOR-BYTE
+  unchanged from before the decision. A SECOND fresh run against the same
+  kernel is then asked again (`AwaitingSkillDecision`) — proving the
+  decision carries zero memory across runs.
+- **`allow_always_activates_and_elevates_trust_persistently`** — after
+  AllowAlways: `active_skills` contains the skill AND
+  `registry.trust_of(..) == Some("trusted")`. A SECOND fresh run is then
+  `Completed` with the skill active and NO new `AwaitingSkillDecision` pause
+  — proving the persistence actually changed live gating behavior on a
+  DIFFERENT run, not just that the sidecar file was touched.
+- **`cancel_works_on_a_paused_run`** — `cancel_run_with_reason` on a run
+  sitting in `AwaitingSkillDecision` returns `Canceled` with ZERO code
+  changes to that method (a regression/contract check, not new behavior —
+  the method already treated anything outside
+  `{Completed, Failed, Canceled}` as cancelable).
+
+## 2. The invariant, through every decision
+
+`invariant_holds_through_every_ask_decision` parametrizes over
+`[Deny, AllowOnce, AllowAlways]`: a skill urging the out-of-space action
+`wipe_disk` is self-activated via the ask flow, each decision is applied in
+turn (fresh registry/kernel per iteration), and in every case: `run.steps`
+never contains a `wipe_disk` step, and (for AllowOnce/AllowAlways, where the
+skill actually goes live) a `RunEvent::Rejected` mentioning `wipe_disk`
+fires — the kernel's schema-validation rejects it exactly as it does for
+any other unrecognized action, regardless of who authorized the skill that
+suggested it.
+
+## 3. Durability — the most important test in this extension
+
+`paused_run_survives_a_restart`, against the REAL `storage::SqliteRunStore`
+(not `InMemoryRunStore`) across two dropped-and-reopened `Kernel` instances
+pointed at the same on-disk SQLite file — the same two-session idiom
+`apps/desktop/src-tauri/tests/durable_store.rs` established for the desktop
+shell. Session 1 pauses a run; both the store and kernel are dropped
+("the daemon process ended"). Session 2 reopens at the same path
+("restarted"), asserts `store.unfinished_runs()` CONTAINS the paused run id
+(the load-bearing fix — without it this assertion fails and the run would
+be silently orphaned forever), then calls `execute_run` again (simulating
+the daemon's startup resume sweep) and asserts the pause is RE-EMITTED
+(`SkillActivationRequested` seen again on a fresh subscription) with
+`run.steps.is_empty()` — no step consumed, no model call made. Only then
+does it decide `AllowOnce` and confirm the run actually resumes and
+completes. Real transcript:
+
+```
+$ cargo test -p skills --test ask_activation_test paused_run_survives_a_restart -- --nocapture --test-threads=1
+running 1 test
+test paused_run_survives_a_restart ... ok
+paused-run restart-survival OK: run 94ec0799-5484-4702-b8da-daaa22993e2a re-surfaced after reopen, decided, and completed
+```
+
+## 4. The timeout sweeper — bounded wait, tested deterministically
+
+`daemon::skill_sweep::sweep_timed_out_skill_activations` was extracted from
+`main()` into a standalone function specifically so this guarantee has a
+real test rather than only being provable by inspection or a slow
+wall-clock run. This required giving the `daemon` crate a `[lib]` target
+(`src/lib.rs`, auto-discovered by Cargo alongside the existing `kelter`
+binary) exposing `config`, `skill_sweep`, and `skills_controller` — the
+binary itself is otherwise unchanged in behavior.
+
+`timeout_sweeper_denies_and_resumes`
+(`crates/daemon/tests/skill_sweep_test.rs`) injects `now`/`requested_at`
+directly (no `sleep`, fully deterministic): a sweep called 10 seconds after
+the request does nothing (`acted.is_empty()`, run still
+`AwaitingSkillDecision`); a sweep called 301 seconds after (over the 300s
+default timeout) force-denies (principal `"system:timeout"`) and returns
+the run id; the caller then resumes it exactly as `main()`'s real sweep
+loop does, and the run completes without the skill.
+
+```
+$ cargo test -p daemon --test skill_sweep_test -- --nocapture
+cargo test: 1 passed (1 suite, 0.04s)
+```
+
+Also proven headless-safe by construction: `ask_fallback_deny_never_pauses`
+(§1 above) — the DEFAULT posture (`ask_fallback = "deny"`) means a run under
+`model_activation = "ask"` alone never pauses at all, so the sweeper is not
+even needed unless an operator explicitly opts into
+`ask_fallback = "queue"`.
+
+## 5. Part 6 addendum — skills management over HTTP
+
+`crates/api/tests/skills_controller_test.rs` (5 tests, an in-memory mock
+`SkillsController` exercised over REAL HTTP via `reqwest` + a bound
+`TcpListener`, mirroring `api_test.rs`'s existing harness style exactly):
+
+```
+$ cargo test -p api --test skills_controller_test -- --nocapture
+cargo test: 5 passed (1 suite, 0.01s)
+```
+
+- `every_skills_route_404s_when_no_controller_is_wired` — all 7 routes
+  (`GET`/`POST /skills`, `DELETE /skills/{name}`, `POST .../activate`,
+  `POST .../deactivate`, `GET`/`POST /skills/policy`) return 404 when
+  `ApiState.skills` is `None` — the exact capability-flag signal the
+  frontend's `skillsManagementSupported` flag depends on.
+- `skills_routes_are_bearer_gated` — 401 with no token, even when wired.
+- `list_install_remove_round_trip` — empty list → install (200, report
+  names the installed skill) → populated list → activate (204, reflected in
+  a SUBSEQUENT list, not just the response body) → deactivate (204,
+  likewise reflected) → remove (204, list empty again) → removing an
+  already-gone skill fails cleanly (422, not a panic or 500).
+- `policy_get_set_round_trip` — GET reflects the mock's initial state; POST
+  with all three fields returns the update; a SUBSEQUENT GET echoes it back
+  (proving the update actually persisted in the controller's own state, not
+  just that the POST response echoed the request).
+- `install_failure_reports_422` — a controller error surfaces as 422, not a
+  500 or a silently-swallowed failure.
+
+The RwLock-threading guarantee (a policy change actually changes GATING
+behavior, not just what `get_policy()` reports) is proven separately and
+more precisely against the real `RegistrySkillGate` (not a mock) in
+`crates/skills/src/gate.rs`:
+
+```
+$ cargo test -p skills --lib set_policy -- --nocapture
+cargo test: 1 passed (1 suite, 0.01s)
+```
+
+`set_policy_takes_effect_on_next_authorize_activation_call`: starts
+`TrustedOnly` (untrusted skill → `Deny`), flips live to `Ask`+`Queue` via
+`set_policy` (asserting `get_policy()` echoes the new snapshot), asserts the
+VERY NEXT `authorize_activation` call returns `AskHuman` — not just that the
+setter worked — then flips again to `All` and asserts the next call returns
+`Allow`.
+
+## 6. Review-standard mapping
+
+| Criterion | Proven by |
+|---|---|
+| Pause + surfacing | `ask_pauses_and_surfaces_the_request` |
+| All three decisions' effects | `deny_lets_the_model_continue_without_the_skill`, `allow_once_activates_for_this_run_only_no_trust_change`, `allow_always_activates_and_elevates_trust_persistently` |
+| Invariant holds through every decision | `invariant_holds_through_every_ask_decision` |
+| Headless / `ask_fallback=deny` never hangs | `ask_fallback_deny_never_pauses` |
+| Durability survives a real restart | `paused_run_survives_a_restart` (real `SqliteRunStore`, two sessions) |
+| Cancel works on a paused run | `cancel_works_on_a_paused_run` (zero code changes needed — regression check) |
+| Timeout sweeper is bounded, not just inspected | `timeout_sweeper_denies_and_resumes` (deterministic, injected clock) |
+| Part 6 CRUD + policy contract | `skills_controller_test.rs` (5 tests) + `set_policy_takes_effect_on_next_authorize_activation_call` |
+
+## Judgment calls and deviations from the design doc
+
+- **`ActivationAuthorization` derives `Clone` (not `Copy`)** since `Deny`/
+  `AskHuman` carry owned `String`/struct data — the design doc's sketch
+  didn't specify derives; this is the only sensible choice given the
+  variants' payloads.
+- **The Deny-reason/Allow-trust unwrap helpers in `skills_test.rs`**
+  (`deny_reason`/`allow_trust`) were added because three PRE-EXISTING test
+  call sites used `.unwrap_err()`/`.unwrap()` directly on the old
+  `Result<String,String>` return — the design doc's Part 1 didn't call
+  these out explicitly (they're outside the "Tests" section, which only
+  lists NEW tests) but they were a necessary, mechanical consequence of the
+  signature change, not a design decision.
+- **`skill_sweep_test.rs` and `skills_controller_test.rs` live in
+  `tests/`, not colocated with `ask_activation_test.rs`** — because the
+  timeout sweeper needs the `daemon` crate specifically (which cannot be a
+  dev-dependency of `skills`, that would be circular: `daemon` depends on
+  `skills`) and the CRUD-router test needs `api` specifically (mirroring
+  `api_test.rs`'s own harness in the crate that owns the router). This
+  matches the design doc's own suggestion ("your call") for test 8's
+  placement.
+- **Part 6 addendum scope**: implemented as specified, including the
+  explicit URL-only install-over-HTTP scope line, the `RwLock`-bundled
+  `AskPolicyConfig`, the concrete-`Arc<RegistrySkillGate>`-alongside-the-
+  trait-object daemon-wiring pattern, and the overlay-file persistence
+  mirroring `model-config`'s. The one noted limitation (sweeper reads a
+  startup snapshot of `ask_timeout_secs`/its own spawn condition, not the
+  live `RwLock`) is flagged plainly in ADR 0021 rather than silently
+  worked around — building live sweeper-task lifecycle management was
+  judged out of proportion to what this addendum actually needed.
+- **No STOP conditions were hit.** No decision required granting capability
+  beyond context; every pause has a bounded, tested escape path
+  (`ask_fallback=deny` for the headless case, the timeout sweeper for the
+  queued case, plus `cancel_run_with_reason` for an operator who wants out
+  immediately); no change to `ActionSchema::validate`'s trust boundary
+  beyond what ADR 0020 already added was needed; and the
+  `unfinished_runs`/durability fix, once identified per the design doc's
+  Part 0, was verified sufficient by an actual restart test against real
+  SQLite, not left as an assumption.

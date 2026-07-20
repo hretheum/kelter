@@ -77,6 +77,7 @@ fn context() -> PolicyContext {
         last_error: None,
         latitude: Latitude::Wide,
         guidance: None,
+        active_skills: Vec::new(),
     }
 }
 

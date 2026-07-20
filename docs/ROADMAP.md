@@ -65,6 +65,47 @@ swappable policy engine, and it stays reliable even on small local models.
   bearer-gated endpoints: journal-replay history (`GET /runs/{id}/events`) and
   Stop (`POST /runs/{id}/cancel`). The 3-user "input vs output" test stays a
   human evidence task. Done.
+- **Skills subsystem (ADR 0019).** OpenSkills / `SKILL.md` procedural
+  knowledge, open to any source (`kelter skill add <dir|bundle|url>`):
+  instructions enter the oracle's context under mandatory progressive
+  disclosure and budgets; bundled scripts/tools are only candidates for the
+  existing sandbox-by-default registry. The invariant — advisory, never
+  authorizing; the kernel re-gates every proposal — is structurally enforced
+  (schema pass-through) and test-proven (265-skill ECC mass load, urged
+  out-of-space action rejected, no exec on activation). Done.
+- **Phase 12 — model self-activation of skills (ADR 0020).** The model can
+  now flip an advisory skill on/off itself, mid-run, via two kernel-owned
+  actions (`activate_skill`/`deactivate_skill`) handled inline in the engine
+  loop exactly like `finish` — never routed through the tool substrate, so
+  activation grants zero capability; the only effect is which skill
+  instructions the model sees on the next step. Run-scoped and ephemeral
+  (`Run.active_skills`, never written to the operator's persistent registry);
+  gated by a `SkillGate` seam (existence, an operator trust policy, and a
+  shared advisory-context budget — a hard floor, refused rather than
+  overflowed); the out-of-space invariant is unchanged under model
+  activation. Daemon-only for now (desktop is not wired). Default policy is
+  `trusted`-only, which makes the feature inert until an operator explicitly
+  trusts a skill — flagged to the maintainer as an open decision (`trusted`
+  vs `all`). Done.
+- **Phase 13 — interactive ("ask") skill activation + skills management UI
+  (ADR 0021).** A third `SkillGate` outcome — `AskHuman` — lets an untrusted
+  self-activation durably pause a run (`RunStatus::AwaitingSkillDecision`)
+  for a human deny/allow-once/allow-always decision instead of only ever
+  being silently allowed or denied; the decision is journaled and applied
+  through the same propose→validate→execute mechanism every other kernel
+  decision uses, so no path grants capability under any of the three
+  outcomes. `[skills] ask_fallback` defaults to `"deny"` — a run under
+  `model_activation = "ask"` alone never pauses until an operator opts into
+  `"queue"`, at which point a background timeout sweeper bounds every wait.
+  `allow_always` is an explicit, flagged amendment to ADR 0019 (the only new
+  API that can move a skill's trust outside a direct sidecar edit —
+  reachable only via a human's bearer-gated decision, never model-
+  initiated). A mid-flight addendum (Part 6) also gives skills
+  management — list/install-from-url/remove/activate/deactivate/policy — an
+  HTTP surface (`/api/v1/skills*`) and a live-mutable `RegistrySkillGate`
+  policy, closing a gap the frontend implementer correctly flagged rather
+  than guessed at. Durability proven against real SQLite across a
+  restart; 15 new tests, 0 regressions (157 → 172). Done.
 
 ## Phase 4 — the governed extension platform (delivered)
 

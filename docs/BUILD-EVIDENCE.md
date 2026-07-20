@@ -1209,3 +1209,108 @@ install; a real daemon run (qwen-0.5b) completed with the catalog+active
 instructions injected per model call (`catalog_bytes=8059`,
 `active_instruction_bytes=93`). Gates: 151 workspace tests (9 new), clippy
 `-D warnings` clean, fmt clean.
+
+## Phase 12 — model self-activation of skills (ADR 0020)
+
+Lets the **model** flip an advisory skill on for itself, mid-run — closing
+the gap ADR 0019 left deliberately (only the operator could activate) —
+without ever crossing from knowledge into capability.
+
+- **Kernel-owned, not tool-routed.** `activate_skill`/`deactivate_skill` are
+  handled inline in the engine loop exactly like `finish` — never routed
+  through `ActionSource`. An action that never reaches
+  `ActionSource::execute` cannot grant capability by construction; the only
+  effect is which advisory instructions the model sees on the **next
+  step**, and every subsequent proposal is still re-validated against the
+  same `ActionSchema`.
+- **The seam.** A new `kernel_core::SkillGate` trait (mirrors the
+  `LearnedStore`/`with_learned` optional-subsystem pattern, ADR 0016) —
+  kernel-core gains the trait and two action constants but stays
+  skills-agnostic, no dependency on the `skills` crate. `RegistrySkillGate`
+  (crate `skills`) implements it: existence, an operator trust policy
+  (`ModelActivationPolicy::TrustedOnly | All`), and the shared
+  advisory-context budget (unioned over operator-active ∪ run-active ∪
+  candidate, ≤48 KiB — a hard floor, refused rather than overflowed).
+  Authorization runs once, on a fresh proposal, before the Decision is
+  journaled; it does **not** re-run on journal replay (replay is law).
+- **Run-scoped and ephemeral.** The only state change is
+  `Run.active_skills: Vec<String>` — never a write to the operator's
+  `active.toml` or a skill's trust sidecar. A fresh run always starts
+  empty; no Intent/Receipt boundary is needed (a set insert/remove is
+  repeatable, so replaying the journaled Decision after a crash is
+  exactly-once by construction).
+- **Default policy `trusted`** (every skill is `untrusted` at install, so
+  this makes the feature inert until an operator explicitly trusts a skill)
+  — flagged as an **open decision** for the maintainer in ADR 0020, not
+  resolved silently. Daemon-only for this phase; desktop is not wired
+  (matches its existing non-wiring of skills/learned-facts).
+
+**Proof (full detail: `docs/evidence/skills-model-activation.log`):** a
+real-kernel demo transcript shows `activate_skill` Proposed→Executed with
+the skill's trust label in the result, the urged in-space action executing
+on the next step, the invariant holding when a self-activated skill urges an
+out-of-space action (`wipe_disk` rejected exactly as under operator
+activation), and a budget refusal (`Rejected ... 65616 bytes, over the
+49152 byte cap`) with zero state change. Six new tests cover the
+end-to-end path, the invariant under model activation, run-scoping/
+ephemerality (operator active set + trust provably unchanged), the budget
+floor, deactivate, and the trust-policy gate. Gates: 157 workspace tests
+(6 new, 0 regressions), clippy `-D warnings` clean, fmt clean.
+
+## Phase 13 — interactive ("ask") skill activation + skills management UI (ADR 0021)
+
+A third `SkillGate` outcome — `AskHuman` — so an untrusted self-activation
+can pause a run for a human deny/allow-once/allow-always decision instead
+of only ever being silently allowed or denied, plus a Settings UI (and its
+backing HTTP surface) for skills management that previously existed only as
+a CLI.
+
+- **A durable pause, not a side channel.** `RunStatus::AwaitingSkillDecision`
+  (non-terminal) + `Run.pending_skill_activation`; the human's decision is
+  journaled (`SkillActivationRequested`/`Decided`) and applied through the
+  SAME propose→validate→execute mechanism every other kernel decision
+  already goes through — `AllowOnce`/`AllowAlways` synthesize exactly what
+  the existing journal-replay branch expects, `Deny` seeds feedback into the
+  existing fresh-proposal branch. No new control-flow shape; the ~150-line
+  attempt loop is never duplicated.
+- **The load-bearing durability fix.** `unfinished_runs()` (both
+  `InMemoryRunStore` and `SqliteRunStore`) now includes
+  `AwaitingSkillDecision` in its positive allowlist, and a new top-of-
+  `execute_run_inner` check re-surfaces an undecided pause on any resume —
+  without this, a daemon restart while a run is paused would silently
+  orphan it forever. Proven against a REAL `SqliteRunStore`, two
+  dropped-and-reopened `Kernel` instances at the same on-disk path (the
+  `apps/desktop/src-tauri/tests/durable_store.rs` idiom).
+- **Never hangs.** `[skills] ask_fallback` defaults to `"deny"` — an
+  ask-worthy self-activation is denied outright until an operator opts into
+  `"queue"`; even then, a background timeout sweeper (extracted as a
+  standalone, unit-testable function, not left inline in `main()`)
+  force-denies and resumes any pause older than `ask_timeout_secs`.
+- **Explicit ADR-0019 amendment.** `allow_always` is the one new API that
+  can change a skill's persistent trust label outside a direct sidecar
+  edit — reachable only through a human's bearer-gated decision on a
+  specific pending request, never model-initiated. Capability-wise nothing
+  changes (trust never grants execution); flagged plainly in ADR 0021 for
+  the maintainer's sign-off, not hidden.
+- **Part 6 addendum: skills management over HTTP.** Seven new
+  `/api/v1/skills*` routes (list/install-from-url/remove/activate/
+  deactivate/policy get+set), a new `api::SkillsController` trait mirroring
+  `ModelConfigController`'s shape, and a runtime-mutable
+  `RegistrySkillGate` policy (`RwLock`-bundled, swapped atomically, takes
+  effect on the very next `authorize_activation` call — proven, not
+  assumed). Install is deliberately URL-only over HTTP (folder/bundle stays
+  CLI-only); a policy change persists via the same overlay-file pattern
+  `model-config` already established for a runtime model change.
+
+**Proof (full detail: `docs/evidence/skills-ask-and-ui.log`, backend
+section):** the pause and all three decisions' distinct effects, each with
+a dedicated test; the ADR-0019/0020 invariant holding through every
+decision (a self-activated skill urging `wipe_disk` is still rejected,
+identically, whichever way the human decided); `ask_fallback="deny"` never
+pausing; the restart-survival transcript (`paused-run restart-survival OK:
+run 94ec0799-... re-surfaced after reopen, decided, and completed`); the
+timeout sweeper proven deterministically with an injected clock, not a
+slow wall-clock run; `cancel_run_with_reason` needing zero code changes to
+cancel a paused run; and the Part 6 addendum's router contract (5 tests,
+real HTTP) plus the policy-RwLock unit test. Gates: **172 workspace tests
+(15 new, 0 regressions)**, clippy `-D warnings` clean, fmt clean.

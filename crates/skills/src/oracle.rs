@@ -33,9 +33,20 @@ impl SkillContextOracle {
         Self { inner, registry }
     }
 
-    fn skill_context(&self) -> Option<String> {
+    /// Render skill context for the union of the operator-active set and a
+    /// run's self-activated set (ADR 0020). Catalog stays the operator view
+    /// (cosmetic); `active_instructions_for` renders the union under the
+    /// same total budget as the operator-only path — the render-time
+    /// backstop that holds even if authorization were somehow bypassed.
+    fn skill_context(&self, run_active: &[String]) -> Option<String> {
         let catalog = self.registry.catalog();
-        let active = self.registry.active_instructions();
+        let mut union = self.registry.active_names();
+        for n in run_active {
+            if !union.iter().any(|u| u == n) {
+                union.push(n.clone());
+            }
+        }
+        let active = self.registry.active_instructions_for(&union);
         if catalog.is_empty() && active.is_empty() {
             return None;
         }
@@ -71,7 +82,7 @@ impl PolicyOracle for SkillContextOracle {
         context: &PolicyContext,
         schema: &ActionSchema, // ← passed through untouched, by design
     ) -> Result<Proposal, PolicyError> {
-        match self.skill_context() {
+        match self.skill_context(&context.active_skills) {
             None => self.inner.propose(context, schema).await,
             Some(skill_ctx) => {
                 let mut augmented = context.clone();

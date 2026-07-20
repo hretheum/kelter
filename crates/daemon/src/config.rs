@@ -60,6 +60,30 @@ pub struct SkillsConfig {
     /// Runtime (de)activation via `kelter skill activate/deactivate` also
     /// persists in the skills dir and wins over this seed.
     pub active: Vec<String>,
+    /// Which installed skills the MODEL may self-activate as a kernel-owned
+    /// `activate_skill` action, run-scoped and ephemeral (ADR 0020):
+    /// `"trusted"` (default) — only skills an operator has explicitly
+    /// trusted; since every skill is `untrusted` at install, this makes the
+    /// feature INERT until an operator opts a skill in. `"all"` — any
+    /// installed skill. `"ask"` (ADR 0021) — an untrusted skill neither
+    /// auto-allows nor auto-denies: the run pauses for a human decision,
+    /// subject to `ask_fallback`. An unrecognized value falls back to
+    /// `"trusted"` with a warning. In every case, activation only ever
+    /// changes advisory context — it never grants capability, and the kernel
+    /// re-validates every proposed action against the schema regardless.
+    pub model_activation: String,
+    /// Only consulted when `model_activation == "ask"` (ADR 0021). `"deny"`
+    /// (default) — an ask-worthy self-activation is denied outright, same as
+    /// `"trusted"`, for deployments with no one to ask (e.g. a headless A2A
+    /// worker); under this default a run configured with `model_activation =
+    /// "ask"` alone NEVER pauses. `"queue"` — actually pause and wait,
+    /// bounded by `ask_timeout_secs`. An unrecognized value falls back to
+    /// `"deny"` with a warning.
+    pub ask_fallback: String,
+    /// How long a paused run may wait for a human decision before the
+    /// background sweeper auto-denies it (principal `"system:timeout"`).
+    /// Only relevant when `ask_fallback == "queue"`.
+    pub ask_timeout_secs: u64,
 }
 
 impl Default for SkillsConfig {
@@ -68,6 +92,9 @@ impl Default for SkillsConfig {
             enabled: true,
             dir: "./skills".into(),
             active: Vec::new(),
+            model_activation: "trusted".into(),
+            ask_fallback: "deny".into(),
+            ask_timeout_secs: 300,
         }
     }
 }

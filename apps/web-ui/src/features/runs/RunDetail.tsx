@@ -28,7 +28,10 @@ export function RunDetail() {
 
   if (!run) return <Composer />;
 
-  const live = run.status === "pending" || run.status === "running";
+  const live =
+    run.status === "pending" ||
+    run.status === "running" ||
+    run.status === "awaiting_skill_decision";
   return (
     <div
       ref={headerRef}

@@ -210,7 +210,7 @@ impl RunStore for SqliteRunStore {
         let conn = self.db.conn.lock().await;
         let mut stmt = conn
             .prepare(
-                "SELECT id FROM runs WHERE status IN ('pending', 'running')
+                "SELECT id FROM runs WHERE status IN ('pending', 'running', 'awaiting_skill_decision')
                  ORDER BY created_at ASC",
             )
             .map_err(backend_err)?;
@@ -515,6 +515,8 @@ mod tests {
             agent_usage: Default::default(),
             trust_posture: Vec::new(),
             cost_usd: None,
+            active_skills: Vec::new(),
+            pending_skill_activation: None,
         }
     }
 

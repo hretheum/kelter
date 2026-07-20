@@ -68,6 +68,12 @@ pub struct PolicyContext {
     /// Extra guidance injected by the kernel (populated under
     /// `Latitude::Constrained`).
     pub guidance: Option<String>,
+    /// The run-scoped set of advisory skills the model has self-activated
+    /// this run (ADR 0020) — ephemeral, never persisted to operator config.
+    /// The `SkillContextOracle` renders instructions for the union of this
+    /// set and the operator-active set.
+    #[serde(default)]
+    pub active_skills: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]

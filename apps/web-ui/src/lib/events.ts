@@ -12,7 +12,12 @@
  * not rejected proposals or rationale — those are live-WS-only. A replayed
  * axis therefore has proposals + results but no retry detail. */
 
-import type { JournalEntry, RunEvent, RunEventEnvelope } from "./api";
+import type {
+  JournalEntry,
+  PendingSkillActivationUi,
+  RunEvent,
+  RunEventEnvelope,
+} from "./api";
 
 export interface AxisStep {
   step: number;
@@ -38,6 +43,10 @@ export interface AxisState {
   fromReplay: boolean;
   /* Highest live seq applied — replayed journal entries carry no seq. */
   lastSeq: number;
+  /* Set by skill_activation_requested, cleared by the paired
+   * skill_activation_decided (ADR 0021) — not step-shaped, so it lives
+   * top-level rather than on an AxisStep. */
+  pendingSkillActivation: PendingSkillActivationUi | null;
 }
 
 function newAxis(runId: string): AxisState {
@@ -49,6 +58,7 @@ function newAxis(runId: string): AxisState {
     reflections: 0,
     fromReplay: false,
     lastSeq: -1,
+    pendingSkillActivation: null,
   };
 }
 
@@ -102,6 +112,21 @@ export function applyEvent(axis: AxisState, ev: RunEvent): void {
       break;
     case "failed":
       axis.terminal = { kind: "failed", error: ev.error };
+      break;
+    case "skill_activation_requested":
+      axis.pendingSkillActivation = {
+        step: ev.step,
+        skill: ev.skill,
+        description: ev.description,
+        trust: ev.trust,
+        provenance_source_kind: ev.provenance_source_kind,
+        provenance_source: ev.provenance_source,
+      };
+      break;
+    case "skill_activation_decided":
+      if (axis.pendingSkillActivation?.skill === ev.skill) {
+        axis.pendingSkillActivation = null;
+      }
       break;
   }
 }

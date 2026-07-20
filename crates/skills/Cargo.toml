@@ -22,3 +22,4 @@ tokio.workspace = true
 serde_json.workspace = true
 memory.workspace = true
 axum.workspace = true
+storage.workspace = true

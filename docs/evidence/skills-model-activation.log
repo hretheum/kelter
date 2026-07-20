@@ -1,0 +1,248 @@
+# Model self-activation of skills (ADR 0020) — implementation evidence (2026-07-20)
+# Invariant carried forward from ADR 0019: a skill is ADVISORY procedural
+# knowledge, never authorizing — even when the MODEL flips it on itself.
+
+== Review criteria, point by point ==
+
+(a) Model self-activates → sees instructions next step → urged IN-space
+    action executes:
+    test model_self_activates_skill_then_urged_action_executes (crates/
+    skills/tests/skills_test.rs). A `SelfActivatingOracle` proposes
+    `activate_skill(urge-echo)` with NOTHING operator-activated; the kernel
+    executes it as a kernel-owned action (no tool call); on the NEXT step the
+    oracle's guidance now contains "USE ACTION: echo" (proof the instructions
+    only became visible after the kernel applied the activation), proposes
+    `echo`, and it runs through the unchanged validate->execute path.
+    Live transcript: see "== Demo transcript ==" scenario 1 below —
+    `step 0: Executed activate_skill ... trust":"untrusted" ...` then
+    `step 1: Executed echo ok=true`.
+
+(b) THE INVARIANT holds under MODEL activation (not just operator
+    activation): a self-activated skill urging an out-of-space action is
+    still rejected.
+    test invariant_holds_under_model_self_activation — extends the ADR 0019
+    invariant test to route activation through the model's own
+    `activate_skill` proposal rather than the operator CLI. `wipe_disk` is
+    proposed (so the model really did learn the name only from the
+    now-visible body) and the kernel schema-validation rejects it
+    ("proposed action 'wipe_disk' is not in the action space"); the run
+    still completes (the oracle falls back to `finish`); `wipe_disk` never
+    appears as an executed step.
+    Live transcript: scenario 2 below.
+
+(c) Run-scoped and ephemeral: never mutates the operator's persistent
+    registry state or a skill's trust; a fresh run starts empty.
+    test self_activation_is_run_scoped_and_ephemeral — after a run
+    self-activates `urge-echo`, `reg.active_names()` and
+    `reg.trust_of("urge-echo")` are asserted UNCHANGED from before the run
+    (no `active.toml` write, no sidecar write); a second, freshly-created run
+    is asserted to have `active_skills.is_empty()`.
+    Live transcript: every scenario below prints `operator active_names=[]`
+    both before and after the run self-activates something.
+
+(d) The budget is a hard floor — refusal, never silent overflow.
+    test budget_refuses_activation_that_would_exceed_the_cap — three 16 KiB
+    (post-truncation) skills are operator-activated (already at the 48 KiB
+    cap); the gate's `authorize_activation` is asserted to return `Err`
+    directly, AND through the kernel: a `Rejected` event fires and
+    `run.active_skills` never contains the refused skill (no state change).
+    Live transcript: scenario 3 below —
+    `Rejected activating 'big4' would push the total advisory-instruction
+    budget to 65616 bytes, over the 49152 byte cap`.
+
+(e) Deactivate: activate then deactivate -> instructions gone next step.
+    test deactivate_removes_instructions_next_step — a dedicated oracle
+    activates on step 0, checks `context.guidance` for a body marker on step
+    1 (asserted PRESENT), deactivates, checks again on step 2 (asserted
+    ABSENT). Asserts the collected sequence is exactly `[true, false]`.
+
+(f) Trust policy: `TrustedOnly` refuses an untrusted skill (every skill is
+    untrusted at install — ADR 0019 unchanged), `All` permits.
+    test trust_policy_trusted_only_refuses_untrusted_all_permits — a unit
+    test directly on `RegistrySkillGate`: `TrustedOnly.any_activatable()` is
+    false with only an untrusted skill installed (the feature is INERT by
+    default, as designed); `authorize_activation` under `TrustedOnly`
+    returns `Err` mentioning "trust"; under `All`, `any_activatable()` is
+    true and `authorize_activation` returns `Ok("untrusted")`.
+
+(No regression, mirroring ADR 0019's §7.6): propose->validate->execute and
+`ValidatedAction` untouched — the model-activation seam is a new trait
+(`kernel_core::SkillGate`) plus one inline branch in the engine loop next to
+`finish`; `ActionSchema::validate` itself was not modified beyond the crate
+adding the two new specs to the offered schema. `cargo test --workspace`:
+157 passed (36 suites) — 151 pre-existing (per the ADR 0019 evidence log) + 6
+new skills tests. `cargo clippy --workspace --all-targets -- -D warnings`:
+clean. `cargo fmt --all`: clean (no diffs after running).
+
+== `cargo test -p skills -- --nocapture` (raw, --test-threads=1) ==
+
+running 15 tests
+test activation_injects_knowledge_but_inactive_bodies_stay_invisible ... ok
+test budget_refuses_activation_that_would_exceed_the_cap ... ok
+test catalog_never_contains_bodies_and_activation_loads_them ... ok
+test context_budgets_hold ... ok
+test deactivate_removes_instructions_next_step ... ok
+test installs_from_dir_lists_and_records_untrusted_provenance ... ok
+test installs_from_url_tarball ... ok
+test invariant_holds_under_model_self_activation ... ok
+test malformed_and_adversarial_frontmatter_never_gains_authority ... ok
+test model_self_activates_skill_then_urged_action_executes ... ok
+test parses_normal_and_folded_frontmatter ... ok
+test scripts_never_run_on_install_activation_or_context_build ... ok
+test self_activation_is_run_scoped_and_ephemeral ... ok
+test skill_urging_an_out_of_space_action_is_rejected_by_the_kernel ... ok
+test trust_policy_trusted_only_refuses_untrusted_all_permits ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+(9 pre-existing ADR 0019 tests + 6 new ADR 0020 tests: budget_refuses_
+activation_that_would_exceed_the_cap, deactivate_removes_instructions_next_
+step, invariant_holds_under_model_self_activation, model_self_activates_
+skill_then_urged_action_executes, self_activation_is_run_scoped_and_
+ephemeral, trust_policy_trusted_only_refuses_untrusted_all_permits — all
+green, zero regressions in the pre-existing 9.)
+
+== Demo transcript (`cargo run -p skills --example model-activation-demo`) ==
+A real kernel run (in-memory store, mock oracle, no daemon) with the actual
+event stream printed — Proposed -> Executed(trust) and the invariant
+rejection, not just test pass/fail:
+
+=== scenario: self-activate then urged in-space action ===
+installed 'urge-echo' (trust: untrusted) — NOT operator-activated
+  step 0: Proposed  activate_skill
+  step 0: Executed  activate_skill ok=true result={"activated":"urge-echo","trust":"untrusted","run_active":["urge-echo"]}
+  step 1: Proposed  echo
+  step 1: Executed  echo ok=true result={"echoed":"from self-activated skill"}
+  step 2: Proposed  finish
+run status=Completed run.active_skills=["urge-echo"] operator active_names=[]
+
+=== scenario: invariant: self-activated skill urging an out-of-space action ===
+installed 'urge-forbidden' (trust: untrusted) — NOT operator-activated
+  step 0: Proposed  activate_skill
+  step 0: Executed  activate_skill ok=true result={"activated":"urge-forbidden","trust":"untrusted","run_active":["urge-forbidden"]}
+  step 1: Proposed  wipe_disk
+  step 1: Rejected  proposed action 'wipe_disk' is not in the action space
+  step 1: Proposed  finish
+run status=Completed run.active_skills=["urge-forbidden"] operator active_names=[]
+
+=== scenario: budget refusal (hard floor) ===
+operator-active: ["big1", "big2", "big3"] (each ~16 KiB post-truncation; 3 * 16 KiB = 48 KiB = the cap)
+  step 0: Proposed  activate_skill
+  step 0: Rejected  activating 'big4' would push the total advisory-instruction budget to 65616 bytes, over the 49152 byte cap — deactivate something first
+  step 0: Proposed  finish
+run status=Completed run.active_skills=[] (big4 must be absent)
+
+== Gate summary ==
+
+cargo fmt --all                                       : clean (2 files
+                                                         reformatted during
+                                                         development, then
+                                                         stable)
+cargo clippy --workspace --all-targets -- -D warnings : "No issues found"
+cargo test -p kernel-core                             : 51 passed, 0 failed
+                                                         (across 6 binaries:
+                                                         lib 23, redaction 1,
+                                                         plan 5, learned 4,
+                                                         engine 11,
+                                                         durability 7)
+cargo test -p skills                                  : 15 passed, 0 failed
+                                                         (9 pre-existing + 6
+                                                         new)
+cargo test -p daemon                                  : included in the
+                                                         workspace run below;
+                                                         no daemon-specific
+                                                         tests changed
+cargo build -p daemon                                 : succeeds
+cargo test --workspace                                : 157 passed, 0 failed
+                                                         (36 suites) — up
+                                                         from ADR 0019's 151
+
+== Changed files (one-line why) ==
+
+crates/kernel-core/src/skill_gate.rs        - NEW: the SkillGate trait (the
+                                               seam) — kernel-core stays
+                                               skills-agnostic
+crates/kernel-core/src/lib.rs               - export SkillGate, the two new
+                                               action-name constants
+crates/kernel-core/src/engine.rs            - ACTIVATE_SKILL_ACTION /
+                                               DEACTIVATE_SKILL_ACTION +
+                                               specs; Kernel.skills +
+                                               with_skills(); Run.
+                                               active_skills; schema push in
+                                               both action-space builders;
+                                               authorize-at-validation-time
+                                               (fresh-proposal path only);
+                                               inline kernel-owned handler
+                                               (mutate + StepRecord +
+                                               Executed + continue, no
+                                               Intent/Receipt); active_skills
+                                               threaded into all 3
+                                               PolicyContext sites
+crates/kernel-core/src/oracle.rs            - PolicyContext.active_skills
+crates/kernel-core/src/store.rs             - test fixture: new Run field
+crates/a2a/src/server.rs                    - test fixture: new Run field
+crates/storage/src/lib.rs                   - test fixture: new Run field
+apps/desktop/src-tauri/tests/durable_store.rs - test fixture: new Run field
+crates/policy/src/prompt.rs                 - test ctx: new PolicyContext
+                                               field
+crates/policy/tests/openrouter_mock_test.rs - test ctx: new PolicyContext
+                                               field
+crates/skills/src/lib.rs                    - export gate module
+                                               (ModelActivationPolicy,
+                                               RegistrySkillGate)
+crates/skills/src/gate.rs                   - NEW: RegistrySkillGate
+                                               (implements SkillGate) +
+                                               ModelActivationPolicy
+crates/skills/src/registry.rs               - active_instructions_for(union)
+                                               ; active_instructions()
+                                               delegates to it; probe
+                                               helpers (is_installed,
+                                               trust_of, instruction_bytes,
+                                               activation_probe) for the
+                                               gate's budget math
+crates/skills/src/oracle.rs                 - SkillContextOracle::propose
+                                               unions context.active_skills
+                                               with the operator-active set
+                                               before rendering
+crates/skills/tests/skills_test.rs          - 6 new tests (a-f above); a
+                                               kernel_with_gate() helper;
+                                               SelfActivatingOracle; fixed a
+                                               latent tmp()-uniqueness race
+                                               exposed by the larger parallel
+                                               suite (added a monotonic
+                                               counter)
+crates/skills/examples/model-activation-demo.rs - NEW: real-kernel demo used
+                                               to produce the transcript
+                                               above
+crates/daemon/src/config.rs                 - SkillsConfig.model_activation
+                                               ("trusted" default)
+crates/daemon/src/main.rs                   - build RegistrySkillGate from
+                                               the same skill_reg used for
+                                               SkillContextOracle;
+                                               .with_skills() alongside
+                                               .with_learned(); one log line
+docs/adr/0020-skills-model-activation.md    - the model, with the open
+                                               decision flagged for Eryk
+docs/BUILD-EVIDENCE.md                      - Phase 12 entry
+docs/ROADMAP.md                             - Phase 12 bullet
+
+== Deviations / notes for Eryk ==
+
+1. OPEN DECISION (not resolved silently, per the task brief): the default
+   `[skills] model_activation` policy. Shipped default is "trusted" (the
+   feature is INERT until you explicitly trust a skill via the sidecar file
+   — every skill is untrusted at install). "all" is available and equally
+   safe capability-wise (activation is still knowledge only); the
+   difference is steering risk, not capability risk. See ADR 0020's
+   "Policy knob" section for the full trade-off.
+2. Desktop (`apps/desktop`) is NOT wired to this feature, matching the fact
+   that it already does not wire skills or learned-facts at all. Noted in
+   the ADR as a deferred, mechanical follow-up.
+3. The `tmp()` test helper in `crates/skills/tests/skills_test.rs` had a
+   latent uniqueness bug (pid + nanosecond timestamp could collide under
+   parallel test threads) that a flaky failure surfaced once this change
+   grew the suite from 9 to 15 tests. Fixed with an added monotonic counter
+   — a test-infrastructure fix, not a production-code change.
+4. No new `RunEvent` variant was added for activation; `Executed` carries
+   the trust label in its `result` JSON. Judged sufficient to keep the event
+   surface small (see ADR 0020, Consequences/Deferred).

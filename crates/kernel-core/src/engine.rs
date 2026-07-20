@@ -14,11 +14,22 @@ use uuid::Uuid;
 use crate::action::{ActionSchema, ActionSpec, ValidatedAction};
 use crate::journal::{fold_step, JournalEntry, Usage};
 use crate::oracle::{Latitude, PolicyContext, PolicyOracle};
+use crate::skill_gate::{ActivationAuthorization, SkillActivationDecision};
 use crate::store::RunStore;
 use memory::{Episode, EpisodeOutcome, MemoryProvider, Provenance};
 
 /// Name of the terminal action the kernel itself adds to every action space.
 pub const FINISH_ACTION: &str = "finish";
+
+/// Kernel-owned action (ADR 0020): the model self-activates an advisory
+/// skill's instructions for the rest of this run. Handled inline in the
+/// engine loop exactly like `finish` — never routed through `ActionSource`,
+/// so it grants zero capability. Offered only when a `SkillGate` is attached
+/// and reports something activatable.
+pub const ACTIVATE_SKILL_ACTION: &str = "activate_skill";
+/// Kernel-owned counterpart: turn a run-scoped advisory skill back off.
+/// Needs no gate — removing advisory context is always safe.
+pub const DEACTIVATE_SKILL_ACTION: &str = "deactivate_skill";
 
 /// Durable context handed to an executing action source. Lets a source
 /// journal critical mid-execution facts (e.g. a created remote task id) so
@@ -164,6 +175,11 @@ pub enum RunStatus {
     /// honoured before the run reached its own conclusion. A canceled run is
     /// finished — `unfinished_runs` excludes it, so a restart never resumes it.
     Canceled,
+    /// Non-terminal, PAUSED (ADR 0021): the model self-activated an untrusted
+    /// skill under an `Ask` policy and the run is waiting for a human's
+    /// deny/allow-once/allow-always decision. `unfinished_runs` INCLUDES this
+    /// status — a restart must re-surface, never orphan, a paused run.
+    AwaitingSkillDecision,
 }
 
 /// One executed step: which action ran, with what arguments, and how it went.
@@ -204,6 +220,31 @@ pub struct Run {
     /// `null`) for an unpriced one — never a fabricated number.
     #[serde(default)]
     pub cost_usd: Option<f64>,
+    /// Advisory skills the model self-activated this run (ADR 0020) —
+    /// run-scoped and ephemeral: it is never written to the operator's
+    /// persistent skill registry, and a fresh run always starts empty.
+    #[serde(default)]
+    pub active_skills: Vec<String>,
+    /// The pending `activate_skill` ask-request this run is paused on, when
+    /// `status == AwaitingSkillDecision` (ADR 0021). `None` otherwise.
+    #[serde(default)]
+    pub pending_skill_activation: Option<PendingSkillActivation>,
+}
+
+/// A durable snapshot of one pending human skill-activation decision (ADR
+/// 0021), carried on the run record so the resume path and any client can
+/// re-render the prompt without re-reading the journal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingSkillActivation {
+    pub step: u32,
+    pub skill: String,
+    pub trust: String,
+    pub description: String,
+    pub provenance_source_kind: String,
+    pub provenance_source: String,
+    /// Unix seconds when the request was made — the timeout sweeper compares
+    /// against this, no journal read needed.
+    pub requested_at: u64,
 }
 
 /// Accounting for one remote agent within a run.
@@ -246,6 +287,27 @@ pub enum RunEvent {
     },
     Failed {
         error: String,
+    },
+    /// A fresh `activate_skill` proposal was gated `AskHuman` (ADR 0021) —
+    /// the run has paused. Carries everything a client needs to render the
+    /// prompt without a follow-up read.
+    SkillActivationRequested {
+        step: u32,
+        skill: String,
+        description: String,
+        trust: String,
+        provenance_source_kind: String,
+        provenance_source: String,
+    },
+    /// A pending activation request was resolved. Emitted by
+    /// `decide_skill_activation` itself (not by the resumed execution), so a
+    /// listening client sees the decision land instantly regardless of how
+    /// long the resumed run's next model call takes.
+    SkillActivationDecided {
+        step: u32,
+        skill: String,
+        decision: SkillActivationDecision,
+        principal: String,
     },
 }
 
@@ -310,6 +372,11 @@ pub enum KernelError {
     Store(#[from] crate::store::StoreError),
     #[error(transparent)]
     Execution(#[from] ExecutionError),
+    /// The requested operation does not apply to the run's current state
+    /// (ADR 0021) — e.g. deciding a skill activation for a run that has no
+    /// pending request, or one for a different skill than is pending.
+    #[error("invalid state: {0}")]
+    InvalidState(String),
 }
 
 pub struct Kernel {
@@ -320,6 +387,11 @@ pub struct Kernel {
     /// Distinct, reversible learned-fact layer (Phase 10, ADR 0016). Optional:
     /// absent → no self-learning, retrieval is episodic memory only.
     learned: Option<Arc<dyn crate::learned::LearnedStore>>,
+    /// The advisory-skill self-activation gate (Phase 12, ADR 0020).
+    /// Optional: absent → `activate_skill`/`deactivate_skill` are never
+    /// offered, so the model can never propose them. kernel-core stays
+    /// skills-agnostic — this is only a seam.
+    skills: Option<Arc<dyn crate::skill_gate::SkillGate>>,
     events: broadcast::Sender<RunEventEnvelope>,
     config: KernelConfig,
 }
@@ -329,6 +401,45 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// The most recent `SkillActivationRequested` in the journal with no later
+/// matching `SkillActivationDecided` (ADR 0021) — i.e. a pause the run has
+/// not yet been resolved from. Scans the whole journal (like the Terminal
+/// check) rather than a single step, since the pause can predate any resume.
+fn still_awaiting_skill_decision(journal: &[JournalEntry]) -> Option<PendingSkillActivation> {
+    let mut pending: Option<PendingSkillActivation> = None;
+    for entry in journal {
+        match entry {
+            JournalEntry::SkillActivationRequested {
+                step,
+                skill,
+                trust,
+                description,
+                provenance_source_kind,
+                provenance_source,
+                requested_at,
+                ..
+            } => {
+                pending = Some(PendingSkillActivation {
+                    step: *step,
+                    skill: skill.clone(),
+                    trust: trust.clone(),
+                    description: description.clone(),
+                    provenance_source_kind: provenance_source_kind.clone(),
+                    provenance_source: provenance_source.clone(),
+                    requested_at: *requested_at,
+                });
+            }
+            JournalEntry::SkillActivationDecided { skill, .. }
+                if pending.as_ref().is_some_and(|p| &p.skill == skill) =>
+            {
+                pending = None;
+            }
+            _ => {}
+        }
+    }
+    pending
 }
 
 impl Kernel {
@@ -346,6 +457,7 @@ impl Kernel {
             memory,
             store,
             learned: None,
+            skills: None,
             events,
             config,
         }
@@ -355,6 +467,15 @@ impl Kernel {
     /// Builder-style so `Kernel::new` stays unchanged for every other caller.
     pub fn with_learned(mut self, learned: Arc<dyn crate::learned::LearnedStore>) -> Self {
         self.learned = Some(learned);
+        self
+    }
+
+    /// Attach a skill-activation gate, enabling model self-activation of
+    /// advisory skills (Phase 12, ADR 0020). Builder-style so `Kernel::new`
+    /// stays unchanged for every other caller; absent → the feature is
+    /// entirely inert (no new actions offered).
+    pub fn with_skills(mut self, skills: Arc<dyn crate::skill_gate::SkillGate>) -> Self {
+        self.skills = Some(skills);
         self
     }
 
@@ -484,6 +605,10 @@ impl Kernel {
     pub async fn current_action_schema(&self) -> Result<ActionSchema, ExecutionError> {
         let mut schema = self.tools.action_schema(self.config.latitude).await?;
         schema.actions.push(finish_spec());
+        if self.skills.as_ref().is_some_and(|g| g.any_activatable()) {
+            schema.actions.push(activate_skill_spec());
+            schema.actions.push(deactivate_skill_spec());
+        }
         Ok(schema)
     }
 
@@ -509,6 +634,8 @@ impl Kernel {
             agent_usage: std::collections::HashMap::new(),
             trust_posture: self.config.trust_posture.clone(),
             cost_usd: None,
+            active_skills: Vec::new(),
+            pending_skill_activation: None,
         };
         let id = run.id;
         self.store.put(run).await?;
@@ -571,6 +698,58 @@ impl Kernel {
         Ok(run)
     }
 
+    /// Resolve a pending `activate_skill` ask-request (ADR 0021) with a
+    /// human's decision. Journal + state write only — deliberately does NOT
+    /// call `execute_run` itself (keeps this fast/pure); the caller (the API
+    /// handler, or the timeout sweeper) is responsible for re-invoking
+    /// `execute_run` to actually resume, mirroring how `create_run` (returns
+    /// a run_id) is always paired with a separate `execute_run` spawn.
+    pub async fn decide_skill_activation(
+        &self,
+        run_id: Uuid,
+        skill: &str,
+        decision: SkillActivationDecision,
+        principal: &str,
+    ) -> Result<Run, KernelError> {
+        let mut run = self.store.get(run_id).await?;
+        let pending = run
+            .pending_skill_activation
+            .as_ref()
+            .filter(|p| p.skill == skill)
+            .ok_or_else(|| {
+                KernelError::InvalidState(format!(
+                    "run {run_id} has no pending activation request for '{skill}'"
+                ))
+            })?;
+        let step = pending.step;
+        self.store
+            .append_journal(
+                run_id,
+                JournalEntry::SkillActivationDecided {
+                    step,
+                    skill: skill.to_string(),
+                    decision,
+                    principal: principal.to_string(),
+                },
+            )
+            .await?;
+        run.pending_skill_activation = None;
+        run.status = RunStatus::Running;
+        self.store.put(run.clone()).await?;
+        self.emit(
+            run_id,
+            0,
+            RunEvent::SkillActivationDecided {
+                step,
+                skill: skill.to_string(),
+                decision,
+                principal: principal.to_string(),
+            },
+        );
+        tracing::info!(%run_id, %skill, ?decision, %principal, "skill activation decided");
+        Ok(run)
+    }
+
     fn emit(&self, run_id: Uuid, seq: u64, event: RunEvent) {
         // A send error only means no subscriber is listening right now.
         let _ = self.events.send(RunEventEnvelope { run_id, seq, event });
@@ -609,6 +788,37 @@ impl Kernel {
             run.output = output.clone();
             run.error = error.clone();
             run.cost_usd = self.config.pricing.cost(&run.policy, &run.usage);
+            self.store.put(run.clone()).await?;
+            return Ok(run);
+        }
+
+        // Still awaiting a human skill-activation decision (ADR 0021)? Re-
+        // surface, do not advance. Handles BOTH "daemon restarted while
+        // pending" (the startup sweep calls execute_run again) and "someone
+        // calls execute_run again before deciding" (idempotent — no side
+        // effects, no model call). Mirrors the Terminal check above: sits
+        // before the Running flip so there is no pointless status flicker.
+        if let Some(pending) = still_awaiting_skill_decision(&journal) {
+            tracing::info!(
+                %run_id,
+                step = pending.step,
+                skill = %pending.skill,
+                "resume: still awaiting a human skill-activation decision — re-surfacing"
+            );
+            self.emit(
+                run_id,
+                0,
+                RunEvent::SkillActivationRequested {
+                    step: pending.step,
+                    skill: pending.skill.clone(),
+                    description: pending.description.clone(),
+                    trust: pending.trust.clone(),
+                    provenance_source_kind: pending.provenance_source_kind.clone(),
+                    provenance_source: pending.provenance_source.clone(),
+                },
+            );
+            run.status = RunStatus::AwaitingSkillDecision;
+            run.pending_skill_activation = Some(pending);
             self.store.put(run.clone()).await?;
             return Ok(run);
         }
@@ -707,8 +917,68 @@ impl Kernel {
         for step_index in first_step..self.config.max_steps {
             // Journal state for this step (only ever non-empty for the first
             // iteration after a resume).
-            let folded = fold_step(&journal, step_index);
+            let mut folded = fold_step(&journal, step_index);
             let step_span = tracing::info_span!("kelter.step", step = step_index);
+
+            // A decided pending skill-activation request (ADR 0021): only
+            // DECIDED ones reach here (the top-of-function early check above
+            // already returned on an undecided one). Deny seeds `last_error`
+            // and falls into the existing fresh-proposal branch below (a
+            // fresh model call is required — the model must be told and must
+            // propose something else). Allow* synthesizes exactly what the
+            // existing replay branch already expects, so the ~150-line
+            // attempt loop is never duplicated.
+            if let Some(pending) = folded.skill_activation.clone() {
+                match pending.decision {
+                    None => { /* defensive no-op: the top-of-fn check already handles this */ }
+                    Some(SkillActivationDecision::Deny) => {
+                        last_error = Some(format!(
+                            "the operator declined to activate '{}' for this run — pick a \
+                             different approach.",
+                            pending.skill
+                        ));
+                    }
+                    Some(SkillActivationDecision::AllowAlways) => {
+                        if let Some(gate) = &self.skills {
+                            if let Err(e) = gate.elevate_trust(&pending.skill) {
+                                tracing::warn!(
+                                    %run_id, skill = %pending.skill,
+                                    "trust elevation failed (activation still applies for \
+                                     this run): {e}"
+                                );
+                            }
+                        }
+                        self.store
+                            .append_journal(
+                                run_id,
+                                JournalEntry::Decision {
+                                    step: step_index,
+                                    action: ACTIVATE_SKILL_ACTION.into(),
+                                    arguments: pending.arguments.clone(),
+                                    usage: None,
+                                },
+                            )
+                            .await?;
+                        folded.decision =
+                            Some((ACTIVATE_SKILL_ACTION.into(), pending.arguments.clone()));
+                    }
+                    Some(SkillActivationDecision::AllowOnce) => {
+                        self.store
+                            .append_journal(
+                                run_id,
+                                JournalEntry::Decision {
+                                    step: step_index,
+                                    action: ACTIVATE_SKILL_ACTION.into(),
+                                    arguments: pending.arguments.clone(),
+                                    usage: None,
+                                },
+                            )
+                            .await?;
+                        folded.decision =
+                            Some((ACTIVATE_SKILL_ACTION.into(), pending.arguments.clone()));
+                    }
+                }
+            }
 
             // 1. Build the action space: tools + the kernel-owned finish action.
             let mut schema = self.tools.action_schema(latitude).await?;
@@ -724,6 +994,14 @@ impl Kernel {
                 schema.actions.retain(|a| !done.contains(a.name.as_str()));
             }
             schema.actions.push(finish_spec());
+            // Kernel-owned self-activation (ADR 0020) — pushed AFTER the
+            // narrow_action_space retain so it is never dropped by
+            // constrained latitude (a model may want to (de)activate
+            // repeatedly).
+            if self.skills.as_ref().is_some_and(|g| g.any_activatable()) {
+                schema.actions.push(activate_skill_spec());
+                schema.actions.push(deactivate_skill_spec());
+            }
 
             // 2. Obtain the validated action: replay the journaled decision,
             //    or consult the policy oracle (and journal the outcome).
@@ -780,6 +1058,7 @@ impl Kernel {
                              succeeded — and finish only when the task's output has been produced."
                                 .to_string()
                         }),
+                        active_skills: run.active_skills.clone(),
                     };
                     let model_span = tracing::info_span!(
                         parent: &step_span,
@@ -877,6 +1156,93 @@ impl Kernel {
                                 continue;
                             }
 
+                            // Self-activation gate (ADR 0020): authorize ONE
+                            // fresh model proposal before it is journaled as
+                            // a Decision. Err → rejected with feedback like a
+                            // duplicate — no journaled decision, no state
+                            // change, the model retries. This does NOT run on
+                            // the journal-replay path (replay is law: the
+                            // decision was authorized when first made).
+                            // Deactivate needs no gate.
+                            if v.action() == ACTIVATE_SKILL_ACTION {
+                                if let Some(gate) = &self.skills {
+                                    let name = v
+                                        .arguments()
+                                        .get("name")
+                                        .and_then(|n| n.as_str())
+                                        .unwrap_or("");
+                                    match gate.authorize_activation(name, &run.active_skills) {
+                                        ActivationAuthorization::Allow(_) => { /* fall through */ }
+                                        ActivationAuthorization::Deny(reason) => {
+                                            self.emit(
+                                                run_id,
+                                                seq,
+                                                RunEvent::Rejected {
+                                                    step: step_index,
+                                                    reason: reason.clone(),
+                                                    attempt,
+                                                },
+                                            );
+                                            seq += 1;
+                                            last_error = Some(reason);
+                                            continue;
+                                        }
+                                        ActivationAuthorization::AskHuman(meta) => {
+                                            let requested_at = now_secs();
+                                            self.store
+                                                .append_journal(
+                                                    run_id,
+                                                    JournalEntry::SkillActivationRequested {
+                                                        step: step_index,
+                                                        skill: name.to_string(),
+                                                        arguments: v.arguments().clone(),
+                                                        trust: meta.trust.clone(),
+                                                        description: meta.description.clone(),
+                                                        provenance_source_kind: meta
+                                                            .provenance_source_kind
+                                                            .clone(),
+                                                        provenance_source: meta
+                                                            .provenance_source
+                                                            .clone(),
+                                                        requested_at,
+                                                    },
+                                                )
+                                                .await?;
+                                            run.status = RunStatus::AwaitingSkillDecision;
+                                            run.pending_skill_activation =
+                                                Some(PendingSkillActivation {
+                                                    step: step_index,
+                                                    skill: name.to_string(),
+                                                    trust: meta.trust.clone(),
+                                                    description: meta.description.clone(),
+                                                    provenance_source_kind: meta
+                                                        .provenance_source_kind
+                                                        .clone(),
+                                                    provenance_source: meta
+                                                        .provenance_source
+                                                        .clone(),
+                                                    requested_at,
+                                                });
+                                            self.store.put(run.clone()).await?;
+                                            self.emit(
+                                                run_id,
+                                                seq,
+                                                RunEvent::SkillActivationRequested {
+                                                    step: step_index,
+                                                    skill: name.to_string(),
+                                                    description: meta.description,
+                                                    trust: meta.trust,
+                                                    provenance_source_kind: meta
+                                                        .provenance_source_kind,
+                                                    provenance_source: meta.provenance_source,
+                                                },
+                                            );
+                                            return Ok(run);
+                                        }
+                                    }
+                                }
+                            }
+
                             // Memoization point: the accepted decision (and
                             // its cost) is journaled BEFORE anything acts on
                             // it, so replay never needs the model.
@@ -943,6 +1309,79 @@ impl Kernel {
                     None,
                 ));
                 break;
+            }
+
+            // 3.5 Kernel-owned self-activation actions (ADR 0020): the ONLY
+            // effect is mutating `run.active_skills` — never routed through
+            // the tool substrate, so they grant zero capability, only
+            // changing which advisory skill instructions the model sees on
+            // the NEXT step. No Intent/Receipt: there is no external side
+            // effect, and a set insert/remove is repeatable, so re-applying
+            // it under Decision replay is exactly-once by construction.
+            if matches!(
+                validated.action(),
+                ACTIVATE_SKILL_ACTION | DEACTIVATE_SKILL_ACTION
+            ) {
+                let name = validated
+                    .arguments()
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let result = if validated.action() == ACTIVATE_SKILL_ACTION {
+                    // Authorization already passed for a fresh proposal; on
+                    // replay, re-derive the trust label (the gate call is
+                    // pure). If the gate now errs (e.g. policy changed since
+                    // the decision was journaled), apply anyway — replay is
+                    // law — with an honest "unknown" label rather than
+                    // fabricating one.
+                    let trust = self
+                        .skills
+                        .as_ref()
+                        .and_then(
+                            |g| match g.authorize_activation(&name, &run.active_skills) {
+                                ActivationAuthorization::Allow(trust) => Some(trust),
+                                _ => None,
+                            },
+                        )
+                        .unwrap_or_else(|| "unknown".to_string());
+                    if !run.active_skills.iter().any(|n| n == &name) {
+                        run.active_skills.push(name.clone());
+                    }
+                    serde_json::json!({
+                        "activated": name,
+                        "trust": trust,
+                        "run_active": run.active_skills,
+                    })
+                } else {
+                    run.active_skills.retain(|n| n != &name);
+                    serde_json::json!({
+                        "deactivated": name,
+                        "run_active": run.active_skills,
+                    })
+                };
+
+                let record = StepRecord {
+                    index: step_index,
+                    action: validated.action().to_string(),
+                    arguments: validated.arguments().clone(),
+                    result: result.clone(),
+                    ok: true,
+                };
+                run.steps.push(record);
+                self.store.put(run.clone()).await?;
+                self.emit(
+                    run_id,
+                    seq,
+                    RunEvent::Executed {
+                        step: step_index,
+                        action: validated.action().to_string(),
+                        ok: true,
+                        result,
+                    },
+                );
+                seq += 1;
+                continue;
             }
 
             // 4. Execute through the tool substrate, inside the durable
@@ -1242,6 +1681,7 @@ impl Kernel {
                             .collect::<Vec<_>>()
                             .join(", ")
                     )),
+                    active_skills: run.active_skills.clone(),
                 };
                 let proposal = self
                     .oracle
@@ -1449,6 +1889,7 @@ impl Kernel {
                         "Call review_verdict with approve=true only if the results look correct."
                             .into(),
                     ),
+                    active_skills: run.active_skills.clone(),
                 };
                 let proposal = self
                     .oracle
@@ -1625,6 +2066,52 @@ pub fn finish_spec() -> ActionSpec {
                 }
             },
             "required": ["summary"],
+            "additionalProperties": false
+        }),
+    }
+}
+
+/// The kernel-owned self-activation action (ADR 0020), appended alongside
+/// `finish` only when a `SkillGate` is attached and reports something
+/// activatable.
+fn activate_skill_spec() -> ActionSpec {
+    ActionSpec {
+        name: ACTIVATE_SKILL_ACTION.into(),
+        description: "Load a listed skill's full instructions into context for the rest of \
+                      this run. Advisory only — it never changes which actions you may take; \
+                      every proposal is still validated the same way."
+            .into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The exact skill name as it appears in the catalog."
+                }
+            },
+            "required": ["name"],
+            "additionalProperties": false
+        }),
+    }
+}
+
+/// The kernel-owned counterpart to [`activate_skill_spec`]: drop a run-scoped
+/// skill's instructions from context. Needs no gate — always safe.
+fn deactivate_skill_spec() -> ActionSpec {
+    ActionSpec {
+        name: DEACTIVATE_SKILL_ACTION.into(),
+        description: "Stop loading a previously self-activated skill's instructions for the \
+                      rest of this run."
+            .into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The exact skill name to deactivate."
+                }
+            },
+            "required": ["name"],
             "additionalProperties": false
         }),
     }

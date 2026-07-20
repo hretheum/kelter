@@ -47,6 +47,10 @@ pub fn state_for(status: RunStatus) -> &'static str {
         RunStatus::Completed => "TASK_STATE_COMPLETED",
         RunStatus::Failed => "TASK_STATE_FAILED",
         RunStatus::Canceled => "TASK_STATE_CANCELED",
+        // ADR 0021: paused awaiting a human's skill-activation decision — the
+        // canonical A2A state for "the agent needs additional input before
+        // it can continue" fits this exactly.
+        RunStatus::AwaitingSkillDecision => "TASK_STATE_INPUT_REQUIRED",
     }
 }
 
@@ -182,6 +186,8 @@ mod tests {
             agent_usage: HashMap::new(),
             trust_posture: Vec::new(),
             cost_usd: None,
+            active_skills: Vec::new(),
+            pending_skill_activation: None,
         }
     }
 

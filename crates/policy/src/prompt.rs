@@ -137,6 +137,7 @@ mod tests {
             last_error: Some("bad args".into()),
             latitude: Latitude::Constrained,
             guidance: Some("one tool per step".into()),
+            active_skills: Vec::new(),
         }
     }
 

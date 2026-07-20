@@ -37,6 +37,8 @@ async fn desktop_run_and_memory_survive_a_restart() {
             agent_usage: HashMap::new(),
             trust_posture: Vec::new(),
             cost_usd: None,
+            active_skills: Vec::new(),
+            pending_skill_activation: None,
         };
         store.put(run).await.unwrap();
         memory

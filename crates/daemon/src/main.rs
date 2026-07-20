@@ -1,14 +1,14 @@
 //! Headless daemon: assembles memory + policy + tools + kernel and serves
 //! the one stable API contract (HTTP + WS) with the embedded web UI.
 
-mod config;
-
 use std::sync::Arc;
 
 use anyhow::Context;
 use rand::Rng;
 
-use config::Config;
+use daemon::config::{self, Config};
+use daemon::skill_sweep;
+use daemon::skills_controller;
 use kernel_core::{Kernel, KernelConfig, RunStore};
 use memory::{InMemoryProvider, MemoryProvider};
 
@@ -395,6 +395,11 @@ async fn main() -> anyhow::Result<()> {
     // (env or the restricted-perm secret file) — never from config.toml.
     model_config::apply_overlay(&config_path, &mut cfg.policy);
 
+    // A UI-chosen skills policy (ADR 0021 addendum) persists the same way —
+    // an overlay beside the config, applied BEFORE the skills wiring below
+    // reads `cfg.skills.*`.
+    skills_controller::apply_overlay(&config_path, &mut cfg.skills);
+
     // Policy: the adapter + model choice is one line in the config file — now
     // runtime-swappable behind a SwappableOracle (Phase 8.5).
     let (oracle, latitude) = policy::build_oracle(&cfg.policy)
@@ -708,6 +713,19 @@ async fn main() -> anyhow::Result<()> {
     // into the oracle's context — and passes the kernel's action schema
     // through untouched, so skill content can never widen the action space.
     // It wraps the SWAPPABLE oracle, so a runtime model swap keeps the layer.
+    //
+    // Model self-activation (ADR 0020, Phase 12): a separate seam — the
+    // `SkillGate` the kernel calls to authorize a MODEL-proposed
+    // `activate_skill`. Hoisted above the block so it can also be handed to
+    // the Kernel builder below (`.with_skills`); `None` when skills are
+    // disabled entirely.
+    let mut skill_gate: Option<Arc<dyn kernel_core::SkillGate>> = None;
+    // Concrete handle (ADR 0021 addendum): the SAME object as `skill_gate`
+    // (via Arc::clone before the upcast), kept so `DaemonSkillsController`
+    // can call the plain `set_policy`/`get_policy` methods the `SkillGate`
+    // trait itself deliberately does not expose (kernel-facing only).
+    let mut skill_gate_concrete: Option<Arc<skills::RegistrySkillGate>> = None;
+    let mut skill_reg_handle: Option<Arc<skills::SkillRegistry>> = None;
     let policy_oracle: Arc<dyn kernel_core::PolicyOracle> = if cfg.skills.enabled {
         let skill_reg = Arc::new(
             skills::SkillRegistry::open(&cfg.skills.dir)
@@ -725,6 +743,25 @@ async fn main() -> anyhow::Result<()> {
                 skill_reg.active_names().len()
             );
         }
+        let activation_policy = skills::parse_model_activation_policy(&cfg.skills.model_activation);
+        // Only meaningful under `Ask` (ADR 0021): whether an ask-worthy
+        // self-activation actually pauses, or is denied outright when there
+        // is no one configured to ask.
+        let ask_fallback = skills::parse_ask_fallback(&cfg.skills.ask_fallback);
+        let gate_concrete = Arc::new(
+            skills::RegistrySkillGate::new(skill_reg.clone(), activation_policy)
+                .with_ask_fallback(ask_fallback)
+                .with_ask_timeout_secs(cfg.skills.ask_timeout_secs),
+        );
+        let gate: Arc<dyn kernel_core::SkillGate> = gate_concrete.clone();
+        skill_gate = Some(gate);
+        skill_gate_concrete = Some(gate_concrete);
+        skill_reg_handle = Some(skill_reg.clone());
+        tracing::info!(
+            "skills: model self-activation enabled (policy={}, ask_fallback={})",
+            cfg.skills.model_activation,
+            cfg.skills.ask_fallback
+        );
         Arc::new(skills::SkillContextOracle::new(
             swappable.clone(),
             skill_reg,
@@ -732,6 +769,18 @@ async fn main() -> anyhow::Result<()> {
     } else {
         swappable.clone()
     };
+
+    // Skills management over HTTP (ADR 0021 addendum): only when skills are
+    // actually wired (both handles present) — `None` otherwise reports 404
+    // on every `/api/v1/skills*` route, the frontend's existing
+    // capability-flag signal.
+    let skills_ctrl: Option<Arc<dyn api::SkillsController>> =
+        match (skill_reg_handle, skill_gate_concrete) {
+            (Some(reg), Some(gate)) => Some(Arc::new(
+                daemon::skills_controller::DaemonSkillsController::new(reg, gate, &config_path),
+            )),
+            _ => None,
+        };
 
     let mut kernel_built = Kernel::new(
         policy_oracle,
@@ -754,6 +803,9 @@ async fn main() -> anyhow::Result<()> {
     if let Some(learned) = learned {
         kernel_built = kernel_built.with_learned(learned);
         tracing::info!("self-learning: governed distillation enabled (ADR 0016)");
+    }
+    if let Some(gate) = skill_gate {
+        kernel_built = kernel_built.with_skills(gate);
     }
     let kernel = Arc::new(kernel_built);
 
@@ -798,6 +850,44 @@ async fn main() -> anyhow::Result<()> {
             Ok(_) => {}
             Err(e) => tracing::warn!("retention: prune-on-start failed: {e}"),
         }
+    }
+
+    // The `ask`-activation timeout sweeper (ADR 0021): only when a paused run
+    // can actually occur (`model_activation == "ask"` AND `ask_fallback ==
+    // "queue"`) — under the default `ask_fallback = "deny"` a run never
+    // pauses, so no sweeper is needed. Bounds every pause: no paused run can
+    // wait longer than `ask_timeout_secs` before being force-denied and
+    // resumed.
+    if cfg.skills.enabled
+        && cfg.skills.model_activation == "ask"
+        && cfg.skills.ask_fallback == "queue"
+    {
+        let kernel = kernel.clone();
+        let timeout_secs = cfg.skills.ask_timeout_secs;
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                tick.tick().await;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                for run_id in
+                    skill_sweep::sweep_timed_out_skill_activations(&kernel, timeout_secs, now).await
+                {
+                    let kernel = kernel.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = kernel.execute_run(run_id).await {
+                            tracing::error!(%run_id, "resume after ask-timeout failed: {e}");
+                        }
+                    });
+                }
+            }
+        });
+        tracing::info!(
+            "skills: ask-activation timeout sweeper active (timeout={}s)",
+            timeout_secs
+        );
     }
 
     // Token resolution (Phase 8, item F): env first (secrets stay out of the
@@ -864,7 +954,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Opt-in TLS termination (Phase 11, ADR 0018): serve HTTPS with a config
     // cert; default stays plain (a tailnet provides transport security).
-    let app = api::build_app(kernel, principals, Some(controller));
+    let app = api::build_app_with_skills(kernel, principals, Some(controller), skills_ctrl);
     let serve = async {
         match &cfg.tls {
             Some(tls) => {

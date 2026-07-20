@@ -37,6 +37,13 @@ rather than showing a dead control (the config-501 rule).
 |---|---|---|---|
 | `/api/v1/runs/{id}/cancel` | POST | abort the in-flight run + write durable `Canceled`; return the run | `Kernel::cancel_run` + the A2A abort-handle map in `ApiState` (mirror `a2a_cancel`) |
 | `/api/v1/runs/{id}/events` | GET | full ordered `RunEvent[]` for the run, replayed from the journal | the durable journal (ADR 0007); reuse the `RunEvent` serialization |
+| `/api/v1/runs/{id}/skill-activation` | POST | apply a human's `deny`/`allow_once`/`allow_always` decision on a paused (`awaiting_skill_decision`) run's activation request, then re-spawn execution; return the run | `Kernel::decide_skill_activation` (ADR 0021) |
+| `/api/v1/skills` | GET | list installed skills (`SkillView[]`: name/description/trust/provenance/active/has_scripts/has_extension_manifest) | `SkillRegistry::list` via `SkillsController` (ADR 0021 Part 6) |
+| `/api/v1/skills` | POST | install from a URL only (`{url}` → `SkillInstallReport`) — folder/bundle install stays CLI-only | `SkillRegistry::install_from_url` |
+| `/api/v1/skills/{name}` | DELETE | remove an installed skill | `SkillRegistry::remove` |
+| `/api/v1/skills/{name}/activate` | POST | operator-activate (persistent, not run-scoped) | `SkillRegistry::activate` |
+| `/api/v1/skills/{name}/deactivate` | POST | operator-deactivate | `SkillRegistry::deactivate` |
+| `/api/v1/skills/policy` | GET/POST | read/write `model_activation`/`ask_fallback`/`ask_timeout_secs` | `RegistrySkillGate::get_policy`/`set_policy` (runtime-mutable, ADR 0021 Part 6) |
 
 - **Capability signalling:** the UI probes support (e.g. a `capabilities` field on
   `GET /healthz` or a `404`/`501` from the endpoint) and flags Stop / full-replay

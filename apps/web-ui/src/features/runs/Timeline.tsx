@@ -12,6 +12,7 @@ import { formatCost, formatElapsed, shortPolicy } from "@/lib/format";
 import { cancelRun } from "@/store/app";
 import { useAppState, useAxis } from "@/store/hooks";
 import type { Run } from "@/lib/api";
+import { SkillActivationPrompt } from "./SkillActivationPrompt";
 import { StepCard } from "./StepCard";
 
 const SCROLL_THRESHOLD = 48; // px from bottom = still "pinned" (design/04 §4)
@@ -27,6 +28,7 @@ export function Timeline({ run }: { run: Run }) {
   const [stopError, setStopError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const announced = useRef(new Set<string>());
+  const prevPendingSkill = useRef<string | null>(null);
 
   // Live elapsed timer while running.
   useEffect(() => {
@@ -44,7 +46,7 @@ export function Timeline({ run }: { run: Run }) {
     } else {
       setShowPill(true);
     }
-  }, [steps.length, axis.terminal]);
+  }, [steps.length, axis.terminal, axis.pendingSkillActivation]);
 
   // Milestone announcements only (design/04 §6): rejected + executed + terminal.
   useEffect(() => {
@@ -65,6 +67,19 @@ export function Timeline({ run }: { run: Run }) {
       }
     }
   }, [steps]);
+
+  // Skill-activation pause/resolve (ADR 0021): the pause must not be missed
+  // (assertive); the resolution is a quieter confirmation (polite).
+  useEffect(() => {
+    const cur = axis.pendingSkillActivation?.skill ?? null;
+    const prev = prevPendingSkill.current;
+    if (cur && cur !== prev) {
+      announce(`${cur} wants to advise on this run — awaiting your decision`, "assertive");
+    } else if (!cur && prev) {
+      announce(`${prev} activation decided`);
+    }
+    prevPendingSkill.current = cur;
+  }, [axis.pendingSkillActivation]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -103,9 +118,15 @@ export function Timeline({ run }: { run: Run }) {
       <div className="border-b border-border px-4 py-3">
         <div className="flex items-start gap-3">
           <h2 className="flex-1 text-title3 font-semibold">{run.task}</h2>
-          <Badge tone="accent" className="animate-pulse-live shrink-0">
-            ◐ Kelter working…
-          </Badge>
+          {run.status === "awaiting_skill_decision" ? (
+            <Badge tone="warning" className="shrink-0">
+              ◉ Awaiting your decision
+            </Badge>
+          ) : (
+            <Badge tone="accent" className="animate-pulse-live shrink-0">
+              ◐ Kelter working…
+            </Badge>
+          )}
           {/* Stop (D-2): the only action on the timeline; inline confirm; the
               capability flag HIDES it on a daemon without the endpoint. */}
           {s.cancelSupported && stopState === "idle" && (
@@ -161,6 +182,9 @@ export function Timeline({ run }: { run: Run }) {
         {steps.map((st) => (
           <StepCard key={st.step} step={st} />
         ))}
+        {axis.pendingSkillActivation && (
+          <SkillActivationPrompt runId={run.id} pending={axis.pendingSkillActivation} />
+        )}
         {axis.reflections > 0 && (
           <p className="text-caption2 text-muted-foreground">
             {axis.reflections} reflection{axis.reflections > 1 ? "s" : ""} written

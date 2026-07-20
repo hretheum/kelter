@@ -13,6 +13,11 @@ import {
   type ModelConfigView,
   type Run,
   type RunEventEnvelope,
+  type SkillActivationDecision,
+  type SkillInstallReport,
+  type SkillsPolicyUpdate,
+  type SkillsPolicyView,
+  type SkillView,
 } from "@/lib/api";
 import { ingestEnvelope, ingestReplay, type AxisState, axisFor } from "@/lib/events";
 import type { JournalReplay } from "@/lib/api";
@@ -35,6 +40,13 @@ export interface AppState {
    * replay are HIDDEN on an older daemon, never dead. */
   cancelSupported: boolean;
   replaySupported: boolean;
+  /* ADR 0021: flips off on 404/405 from the skill-activation decide endpoint
+   * — hides the inline prompt's buttons on a daemon without it. */
+  skillActivationSupported: boolean;
+  /* ADR 0021 Part 6: flips off on 404/405 from any /api/v1/skills route —
+   * independent of skillActivationSupported (a deployment can have one
+   * without the other during rollout) — hides the whole Settings section. */
+  skillsManagementSupported: boolean;
   tools: { name: string; description: string }[];
 }
 
@@ -49,6 +61,8 @@ let state: AppState = {
   config: { status: "loading", view: null },
   cancelSupported: true,
   replaySupported: true,
+  skillActivationSupported: true,
+  skillsManagementSupported: true,
   tools: [],
 };
 
@@ -247,6 +261,69 @@ export async function cancelRun(id: string): Promise<Run> {
     throw e;
   }
 }
+
+/* Skill-activation decision (ADR 0021). The kernel emits its own
+ * RunEvent::SkillActivationDecided from decide_skill_activation, so — unlike
+ * cancelRun — no manual axis update is needed here: the WS event clears
+ * pendingSkillActivation and the run's status flips back to running. */
+export async function decideSkillActivation(
+  runId: string,
+  skill: string,
+  decision: SkillActivationDecision
+): Promise<Run> {
+  try {
+    const run = await api<Run>(`/api/v1/runs/${runId}/skill-activation`, {
+      method: "POST",
+      body: JSON.stringify({ skill, decision }),
+    });
+    upsertRun(run);
+    return run;
+  } catch (e) {
+    const err = e as ApiError;
+    if (err.status === 404 || err.status === 405) set({ skillActivationSupported: false });
+    throw e;
+  }
+}
+
+// ---- skills management (ADR 0021 Part 6) -----------------------------------
+
+/* Shared 404/405 → capability-off handling, mirroring cancelRun/
+ * decideSkillActivation — every skills-CRUD route degrades the same way. */
+async function skillsApiCall<T>(path: string, opts?: RequestInit): Promise<T> {
+  try {
+    return await api<T>(path, opts);
+  } catch (e) {
+    const err = e as ApiError;
+    if (err.status === 404 || err.status === 405) set({ skillsManagementSupported: false });
+    throw e;
+  }
+}
+
+export const fetchSkills = (): Promise<SkillView[]> => skillsApiCall<SkillView[]>("/api/v1/skills");
+
+export const fetchSkillsPolicy = (): Promise<SkillsPolicyView> =>
+  skillsApiCall<SkillsPolicyView>("/api/v1/skills/policy");
+
+export const installSkill = (url: string): Promise<SkillInstallReport> =>
+  skillsApiCall<SkillInstallReport>("/api/v1/skills", {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
+
+export const removeSkill = (name: string): Promise<null> =>
+  skillsApiCall<null>(`/api/v1/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
+
+export const activateSkill = (name: string): Promise<null> =>
+  skillsApiCall<null>(`/api/v1/skills/${encodeURIComponent(name)}/activate`, { method: "POST" });
+
+export const deactivateSkill = (name: string): Promise<null> =>
+  skillsApiCall<null>(`/api/v1/skills/${encodeURIComponent(name)}/deactivate`, { method: "POST" });
+
+export const setSkillsPolicy = (update: SkillsPolicyUpdate): Promise<SkillsPolicyView> =>
+  skillsApiCall<SkillsPolicyView>("/api/v1/skills/policy", {
+    method: "POST",
+    body: JSON.stringify(update),
+  });
 
 // ---- model config (design/02-flows/02) ------------------------------------
 

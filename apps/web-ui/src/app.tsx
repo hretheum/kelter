@@ -12,6 +12,7 @@ import { ConnectionSheet } from "@/features/connection-sheet/ConnectionSheet";
 import { MasterList } from "@/features/runs/MasterList";
 import { RunDetail } from "@/features/runs/RunDetail";
 import { ModelConfig } from "@/features/settings/ModelConfig";
+import { SkillsSettings } from "@/features/settings/SkillsSettings";
 import { TopBar } from "@/features/topbar/TopBar";
 
 export function App() {
@@ -60,6 +61,10 @@ export function App() {
         {s.view === "settings" ? (
           <div className="flex-1 overflow-y-auto">
             <ModelConfig />
+            {s.skillsManagementSupported && (
+              <hr className="mx-auto w-full max-w-md border-border" />
+            )}
+            <SkillsSettings />
           </div>
         ) : (
           <>

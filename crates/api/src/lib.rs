@@ -69,6 +69,73 @@ pub trait ModelConfigController: Send + Sync {
     async fn set_key(&self, key: String) -> Result<(), String>;
 }
 
+// ---- skills management (ADR 0021 addendum) --------------------------------
+
+/// One installed skill, safe to return to a client. `active` is the
+/// OPERATOR-persistent active set (`SkillRegistry::active_names()`) — never
+/// a run's own ephemeral `active_skills`, which lives on the `Run` record
+/// instead.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillView {
+    pub name: String,
+    pub description: String,
+    pub trust: String,
+    pub provenance_source_kind: String,
+    pub provenance_source: String,
+    pub active: bool,
+    pub has_scripts: bool,
+    pub has_extension_manifest: bool,
+}
+
+/// URL-install only over HTTP (a deliberate scope line, not an oversight): a
+/// browser cannot meaningfully pick a server-side folder path or upload a
+/// `.tar.gz` bundle without a new upload mechanism this pass doesn't need.
+/// Folder/bundle install stays CLI-only (`kelter skill add <dir>`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SkillInstallRequest {
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillInstallReport {
+    pub installed: Vec<String>,
+    pub skipped: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillsPolicyView {
+    /// "trusted" | "all" | "ask".
+    pub model_activation: String,
+    /// "deny" | "queue". Only meaningful under "ask".
+    pub ask_fallback: String,
+    pub ask_timeout_secs: u64,
+}
+
+/// A partial update: `model_activation` is required; the other two keep
+/// their current value when omitted.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SkillsPolicyUpdate {
+    pub model_activation: String,
+    #[serde(default)]
+    pub ask_fallback: Option<String>,
+    #[serde(default)]
+    pub ask_timeout_secs: Option<u64>,
+}
+
+/// Skills management, implemented by the daemon (mirrors
+/// [`ModelConfigController`]'s shape exactly) — kept decoupled from the
+/// `skills` crate's own types so `api` does not need a hard dependency on it.
+#[async_trait]
+pub trait SkillsController: Send + Sync {
+    async fn list(&self) -> Vec<SkillView>;
+    async fn install_from_url(&self, url: String) -> Result<SkillInstallReport, String>;
+    async fn remove(&self, name: &str) -> Result<(), String>;
+    async fn activate(&self, name: &str) -> Result<(), String>;
+    async fn deactivate(&self, name: &str) -> Result<(), String>;
+    async fn get_policy(&self) -> SkillsPolicyView;
+    async fn set_policy(&self, update: SkillsPolicyUpdate) -> Result<SkillsPolicyView, String>;
+}
+
 /// The web UI, embedded into the binary so the daemon is a single artifact.
 /// This is the **Vite build output** (design/06 §5): build the frontend first
 /// (`pnpm --dir apps/web-ui install && pnpm --dir apps/web-ui build`), then
@@ -133,6 +200,12 @@ pub struct ApiState {
     limiter: Arc<AuthLimiter>,
     /// Runtime model-config controller (Phase 8.5); `None` in bare setups.
     config: Option<Arc<dyn ModelConfigController>>,
+    /// Skills management controller (ADR 0021 addendum); `None` when skills
+    /// are disabled or the caller has no skills wiring (e.g. bare test
+    /// setups) — every `/api/v1/skills*` route then reports 404, which is
+    /// also the frontend's existing capability-flag signal (no special-casing
+    /// needed on either side).
+    skills: Option<Arc<dyn SkillsController>>,
 }
 
 pub fn router(kernel: Arc<Kernel>, token: String) -> Router {
@@ -149,10 +222,26 @@ pub fn router_with(
 }
 
 /// Router with named principals (Phase 11) + an optional config controller.
+/// No skills controller — every `/api/v1/skills*` route reports 404. Use
+/// [`router_with_principals_and_skills`] to wire one in.
 pub fn router_with_principals(
     kernel: Arc<Kernel>,
     principals: Principals,
     config: Option<Arc<dyn ModelConfigController>>,
+) -> Router {
+    router_with_principals_and_skills(kernel, principals, config, None)
+}
+
+/// Router with named principals + an optional config controller + an
+/// optional skills controller (ADR 0021 addendum) — the daemon's real-wiring
+/// path. Kept as a separate function (rather than widening
+/// [`router_with_principals`]'s signature) so the existing, few call sites
+/// (tests, the desktop shell) need no changes.
+pub fn router_with_principals_and_skills(
+    kernel: Arc<Kernel>,
+    principals: Principals,
+    config: Option<Arc<dyn ModelConfigController>>,
+    skills: Option<Arc<dyn SkillsController>>,
 ) -> Router {
     let state = ApiState {
         kernel,
@@ -160,6 +249,7 @@ pub fn router_with_principals(
         run_handles: Arc::new(Mutex::new(HashMap::new())),
         limiter: Arc::new(AuthLimiter::default()),
         config,
+        skills,
     };
     Router::new()
         .route("/healthz", get(health))
@@ -169,6 +259,13 @@ pub fn router_with_principals(
         // journal replay for the historical execution axis, and cancel.
         .route("/api/v1/runs/{id}/events", get(get_run_events))
         .route("/api/v1/runs/{id}/cancel", post(cancel_run))
+        // Interactive skill activation (ADR 0021, design/07 D-9): a human's
+        // deny/allow_once/allow_always decision on a paused run's pending
+        // `activate_skill` ask-request. Bearer.
+        .route(
+            "/api/v1/runs/{id}/skill-activation",
+            post(decide_skill_activation),
+        )
         .route("/api/v1/tools", get(list_tools))
         .route("/api/v1/events", get(events_ws))
         // Model configuration (Phase 8.5): read/write the model config, test a
@@ -179,6 +276,20 @@ pub fn router_with_principals(
         )
         .route("/api/v1/config/model/test", post(test_model_connection))
         .route("/api/v1/config/model/key", post(set_model_key))
+        // Skills management (ADR 0021 addendum, design/07 D-10): list/
+        // install-from-url/remove/activate/deactivate + the model-activation
+        // policy, all bearer-gated. 404 when no skills controller is wired.
+        .route("/api/v1/skills", get(list_skills).post(install_skill))
+        .route("/api/v1/skills/{name}", delete(remove_skill))
+        .route("/api/v1/skills/{name}/activate", post(activate_skill_route))
+        .route(
+            "/api/v1/skills/{name}/deactivate",
+            post(deactivate_skill_route),
+        )
+        .route(
+            "/api/v1/skills/policy",
+            get(get_skills_policy).post(set_skills_policy),
+        )
         // Governed self-learning (Phase 10, ADR 0016): distil facts from past
         // runs, inspect what was learned, and completely forget it. Bearer.
         .route("/api/v1/learn", get(list_learned))
@@ -214,13 +325,25 @@ pub async fn serve_with_config(
 
 /// Serve with named principals (Phase 11) + a config controller — the daemon
 /// path when `[auth] principals` are configured. Returns the built router so
-/// the daemon can also serve it over TLS (ADR 0018) instead.
+/// the daemon can also serve it over TLS (ADR 0018) instead. No skills
+/// controller — see [`build_app_with_skills`].
 pub fn build_app(
     kernel: Arc<Kernel>,
     principals: Principals,
     config: Option<Arc<dyn ModelConfigController>>,
 ) -> Router {
     router_with_principals(kernel, principals, config)
+}
+
+/// [`build_app`] plus an optional skills controller (ADR 0021 addendum) — the
+/// real daemon-wiring path.
+pub fn build_app_with_skills(
+    kernel: Arc<Kernel>,
+    principals: Principals,
+    config: Option<Arc<dyn ModelConfigController>>,
+    skills: Option<Arc<dyn SkillsController>>,
+) -> Router {
+    router_with_principals_and_skills(kernel, principals, config, skills)
 }
 
 pub async fn serve_with_principals(
@@ -535,6 +658,204 @@ async fn cancel_run(
             (StatusCode::NOT_FOUND, "run not found").into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// POST /api/v1/runs/{id}/skill-activation (D-9, ADR 0021): a human's
+/// deny/allow_once/allow_always decision on a paused run's pending
+/// `activate_skill` ask-request. Mirrors `create_run`'s spawn+track pattern:
+/// a successful decision re-spawns `execute_run` so the run actually
+/// resumes (the kernel method itself only journals + writes state). Bearer.
+#[derive(Deserialize)]
+struct SkillActivationDecisionRequest {
+    skill: String,
+    decision: String,
+}
+
+async fn decide_skill_activation(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(req): Json<SkillActivationDecisionRequest>,
+) -> Response {
+    let principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    let decision = match req.decision.as_str() {
+        "deny" => kernel_core::SkillActivationDecision::Deny,
+        "allow_once" => kernel_core::SkillActivationDecision::AllowOnce,
+        "allow_always" => kernel_core::SkillActivationDecision::AllowAlways,
+        other => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("unknown decision '{other}'"),
+            )
+                .into_response()
+        }
+    };
+    match state
+        .kernel
+        .decide_skill_activation(id, &req.skill, decision, &principal)
+        .await
+    {
+        Ok(run) => {
+            // Re-spawn execution exactly like create_run: track the handle
+            // under lock held across spawn+insert, self-cleaning on
+            // completion, so `POST /runs/{id}/cancel` also works on a
+            // just-resumed run.
+            let kernel = state.kernel.clone();
+            let handles = state.run_handles.clone();
+            let mut map = state.run_handles.lock().await;
+            let handle = tokio::spawn(async move {
+                if let Err(e) = kernel.execute_run(id).await {
+                    tracing::error!(%id, "run execution error: {e}");
+                }
+                handles.lock().await.remove(&id);
+            });
+            map.insert(id, handle.abort_handle());
+            drop(map);
+            (StatusCode::ACCEPTED, Json(run)).into_response()
+        }
+        Err(kernel_core::KernelError::InvalidState(msg)) => {
+            (StatusCode::CONFLICT, msg).into_response()
+        }
+        Err(kernel_core::KernelError::Store(kernel_core::StoreError::NotFound(_))) => {
+            (StatusCode::NOT_FOUND, "run not found").into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ---- skills management (ADR 0021 addendum) --------------------------------
+
+// The Err branch is an axum `Response` (intentionally large) returned
+// straight to the client — mirrors `config_controller`'s pattern exactly.
+#[allow(clippy::result_large_err)]
+fn skills_controller(state: &ApiState) -> Result<&Arc<dyn SkillsController>, Response> {
+    state.skills.as_ref().ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            "skills management is not wired in this deployment",
+        )
+            .into_response()
+    })
+}
+
+async fn list_skills(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    match skills_controller(&state) {
+        Ok(c) => Json(c.list().await).into_response(),
+        Err(resp) => resp,
+    }
+}
+
+async fn install_skill(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(req): Json<SkillInstallRequest>,
+) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    let c = match skills_controller(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match c.install_from_url(req.url).await {
+        Ok(report) => Json(report).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
+    }
+}
+
+async fn remove_skill(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    let c = match skills_controller(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match c.remove(&name).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
+    }
+}
+
+async fn activate_skill_route(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    let c = match skills_controller(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match c.activate(&name).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
+    }
+}
+
+async fn deactivate_skill_route(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    let c = match skills_controller(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match c.deactivate(&name).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
+    }
+}
+
+async fn get_skills_policy(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    match skills_controller(&state) {
+        Ok(c) => Json(c.get_policy().await).into_response(),
+        Err(resp) => resp,
+    }
+}
+
+async fn set_skills_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(update): Json<SkillsPolicyUpdate>,
+) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    let c = match skills_controller(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match c.set_policy(update).await {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
     }
 }
 

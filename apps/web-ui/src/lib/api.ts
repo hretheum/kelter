@@ -71,6 +71,7 @@ export async function api<T = unknown>(
 export type RunStatus =
   | "pending"
   | "running"
+  | "awaiting_skill_decision"
   | "completed"
   | "failed"
   | "canceled";
@@ -93,6 +94,21 @@ export interface Run {
   policy: string;
   created_at: number;
   cost_usd: number | null;
+  active_skills: string[];
+}
+
+/* A human's answer to a paused activate_skill request (ADR 0021). Deny/allow
+ * are both non-executions handled identically by the kernel today — only
+ * allow_always additionally elevates the skill's trust label persistently. */
+export type SkillActivationDecision = "deny" | "allow_once" | "allow_always";
+
+export interface PendingSkillActivationUi {
+  step: number;
+  skill: string;
+  description: string;
+  trust: string;
+  provenance_source_kind: string;
+  provenance_source: string;
 }
 
 export type RunEvent =
@@ -114,12 +130,50 @@ export type RunEvent =
     }
   | { type: "reflection_written"; episode_id: string }
   | { type: "completed"; output: unknown }
-  | { type: "failed"; error: string };
+  | { type: "failed"; error: string }
+  | ({ type: "skill_activation_requested" } & PendingSkillActivationUi)
+  | {
+      type: "skill_activation_decided";
+      step: number;
+      skill: string;
+      decision: SkillActivationDecision;
+      principal: string;
+    };
 
 export interface RunEventEnvelope {
   run_id: string;
   seq: number;
   event: RunEvent;
+}
+
+/* Skills CRUD (ADR 0021 Part 6 addendum). Literal snake_case field names,
+ * same convention as everything else in this file. */
+export interface SkillView {
+  name: string;
+  description: string;
+  trust: string;
+  provenance_source_kind: string;
+  provenance_source: string;
+  active: boolean; // operator-active (the registry's persistent active set — NOT run-scoped)
+  has_scripts: boolean;
+  has_extension_manifest: boolean;
+}
+
+export interface SkillInstallReport {
+  installed: string[];
+  skipped: [string, string][]; // [name, reason][] — a Rust tuple serializes as a 2-element array
+}
+
+export interface SkillsPolicyView {
+  model_activation: string; // "trusted" | "all" | "ask"
+  ask_fallback: string; // "deny" | "queue" — only consulted when model_activation == "ask"
+  ask_timeout_secs: number;
+}
+
+export interface SkillsPolicyUpdate {
+  model_activation: string;
+  ask_fallback?: string;
+  ask_timeout_secs?: number;
 }
 
 export interface ModelConfigView {

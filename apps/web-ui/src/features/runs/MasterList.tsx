@@ -18,6 +18,7 @@ import { useAppState } from "@/store/hooks";
 const STATUS_CLS: Record<string, string> = {
   pending: "text-muted-foreground",
   running: "text-primary",
+  awaiting_skill_decision: "text-warning",
   completed: "text-success",
   failed: "text-danger",
   canceled: "text-muted-foreground",
