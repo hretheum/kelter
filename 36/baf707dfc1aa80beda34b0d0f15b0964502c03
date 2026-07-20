@@ -1,0 +1,55 @@
+crates/skills/src/lib.rs
+  s_ebdbabe3e659c2::t_2c6c095de9ca72 29,31
+  s_ebdbabe3e659c2::t_0f7353e8eb014d 1-28,32-221
+  s_ebdbabe3e659c2::t_4764ffc84e8307 30
+Cargo.toml
+  s_ebdbabe3e659c2::t_7de09cfbbf4b7e 14,35,55-56
+docs/adr/0019-skills-advisory-knowledge.md
+  s_ebdbabe3e659c2::t_bd0af7fe0616db 1-79
+crates/skills/tests/skills_test.rs
+  s_ebdbabe3e659c2::t_c930d26847fe58 258-259,261-262,265
+  s_ebdbabe3e659c2::t_4764ffc84e8307 225-230
+  s_ebdbabe3e659c2::t_bc6a631952b5e3 1-224,231-257,260,263-264,266-382
+crates/skills/Cargo.toml
+  s_ebdbabe3e659c2::t_aa3cdb8f307a7a 1-24
+crates/skills/examples/load-bundle.rs
+  s_ebdbabe3e659c2::t_934fe13814af9d 1-42
+docs/evidence/skills-subsystem.log
+  s_ebdbabe3e659c2::t_9397eccc4426e9 1-110
+crates/skills/src/registry.rs
+  s_ebdbabe3e659c2::t_4764ffc84e8307 125-127,195-197,208-210
+  s_ebdbabe3e659c2::t_8f2807b4b7a5b2 1-124,128-194,198-207,211-254,256-410
+  s_ebdbabe3e659c2::t_c36af02b0a9ae7 255
+crates/daemon/Cargo.toml
+  s_ebdbabe3e659c2::t_bb1aa296fb932d 16
+docs/BUILD-EVIDENCE.md
+  s_ebdbabe3e659c2::t_2724774e028fa8 1176-1211
+crates/daemon/src/config.rs
+  s_ebdbabe3e659c2::t_47da483ad311ba 42-72
+crates/skills/src/oracle.rs
+  s_ebdbabe3e659c2::t_3e090748d454b2 1-41,49-92
+  s_ebdbabe3e659c2::t_a4efc370e566a5 42-48
+crates/daemon/src/main.rs
+  s_ebdbabe3e659c2::t_f38f3764d29137 265-326,330-369
+  s_ebdbabe3e659c2::t_4764ffc84e8307 327-329
+  s_ebdbabe3e659c2::t_b0fac9a025ff92 383-390
+  s_ebdbabe3e659c2::t_0580cf81e2d8cb 706-735,737
+Cargo.lock
+  s_ebdbabe3e659c2::t_4db6cdff4a240e 30-35,641,802-811,818-827,1638-1647,2827-2832,2849-2867,2969-2979,4026-4035
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "36baf707dfc1aa80beda34b0d0f15b0964502c03",
+  "prompts": {},
+  "sessions": {
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "<eryk@talentcanvas.tech>"
+    }
+  }
+}
