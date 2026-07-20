@@ -6,7 +6,9 @@ use std::sync::Arc;
 use anyhow::Context;
 use rand::Rng;
 
+use daemon::agents_controller;
 use daemon::config::{self, Config};
+use daemon::delegation_sweep;
 use daemon::skill_sweep;
 use daemon::skills_controller;
 use kernel_core::{Kernel, KernelConfig, RunStore};
@@ -399,6 +401,10 @@ async fn main() -> anyhow::Result<()> {
     // an overlay beside the config, applied BEFORE the skills wiring below
     // reads `cfg.skills.*`.
     skills_controller::apply_overlay(&config_path, &mut cfg.skills);
+    // Same overlay convention, for the agent-delegation policy (ADR 0023) —
+    // must also run BEFORE the agents wiring block reads `cfg.delegation.
+    // agent_*`.
+    agents_controller::apply_overlay(&config_path, &mut cfg.delegation);
 
     // Policy: the adapter + model choice is one line in the config file — now
     // runtime-swappable behind a SwappableOracle (Phase 8.5).
@@ -572,6 +578,18 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Fail-fast check BEFORE the A2A source is built: an always-present,
+    // possibly EMPTY A2aActionSource (below, for ADR 0023 dynamic discovery)
+    // must never quietly satisfy "at least one action source configured" —
+    // that would silently offer the model zero actions instead of bailing
+    // loudly.
+    if servers.is_empty() && wasm_sources.is_empty() && remote_agents.is_empty() {
+        anyhow::bail!(
+            "no action sources configured — enable tools, a WASM or memory \
+             extension, or a remote agent"
+        );
+    }
+
     // Assemble the action space from every mechanism: MCP tools, WASM
     // tools (in-process, sandboxed), and A2A delegations — all merged into
     // one governed action space. The MCP source is only built when there
@@ -598,23 +616,28 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     sources.extend(wasm_sources);
-    if !remote_agents.is_empty() {
-        for agent in &remote_agents {
-            tracing::info!(
-                "a2a: remote agent '{}' registered (card: {})",
-                agent.name,
-                agent.card_url
-            );
-        }
-        let delegations = a2a::A2aActionSource::new(remote_agents.clone())
-            .context("failed to configure the A2A delegation client")?;
-        sources.push(Arc::new(delegations));
+    for agent in &remote_agents {
+        tracing::info!(
+            "a2a: remote agent '{}' registered (card: {})",
+            agent.name,
+            agent.card_url
+        );
     }
+    // Always constructed (even with zero configured agents) so dynamic
+    // discovery (ADR 0023 Part 3) can register the FIRST agent at runtime
+    // without a restart, in a deployment that started with none configured.
+    // The fail-fast bail above already ran on the PRE-discovery state, so
+    // this never silently satisfies it.
+    let a2a_source = Arc::new(
+        a2a::A2aActionSource::new(remote_agents.clone())
+            .context("failed to configure the A2A delegation client")?
+            .with_circuit_breaker(
+                cfg.delegation.circuit_failure_threshold,
+                std::time::Duration::from_secs(cfg.delegation.circuit_cooldown_secs),
+            ),
+    );
+    sources.push(a2a_source.clone());
     let action_source: Arc<dyn kernel_core::ActionSource> = match sources.len() {
-        0 => anyhow::bail!(
-            "no action sources configured — enable tools, a WASM or memory \
-                            extension, or a remote agent"
-        ),
         1 => sources.pop().unwrap(),
         _ => Arc::new(kernel_core::CompositeActionSource::new(sources)),
     };
@@ -782,6 +805,53 @@ async fn main() -> anyhow::Result<()> {
             _ => None,
         };
 
+    // Agent trust/policy/ask + governed resilience (ADR 0023): an
+    // `AgentRegistry` seeded from the statically-configured `remote_agents`
+    // — config-declared agents start TRUSTED (the ADR's disclosed
+    // default-trust split: putting an agent in your own config file is the
+    // operator's trust act, exactly parallel to a skill sidecar edit) — a
+    // `RegistryDelegationGate` mirroring `RegistrySkillGate` exactly, and an
+    // HTTP controller for dynamic discovery + policy management.
+    let agent_registry = Arc::new(
+        a2a::AgentRegistry::open(&cfg.delegation.agents_registry_path, &remote_agents)
+            .context("failed to open the agent registry")?,
+    );
+    let agent_policy = a2a::parse_agent_delegation_policy(&cfg.delegation.agent_policy);
+    let agent_ask_fallback = a2a::parse_agent_ask_fallback(&cfg.delegation.agent_ask_fallback);
+    let delegation_gate_concrete = Arc::new(
+        a2a::RegistryDelegationGate::new(agent_registry.clone(), agent_policy)
+            .with_ask_fallback(agent_ask_fallback)
+            .with_ask_timeout_secs(cfg.delegation.agent_ask_timeout_secs),
+    );
+    let delegation_gate: Arc<dyn kernel_core::DelegationGate> = delegation_gate_concrete.clone();
+    tracing::info!(
+        "agents: {} registered, delegation policy={} ask_fallback={}",
+        agent_registry.list().len(),
+        cfg.delegation.agent_policy,
+        cfg.delegation.agent_ask_fallback
+    );
+    let agents_ctrl: Arc<dyn api::AgentsController> =
+        Arc::new(daemon::agents_controller::DaemonAgentsController::new(
+            agent_registry.clone(),
+            delegation_gate_concrete,
+            a2a_source,
+            &config_path,
+        ));
+
+    // Sanctioned-only resilience fallback (ADR 0023): normalize the
+    // operator-declared bare agent names (both keys and values, `[delegation.
+    // fallback]`) to `delegate_to_*` action names — kernel-core stays
+    // a2a-agnostic and only ever deals in action names, exactly like every
+    // other seam here (`a2a_origin`, `DelegationGate::authorize_delegation_to`).
+    let mut fallback: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for (primary, alternates) in &cfg.delegation.fallback {
+        fallback.insert(
+            a2a::action_name(primary),
+            alternates.iter().map(|a| a2a::action_name(a)).collect(),
+        );
+    }
+
     let mut kernel_built = Kernel::new(
         policy_oracle,
         action_source,
@@ -802,6 +872,10 @@ async fn main() -> anyhow::Result<()> {
                 max_delegations_per_run: cfg.delegation.max_per_run,
                 max_depth: cfg.delegation.max_depth,
             },
+            resilience: kernel_core::ResilienceConfig {
+                max_retries_per_delegation: cfg.delegation.max_retries_per_delegation,
+                fallback,
+            },
         },
     );
     if let Some(learned) = learned {
@@ -811,6 +885,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(gate) = skill_gate {
         kernel_built = kernel_built.with_skills(gate);
     }
+    kernel_built = kernel_built.with_delegation_gate(delegation_gate);
     let kernel = Arc::new(kernel_built);
 
     // Metrics recorder (Phase 8, item C): translate the kernel's run-event
@@ -894,6 +969,44 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // The delegation ask-authorization timeout sweeper (ADR 0023): same
+    // never-hangs contract as the skills sweeper above, for a paused
+    // `delegate_to_*` request. A SECOND small sweeper rather than a
+    // generalization of the one above — see `delegation_sweep.rs`'s module
+    // docs for why.
+    if cfg.delegation.agent_policy == "ask" && cfg.delegation.agent_ask_fallback == "queue" {
+        let kernel = kernel.clone();
+        let timeout_secs = cfg.delegation.agent_ask_timeout_secs;
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                tick.tick().await;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                for run_id in delegation_sweep::sweep_timed_out_delegation_decisions(
+                    &kernel,
+                    timeout_secs,
+                    now,
+                )
+                .await
+                {
+                    let kernel = kernel.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = kernel.execute_run(run_id).await {
+                            tracing::error!(%run_id, "resume after delegation ask-timeout failed: {e}");
+                        }
+                    });
+                }
+            }
+        });
+        tracing::info!(
+            "agents: delegation ask-authorization timeout sweeper active (timeout={}s)",
+            timeout_secs
+        );
+    }
+
     // Token resolution (Phase 8, item F): env first (secrets stay out of the
     // config file / tree), then the config value, then a generated one.
     let token = std::env::var("KELTER_TOKEN")
@@ -958,7 +1071,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Opt-in TLS termination (Phase 11, ADR 0018): serve HTTPS with a config
     // cert; default stays plain (a tailnet provides transport security).
-    let app = api::build_app_with_skills(kernel, principals, Some(controller), skills_ctrl);
+    let app = api::build_app_with_skills_and_agents(
+        kernel,
+        principals,
+        Some(controller),
+        skills_ctrl,
+        Some(agents_ctrl),
+    );
     let serve = async {
         match &cfg.tls {
             Some(tls) => {

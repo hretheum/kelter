@@ -9,7 +9,12 @@ import {
   hasProvisionedToken,
   setConnection,
   wsUrl,
+  type AgentPolicyUpdate,
+  type AgentPolicyView,
+  type AgentRegisterRequest,
+  type AgentView,
   type ApiError,
+  type DelegationDecision,
   type ModelConfigView,
   type Run,
   type RunEventEnvelope,
@@ -47,6 +52,17 @@ export interface AppState {
    * independent of skillActivationSupported (a deployment can have one
    * without the other during rollout) — hides the whole Settings section. */
   skillsManagementSupported: boolean;
+  /* ADR 0023: flips off on 404/405 from the delegation-decide endpoint —
+   * hides the inline authorization prompt's buttons on a daemon without it.
+   * Mirrors skillActivationSupported exactly. */
+  delegationAuthSupported: boolean;
+  /* ADR 0023 Part 3: flips off on 404/405 from any /api/v1/agents route —
+   * independent of delegationAuthSupported, mirrors skillsManagementSupported. */
+  agentsManagementSupported: boolean;
+  /* Registered agents, for the a2a lane trust badge (ADR 0023) — loaded
+   * fail-silent alongside `tools`, same optional-context convention (design/03
+   * R-2): a lane renders without a badge rather than blocking on this. */
+  agents: AgentView[];
   tools: { name: string; description: string }[];
 }
 
@@ -63,6 +79,9 @@ let state: AppState = {
   replaySupported: true,
   skillActivationSupported: true,
   skillsManagementSupported: true,
+  delegationAuthSupported: true,
+  agentsManagementSupported: true,
+  agents: [],
   tools: [],
 };
 
@@ -148,6 +167,7 @@ export async function connect(): Promise<void> {
   set({ conn: "connected", sheetOpen: false });
   void routeByModelHealth();
   void loadTools();
+  void loadAgents();
 }
 
 export function reconnectWith(base: string, token: string) {
@@ -285,6 +305,64 @@ export async function decideSkillActivation(
   }
 }
 
+/* Delegation-authorization decision (ADR 0023). Mirrors decideSkillActivation
+ * exactly, but the thing being decided is a REAL action gate — authorizing
+ * this run to send work to a remote agent — not advice. The kernel emits its
+ * own RunEvent::AgentDelegationDecided from decide_delegation, so no manual
+ * axis update is needed here: the WS event clears pendingDelegation and the
+ * run's status flips back to running. */
+export async function decideDelegation(
+  runId: string,
+  agent: string,
+  decision: DelegationDecision
+): Promise<Run> {
+  try {
+    const run = await api<Run>(`/api/v1/runs/${runId}/delegation`, {
+      method: "POST",
+      body: JSON.stringify({ agent, decision }),
+    });
+    upsertRun(run);
+    return run;
+  } catch (e) {
+    const err = e as ApiError;
+    if (err.status === 404 || err.status === 405) set({ delegationAuthSupported: false });
+    throw e;
+  }
+}
+
+// ---- agent trust/policy management (ADR 0023 Part 3) -----------------------
+
+/* Shared 404/405 → capability-off handling, mirroring skillsApiCall. */
+async function agentsApiCall<T>(path: string, opts?: RequestInit): Promise<T> {
+  try {
+    return await api<T>(path, opts);
+  } catch (e) {
+    const err = e as ApiError;
+    if (err.status === 404 || err.status === 405) set({ agentsManagementSupported: false });
+    throw e;
+  }
+}
+
+export const fetchAgents = (): Promise<AgentView[]> => agentsApiCall<AgentView[]>("/api/v1/agents");
+
+export const fetchAgentsPolicy = (): Promise<AgentPolicyView> =>
+  agentsApiCall<AgentPolicyView>("/api/v1/agents/policy");
+
+export const registerAgent = (req: AgentRegisterRequest): Promise<AgentView> =>
+  agentsApiCall<AgentView>("/api/v1/agents", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+
+export const removeAgent = (name: string): Promise<null> =>
+  agentsApiCall<null>(`/api/v1/agents/${encodeURIComponent(name)}`, { method: "DELETE" });
+
+export const setAgentsPolicy = (update: AgentPolicyUpdate): Promise<AgentPolicyView> =>
+  agentsApiCall<AgentPolicyView>("/api/v1/agents/policy", {
+    method: "POST",
+    body: JSON.stringify(update),
+  });
+
 // ---- skills management (ADR 0021 Part 6) -----------------------------------
 
 /* Shared 404/405 → capability-off handling, mirroring cancelRun/
@@ -380,6 +458,15 @@ async function loadTools(): Promise<void> {
     set({ tools: res.tools });
   } catch {
     /* fail-silent (design/03 R-2): the hint is optional, never blocking */
+  }
+}
+
+async function loadAgents(): Promise<void> {
+  try {
+    set({ agents: await fetchAgents() });
+  } catch {
+    /* fail-silent, same convention as loadTools — an a2a lane just renders
+     * without a trust badge rather than blocking on this. */
   }
 }
 

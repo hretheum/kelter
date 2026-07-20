@@ -101,16 +101,63 @@ impl Default for SkillsConfig {
     }
 }
 
-/// Governed A2A delegation limits (ADR 0022): a per-run attempt budget, a
-/// chain-depth cap, and (kernel-side, via `Run::a2a_ancestry`) cycle
-/// detection. Defaults mirror `kernel_core::DelegationLimits::default()` —
-/// reasonable-but-arbitrary, not derived from any measurement; see ADR 0022
-/// for the honest framing and the sign-off note.
+/// Governed A2A delegation limits (ADR 0022) + agent trust/policy/ask +
+/// resilience (ADR 0023): a per-run attempt budget, a chain-depth cap,
+/// (kernel-side, via `Run::a2a_ancestry`) cycle detection, which registered
+/// agents the model may delegate to, and bounded retry/sanctioned fallback.
+/// Defaults mirror `kernel_core::DelegationLimits::default()` /
+/// `kernel_core::ResilienceConfig::default()` — reasonable-but-arbitrary,
+/// not derived from any measurement; see ADR 0022/0023 for the honest
+/// framing and the sign-off notes.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct DelegationConfig {
     pub max_per_run: u32,
     pub max_depth: u32,
+    /// The agent-trust registry file (ADR 0023) — a single TOML file,
+    /// separate from the skills directory (agents have no natural
+    /// per-agent directory the way a skill's `SKILL.md` does).
+    pub agents_registry_path: String,
+    /// Which registered agents the MODEL may delegate to (ADR 0023):
+    /// `"trusted"` (default) — only agents an operator (or a human's
+    /// `allow_always` decision) has trusted. A config-declared agent starts
+    /// trusted already (see the ADR's default-trust split), so this is
+    /// non-breaking out of the box; a discovery-registered agent starts
+    /// untrusted, so THIS is what makes it inert until trusted. `"all"` —
+    /// any registered agent. `"ask"` — an untrusted agent's delegation
+    /// attempt pauses for a human decision, subject to
+    /// `agent_ask_fallback`. An unrecognized value falls back to
+    /// `"trusted"` with a warning.
+    pub agent_policy: String,
+    /// Only consulted when `agent_policy == "ask"`. `"deny"` (default) — an
+    /// ask-worthy delegation is denied outright, same as `"trusted"`, for a
+    /// deployment with no one to ask; under this default a run configured
+    /// with `agent_policy = "ask"` alone NEVER pauses. `"queue"` — actually
+    /// pause and wait, bounded by `agent_ask_timeout_secs`.
+    pub agent_ask_fallback: String,
+    /// How long a delegation-authorization pause may wait for a human
+    /// decision before the background sweeper auto-denies it. Only
+    /// relevant when `agent_ask_fallback == "queue"`.
+    pub agent_ask_timeout_secs: u64,
+    /// Governed resilience (ADR 0023): additional dial attempts against the
+    /// SAME target after the first fails, before falling through to
+    /// `fallback` (if configured). Every retry re-enters the SAME
+    /// budget/depth/cycle/trust checks as a fresh proposal.
+    pub max_retries_per_delegation: u32,
+    /// Consecutive dial failures against one agent origin before its
+    /// circuit opens (never dialed again until cooldown elapses).
+    pub circuit_failure_threshold: u32,
+    /// How long an open circuit stays open before a single half-open probe
+    /// is allowed through.
+    pub circuit_cooldown_secs: u64,
+    /// Sanctioned-only fallback targets (ADR 0023): NEVER auto-discovered.
+    /// Keyed by the PRIMARY agent's name (as declared in its own Agent
+    /// Card / config entry — NOT the `delegate_to_*` action name; the
+    /// daemon normalizes both keys and values to action names when
+    /// building `kernel_core::ResilienceConfig`). Example:
+    /// `worker_a = ["worker_b", "worker_c"]`.
+    #[serde(default)]
+    pub fallback: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl Default for DelegationConfig {
@@ -118,6 +165,14 @@ impl Default for DelegationConfig {
         Self {
             max_per_run: 10,
             max_depth: 3,
+            agents_registry_path: "./agents.toml".into(),
+            agent_policy: "trusted".into(),
+            agent_ask_fallback: "deny".into(),
+            agent_ask_timeout_secs: 300,
+            max_retries_per_delegation: 2,
+            circuit_failure_threshold: 3,
+            circuit_cooldown_secs: 60,
+            fallback: std::collections::HashMap::new(),
         }
     }
 }

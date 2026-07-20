@@ -39,6 +39,7 @@ async fn desktop_run_and_memory_survive_a_restart() {
             cost_usd: None,
             active_skills: Vec::new(),
             pending_skill_activation: None,
+            pending_delegation: None,
             a2a_depth: 0,
             a2a_ancestry: Vec::new(),
         };

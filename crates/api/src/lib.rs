@@ -136,6 +136,68 @@ pub trait SkillsController: Send + Sync {
     async fn set_policy(&self, update: SkillsPolicyUpdate) -> Result<SkillsPolicyView, String>;
 }
 
+// ---- agent trust/policy management (ADR 0023 Part 3) ---------------------
+
+/// One registered agent, safe to return to a client. Mirrors `SkillView`'s
+/// shape/convention exactly. No `card_url` field — it is redundant with
+/// `source` for a discovery-registered agent (`source_kind == "discovery"`
+/// records the card URL there), and a config-seeded agent's card URL is an
+/// operator config detail, not something the API needs to round-trip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentView {
+    pub name: String,
+    pub description: String,
+    pub trust: String,
+    pub source_kind: String,
+    pub source: String,
+    pub registered_at: u64,
+}
+
+/// Dynamic discovery (ADR 0023 Part 3): register a remote agent by its
+/// Agent Card URL alone — mirrors skills' URL-only-install scope decision
+/// (no "install a local agent" concept makes sense for a network protocol).
+/// There is no `name` field: the agent is registered under whatever name
+/// ITS OWN Agent Card declares, never an operator-typed one.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentRegisterRequest {
+    pub card_url: String,
+    #[serde(default)]
+    pub token_env: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentPolicyView {
+    /// "trusted" | "all" | "ask" — mirrors `SkillsPolicyView::
+    /// model_activation`'s wire values.
+    pub policy: String,
+    /// "deny" | "queue". Only meaningful under "ask".
+    pub ask_fallback: String,
+    pub ask_timeout_secs: u64,
+}
+
+/// A partial update: `policy` is required; the other two keep their current
+/// value when omitted.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentPolicyUpdate {
+    pub policy: String,
+    #[serde(default)]
+    pub ask_fallback: Option<String>,
+    #[serde(default)]
+    pub ask_timeout_secs: Option<u64>,
+}
+
+/// Agent trust/policy management, implemented by the daemon (mirrors
+/// [`SkillsController`]'s shape exactly) — kept decoupled from the `a2a`
+/// crate's own types so `api` does not need a hard dependency on it.
+#[async_trait]
+pub trait AgentsController: Send + Sync {
+    async fn list(&self) -> Vec<AgentView>;
+    async fn register(&self, req: AgentRegisterRequest) -> Result<AgentView, String>;
+    async fn remove(&self, name: &str) -> Result<(), String>;
+    async fn get_policy(&self) -> AgentPolicyView;
+    async fn set_policy(&self, update: AgentPolicyUpdate) -> Result<AgentPolicyView, String>;
+}
+
 /// The web UI, embedded into the binary so the daemon is a single artifact.
 /// This is the **Vite build output** (design/06 §5): build the frontend first
 /// (`pnpm --dir apps/web-ui install && pnpm --dir apps/web-ui build`), then
@@ -206,6 +268,10 @@ pub struct ApiState {
     /// also the frontend's existing capability-flag signal (no special-casing
     /// needed on either side).
     skills: Option<Arc<dyn SkillsController>>,
+    /// Agent trust/policy management controller (ADR 0023 Part 3); `None`
+    /// when absent — every `/api/v1/agents*` route then reports 404, the
+    /// SAME capability-flag convention as `skills`.
+    agents: Option<Arc<dyn AgentsController>>,
 }
 
 pub fn router(kernel: Arc<Kernel>, token: String) -> Router {
@@ -233,15 +299,28 @@ pub fn router_with_principals(
 }
 
 /// Router with named principals + an optional config controller + an
-/// optional skills controller (ADR 0021 addendum) — the daemon's real-wiring
-/// path. Kept as a separate function (rather than widening
-/// [`router_with_principals`]'s signature) so the existing, few call sites
-/// (tests, the desktop shell) need no changes.
+/// optional skills controller (ADR 0021 addendum) — kept as a separate
+/// function (rather than widening [`router_with_principals`]'s signature)
+/// so the existing, few call sites (tests, the desktop shell) need no
+/// changes. No agents controller — every `/api/v1/agents*` route reports
+/// 404. Use [`router_with_principals_and_skills_and_agents`] to wire one in.
 pub fn router_with_principals_and_skills(
     kernel: Arc<Kernel>,
     principals: Principals,
     config: Option<Arc<dyn ModelConfigController>>,
     skills: Option<Arc<dyn SkillsController>>,
+) -> Router {
+    router_with_principals_and_skills_and_agents(kernel, principals, config, skills, None)
+}
+
+/// [`router_with_principals_and_skills`] plus an optional agents controller
+/// (ADR 0023 Part 3) — the daemon's real-wiring path.
+pub fn router_with_principals_and_skills_and_agents(
+    kernel: Arc<Kernel>,
+    principals: Principals,
+    config: Option<Arc<dyn ModelConfigController>>,
+    skills: Option<Arc<dyn SkillsController>>,
+    agents: Option<Arc<dyn AgentsController>>,
 ) -> Router {
     let state = ApiState {
         kernel,
@@ -250,6 +329,7 @@ pub fn router_with_principals_and_skills(
         limiter: Arc::new(AuthLimiter::default()),
         config,
         skills,
+        agents,
     };
     Router::new()
         .route("/healthz", get(health))
@@ -266,6 +346,11 @@ pub fn router_with_principals_and_skills(
             "/api/v1/runs/{id}/skill-activation",
             post(decide_skill_activation),
         )
+        // Interactive delegation authorization (ADR 0023, mirrors the
+        // skill-activation route immediately above field-for-field): a
+        // human's deny/allow_once/allow_always decision on a paused run's
+        // pending `delegate_to_*` ask-request. Bearer.
+        .route("/api/v1/runs/{id}/delegation", post(decide_delegation))
         .route("/api/v1/tools", get(list_tools))
         .route("/api/v1/events", get(events_ws))
         // Model configuration (Phase 8.5): read/write the model config, test a
@@ -289,6 +374,16 @@ pub fn router_with_principals_and_skills(
         .route(
             "/api/v1/skills/policy",
             get(get_skills_policy).post(set_skills_policy),
+        )
+        // Agent trust/policy management (ADR 0023 Part 3, design/07-style
+        // addendum): list/register-by-card-url/remove + the delegation
+        // policy, all bearer-gated. 404 when no agents controller is wired
+        // — mirrors the skills-CRUD 404-when-absent convention exactly.
+        .route("/api/v1/agents", get(list_agents).post(register_agent))
+        .route("/api/v1/agents/{name}", delete(remove_agent))
+        .route(
+            "/api/v1/agents/policy",
+            get(get_agents_policy).post(set_agents_policy),
         )
         // Governed self-learning (Phase 10, ADR 0016): distil facts from past
         // runs, inspect what was learned, and completely forget it. Bearer.
@@ -335,8 +430,8 @@ pub fn build_app(
     router_with_principals(kernel, principals, config)
 }
 
-/// [`build_app`] plus an optional skills controller (ADR 0021 addendum) — the
-/// real daemon-wiring path.
+/// [`build_app`] plus an optional skills controller (ADR 0021 addendum) — no
+/// agents controller; use [`build_app_with_skills_and_agents`] to wire one in.
 pub fn build_app_with_skills(
     kernel: Arc<Kernel>,
     principals: Principals,
@@ -344,6 +439,18 @@ pub fn build_app_with_skills(
     skills: Option<Arc<dyn SkillsController>>,
 ) -> Router {
     router_with_principals_and_skills(kernel, principals, config, skills)
+}
+
+/// [`build_app_with_skills`] plus an optional agents controller (ADR 0023
+/// Part 3) — the real daemon-wiring path.
+pub fn build_app_with_skills_and_agents(
+    kernel: Arc<Kernel>,
+    principals: Principals,
+    config: Option<Arc<dyn ModelConfigController>>,
+    skills: Option<Arc<dyn SkillsController>>,
+    agents: Option<Arc<dyn AgentsController>>,
+) -> Router {
+    router_with_principals_and_skills_and_agents(kernel, principals, config, skills, agents)
 }
 
 pub async fn serve_with_principals(
@@ -727,6 +834,68 @@ async fn decide_skill_activation(
     }
 }
 
+/// POST /api/v1/runs/{id}/delegation (ADR 0023): a human's deny/allow_once/
+/// allow_always decision on a paused run's pending `delegate_to_*`
+/// ask-request. Mirrors `decide_skill_activation` immediately above
+/// field-for-field, including the re-spawn+track pattern (the kernel method
+/// itself only journals + writes state). Bearer.
+#[derive(Deserialize)]
+struct DelegationDecisionRequest {
+    agent: String,
+    decision: String,
+}
+
+async fn decide_delegation(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(req): Json<DelegationDecisionRequest>,
+) -> Response {
+    let principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    let decision = match req.decision.as_str() {
+        "deny" => kernel_core::AgentDelegationDecision::Deny,
+        "allow_once" => kernel_core::AgentDelegationDecision::AllowOnce,
+        "allow_always" => kernel_core::AgentDelegationDecision::AllowAlways,
+        other => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("unknown decision '{other}'"),
+            )
+                .into_response()
+        }
+    };
+    match state
+        .kernel
+        .decide_delegation(id, &req.agent, decision, &principal)
+        .await
+    {
+        Ok(run) => {
+            let kernel = state.kernel.clone();
+            let handles = state.run_handles.clone();
+            let mut map = state.run_handles.lock().await;
+            let handle = tokio::spawn(async move {
+                if let Err(e) = kernel.execute_run(id).await {
+                    tracing::error!(%id, "run execution error: {e}");
+                }
+                handles.lock().await.remove(&id);
+            });
+            map.insert(id, handle.abort_handle());
+            drop(map);
+            (StatusCode::ACCEPTED, Json(run)).into_response()
+        }
+        Err(kernel_core::KernelError::InvalidState(msg)) => {
+            (StatusCode::CONFLICT, msg).into_response()
+        }
+        Err(kernel_core::KernelError::Store(kernel_core::StoreError::NotFound(_))) => {
+            (StatusCode::NOT_FOUND, "run not found").into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 // ---- skills management (ADR 0021 addendum) --------------------------------
 
 // The Err branch is an axum `Response` (intentionally large) returned
@@ -850,6 +1019,98 @@ async fn set_skills_policy(
         Err(rejection) => return rejection,
     };
     let c = match skills_controller(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match c.set_policy(update).await {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
+    }
+}
+
+// ---- agent trust/policy management (ADR 0023 Part 3) ----------------------
+
+#[allow(clippy::result_large_err)]
+fn agents_controller(state: &ApiState) -> Result<&Arc<dyn AgentsController>, Response> {
+    state.agents.as_ref().ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            "agent management is not wired in this deployment",
+        )
+            .into_response()
+    })
+}
+
+async fn list_agents(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    match agents_controller(&state) {
+        Ok(c) => Json(c.list().await).into_response(),
+        Err(resp) => resp,
+    }
+}
+
+async fn register_agent(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(req): Json<AgentRegisterRequest>,
+) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    let c = match agents_controller(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match c.register(req).await {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
+    }
+}
+
+async fn remove_agent(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    let c = match agents_controller(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match c.remove(&name).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
+    }
+}
+
+async fn get_agents_policy(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    match agents_controller(&state) {
+        Ok(c) => Json(c.get_policy().await).into_response(),
+        Err(resp) => resp,
+    }
+}
+
+async fn set_agents_policy(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Json(update): Json<AgentPolicyUpdate>,
+) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    let c = match agents_controller(&state) {
         Ok(c) => c,
         Err(resp) => return resp,
     };

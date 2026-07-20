@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::delegation_gate::{AgentDelegationDecision, DelegationRequestMeta};
 use crate::engine::RunStatus;
 use crate::skill_gate::{ActivationRequestMeta, SkillActivationDecision};
 
@@ -106,6 +107,33 @@ pub enum JournalEntry {
         decision: SkillActivationDecision,
         principal: String,
     },
+    /// A fresh `delegate_to_*` proposal was gated `AskHuman` by the
+    /// `DelegationGate` (ADR 0023): the run pauses here, durably, until a
+    /// matching `AgentDelegationDecided` entry appears. Carries the model's
+    /// original arguments verbatim so a later Allow* decision can replay
+    /// them through the existing decision mechanism without re-querying the
+    /// model. Field-for-field mirror of `SkillActivationRequested` (`agent`
+    /// instead of `skill`) plus `target_origin`, which a delegation request
+    /// has and a skill activation does not.
+    AgentDelegationRequested {
+        step: u32,
+        agent: String,
+        target_origin: String,
+        arguments: serde_json::Value,
+        trust: String,
+        description: String,
+        provenance_source_kind: String,
+        provenance_source: String,
+        requested_at: u64,
+    },
+    /// A human (or the timeout sweeper, principal `"system:timeout"`)
+    /// resolved a pending `AgentDelegationRequested`.
+    AgentDelegationDecided {
+        step: u32,
+        agent: String,
+        decision: AgentDelegationDecision,
+        principal: String,
+    },
 }
 
 impl JournalEntry {
@@ -116,7 +144,9 @@ impl JournalEntry {
             | JournalEntry::Note { step, .. }
             | JournalEntry::Receipt { step, .. }
             | JournalEntry::SkillActivationRequested { step, .. }
-            | JournalEntry::SkillActivationDecided { step, .. } => Some(*step),
+            | JournalEntry::SkillActivationDecided { step, .. }
+            | JournalEntry::AgentDelegationRequested { step, .. }
+            | JournalEntry::AgentDelegationDecided { step, .. } => Some(*step),
             JournalEntry::TrustPosture { .. }
             | JournalEntry::PlanProposed { .. }
             | JournalEntry::Terminal { .. } => None,
@@ -135,6 +165,10 @@ pub struct StepJournal {
     /// 0021). `None` when this step never triggered an `AskHuman` gate
     /// outcome.
     pub skill_activation: Option<PendingActivationFold>,
+    /// A pending or decided `delegate_to_*` ask-request for this step (ADR
+    /// 0023). `None` when this step never triggered an `AskHuman` gate
+    /// outcome from the `DelegationGate`.
+    pub delegation: Option<PendingDelegationFold>,
 }
 
 /// Folded view of one `SkillActivationRequested` (+ optional matching
@@ -146,6 +180,18 @@ pub struct PendingActivationFold {
     pub meta: ActivationRequestMeta,
     pub requested_at: u64,
     pub decision: Option<SkillActivationDecision>,
+}
+
+/// Folded view of one `AgentDelegationRequested` (+ optional matching
+/// `AgentDelegationDecided`) for a step — mirrors `PendingActivationFold`.
+#[derive(Debug, Clone)]
+pub struct PendingDelegationFold {
+    pub agent: String,
+    pub target_origin: String,
+    pub arguments: serde_json::Value,
+    pub meta: DelegationRequestMeta,
+    pub requested_at: u64,
+    pub decision: Option<AgentDelegationDecision>,
 }
 
 /// Fold a run's journal into the per-step view for `step_index`.
@@ -206,6 +252,43 @@ pub fn fold_step(journal: &[JournalEntry], step_index: u32) -> StepJournal {
             } if *step == step_index => {
                 if let Some(pending) = folded.skill_activation.as_mut() {
                     if &pending.skill == skill {
+                        pending.decision = Some(*decision);
+                    }
+                }
+            }
+            JournalEntry::AgentDelegationRequested {
+                step,
+                agent,
+                target_origin,
+                arguments,
+                trust,
+                description,
+                provenance_source_kind,
+                provenance_source,
+                requested_at,
+            } if *step == step_index => {
+                folded.delegation = Some(PendingDelegationFold {
+                    agent: agent.clone(),
+                    target_origin: target_origin.clone(),
+                    arguments: arguments.clone(),
+                    meta: DelegationRequestMeta {
+                        trust: trust.clone(),
+                        description: description.clone(),
+                        provenance_source_kind: provenance_source_kind.clone(),
+                        provenance_source: provenance_source.clone(),
+                    },
+                    requested_at: *requested_at,
+                    decision: None,
+                });
+            }
+            JournalEntry::AgentDelegationDecided {
+                step,
+                agent,
+                decision,
+                ..
+            } if *step == step_index => {
+                if let Some(pending) = folded.delegation.as_mut() {
+                    if &pending.agent == agent {
                         pending.decision = Some(*decision);
                     }
                 }

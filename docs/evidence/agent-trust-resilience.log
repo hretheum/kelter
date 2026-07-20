@@ -1,0 +1,514 @@
+<!-- provenance: ai_authored | agent: claude-sonnet-5 | session_date: 2026-07-20 | human_validated: false | context: ADR 0023 agent trust/policy/ask (P3) + governed resilience (P4) — frontend evidence (scratchpad design doc Part 5). A backend agent (agent-trust-backend-impl) is implementing Parts 0-4 (a2a registry, DelegationGate, engine.rs pause mechanism, resilience/circuit-breaker) concurrently in the same tree; append its section here if/when it lands — do not overwrite this one. -->
+
+# Frontend evidence — agent trust/policy/ask (P3) + governed resilience UI (P4), ADR 0023
+
+Scope: `apps/web-ui/` only, plus `apps/web-ui/design/03-screens/R-3-live-timeline.md`
+and `apps/web-ui/design/07-open-decisions.md`. Built against the FIXED wire
+contract in the design doc's Part 5 ("Contract" section) for P3; P4 was
+**not gerounded against backend code**, see "P4 — incomplete, honest gap"
+below — this is the explicit STOP condition from the brief, not a missed
+step.
+
+## Build
+
+```
+$ pnpm --dir apps/web-ui build
+tsc -b && vite build
+vite v7.3.6 building client environment for production...
+transforming...
+✓ 58 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.62 kB │ gzip:  0.35 kB
+dist/assets/index-CEOqfuuN.css   27.39 kB │ gzip:  5.81 kB
+dist/assets/index-Br35ab3W.js   281.24 kB │ gzip: 84.56 kB
+✓ built in 715ms
+```
+Clean on every attempt across the session. `tsc -b` strict mode passes. No
+new dependency added — `package.json` unchanged. No lint/test/a11y-tooling
+framework exists in this repo (confirmed absent across the ADR-0021 and
+ADR-0022 rounds already) — not re-verified a third time, cited.
+
+## Files changed
+
+- `src/lib/api.ts` — `RunStatus` gains `"awaiting_delegation_decision"`.
+  New `DelegationDecision` type (`deny`/`allow_once`/`allow_always`, mirrors
+  `SkillActivationDecision`) and `PendingDelegationUi` (mirrors
+  `PendingSkillActivationUi` field-for-field: `step`, `agent` instead of
+  `skill`, `description`, `trust`, `provenance_source_kind`,
+  `provenance_source`, plus `branch: string | null` since a delegation pause
+  can occur inside a P1 plan-fanout branch). `RunEvent` gains
+  `agent_delegation_requested` (spreads `PendingDelegationUi`) and
+  `agent_delegation_decided` (`step`, `agent`, `decision`, `principal`,
+  `branch`). New `AgentView` / `AgentRegisterRequest` / `AgentPolicyView` /
+  `AgentPolicyUpdate` types for the Part 3 agents-CRUD surface, mirroring
+  `SkillView`/`SkillsPolicyView`'s shape and snake_case convention exactly.
+- `src/lib/events.ts` — `AxisState` gains `pendingDelegation:
+  PendingDelegationUi | null` (mirrors `pendingSkillActivation` exactly: set
+  by `agent_delegation_requested`, cleared by the paired `_decided`). New
+  `trustOfLaneAgent(action, agents)` — see "Trust badge sourcing" below —
+  and its private `sanitizeAgentName` helper, which mirrors
+  `crates/a2a/src/lib.rs::action_name`'s sanitization
+  (ASCII-alphanumeric-lowercased, everything else `_`) byte-for-rule,
+  verified by reading that function directly, not assumed from the design
+  doc's prose description of it.
+- `src/store/app.ts` — new `decideDelegation(runId, agent, decision)`
+  (mirrors `decideSkillActivation` exactly, including the "kernel emits its
+  own WS-cleared pending state, no manual axis write here" contract) posting
+  to `POST /api/v1/runs/{id}/delegation`. New `delegationAuthSupported` /
+  `agentsManagementSupported` capability flags (default `true`, flip off on
+  404/405, same convention as `skillActivationSupported` /
+  `skillsManagementSupported`). New agents-CRUD action functions
+  (`fetchAgents`, `fetchAgentsPolicy`, `registerAgent`, `removeAgent`,
+  `setAgentsPolicy`) via a shared `agentsApiCall` helper mirroring
+  `skillsApiCall`. New `agents: AgentView[]` state field, loaded fail-silent
+  via `loadAgents()` alongside the existing `loadTools()` call in `connect()`
+  — same "optional context, never blocking" convention as the tools hint
+  (design/03 R-2).
+- `src/features/runs/DelegationAuthorizationPrompt.tsx` (new) — near-total
+  structural copy of `SkillActivationPrompt.tsx` (same `resolving`/`error`
+  local state, same "resolves via the paired WS `_decided` event, no local
+  dismiss" contract, same three-button deny/allow-once/allow-always
+  register). Copy is the deliberate INVERSE of the skill prompt's: "wants to
+  send work to this agent", "Authorize this run", "Always authorize" — see
+  Thesis discipline below.
+- `src/features/runs/Timeline.tsx` — renders
+  `<DelegationAuthorizationPrompt>` after the (existing) skill-activation
+  prompt when `axis.pendingDelegation` is set; header badge condition
+  extended to also show "◉ Awaiting your decision" on
+  `awaiting_delegation_decision`; new milestone-announcement effect for the
+  delegation pause/resolve, mirroring the skill-activation one but with
+  authorization-framed copy ("wants to send work to this agent — awaiting
+  your authorization" / assertive on pause, polite on resolve); scroll-pin
+  effect's dependency array extended to include `axis.pendingDelegation`.
+- `src/features/runs/FanoutLanes.tsx` — a2a lanes now render a real trust
+  badge next to the `⇄ delegate` kind badge, using `trustOfLaneAgent` against
+  `s.agents` (see "Trust badge sourcing" below). Closes the gap the P1+P2
+  round explicitly declined to fabricate.
+- `src/features/runs/RunDetail.tsx`, `MasterList.tsx`, `lib/format.ts` —
+  `awaiting_delegation_decision` added alongside every existing
+  `awaiting_skill_decision` reference (live-vs-Result switch, `STATUS_CLS`,
+  `STATUS_GLYPH`) — grepped for every site before and after to confirm full
+  coverage (see "Status-handling coverage" below), specifically to avoid
+  repeating the exact bug class the ADR-0021 frontend round hit once (a
+  paused run silently rendering as green "Completed").
+- `src/features/settings/AgentsSettings.tsx` (new) — near-total structural
+  copy of `SkillsSettings.tsx`: policy selector (trusted/all/ask + ask
+  fallback/timeout sub-fields), register-by-card-URL form (+ optional
+  token-env-var field, no local-folder/bundle concept — a network agent only
+  ever has a card URL), registered-agents list with trust+provenance badge
+  and a remove-with-confirm control. Gated behind `agentsManagementSupported`
+  (`return null` when unsupported, same config-501 convention as
+  `SkillsSettings`).
+- `src/app.tsx` — `<AgentsSettings />` stacked below `<SkillsSettings />`
+  with the same plain-`<hr>`-divider convention (no Section/Card primitive
+  exists), each divider itself gated behind its section's capability flag.
+- `apps/web-ui/design/03-screens/R-3-live-timeline.md` — the "Known gap, A2A
+  has no trust concept" note is marked closed with a dated addendum
+  describing the trust-badge join and the new delegation-authorization
+  prompt.
+- `apps/web-ui/design/07-open-decisions.md` — new **D-11** (delegation
+  authorization prompt, its inverted copy discipline vs D-9, and the
+  unverified endpoint-path assumption) and **D-12** (agent trust/policy
+  settings panel + the trust-badge join, and its own assumption) rows,
+  mirroring D-9/D-10's format.
+
+## Rendered states (textual description — no live daemon with the ADR 0023
+backend changes was reachable this session; same honest fallback used by
+the ADR-0021 and ADR-0022 frontend rounds, not a fabricated screenshot claim)
+
+**Delegation-authorization prompt, pending.** Below the flat step list (or
+fan-out lanes, if the pause occurred inside a plan branch), an inline,
+non-modal card appears: "`researcher` wants to send work to this agent —
+{description from its Agent Card}", a trust badge (`✓ trusted` /
+`○ untrusted`) + provenance line, and three buttons: "Don't send this run"
+(ghost), "Authorize this run" (primary), "Always authorize" (secondary). The
+run header simultaneously shows "◉ Awaiting your decision" in place of the
+pulsing "Kelter working…" badge — identical treatment to a skill-activation
+pause, since the mechanics (pause the axis, wait on a human, resume via a
+paired WS event) are the same even though the stakes differ.
+
+**Delegation-authorization prompt, resolving.** Clicking a button disables
+all three and shows a spinner on the clicked one (`loading` prop, same
+`Button` component as everywhere else); the prompt does not disappear until
+the paired `agent_delegation_decided` WS event clears
+`axis.pendingDelegation` — no local optimistic dismiss, matching the skill
+prompt's contract exactly (a network failure mid-decision leaves the prompt
+visibly still pending, with an inline error line, rather than silently
+vanishing).
+
+**A2A lane with a real trust badge.** A fan-out lane's header row now reads,
+e.g., "⇄ delegate  ✓ trusted" or "⇄ delegate  ○ untrusted" — same visual
+weight and token as the skill-activation prompt's own trust badge (success/
+quiet tone respectively). A lane whose action doesn't resolve to any
+registered agent (e.g. the `/api/v1/agents` fetch failed, or the daemon
+predates agent registration entirely) shows only the kind badge, no trust
+badge — an honest omission, not a fabricated "untrusted" default.
+
+**Settings — Agents panel.** Below Skills (own divider), a "Agents" heading:
+a policy selector identical in shape to Skills' (three options, ask reveals
+fallback + timeout sub-fields), a "Register by card URL" form (URL + optional
+token-env-var field, disclosure copy explaining new registrations start
+untrusted), inline save/register status line, and a "Registered" list of
+cards (name, description, trust badge, source_kind/source line, Remove with
+inline confirm). Statically-configured agents (source_kind `"config"`,
+default-trusted per the design doc's split) and dynamically-registered ones
+(source_kind `"discovery"`, default-untrusted) render through the exact same
+list — the split is visible only via the badge + source line, never a
+separate section, matching the design doc's framing that both are the "same
+kind of act, spelled differently."
+
+## Trust badge sourcing (a genuinely new frontend decision, not
+contract-specified — flagged for Eryk in `07` D-12)
+
+The design doc's Part 5 contract adds a `trust` field only to the new
+`agent_delegation_requested` ask-pause event — NOT to the ordinary
+`proposed`/`executed` events every a2a lane already renders through. Under
+the default `TrustedOnly` policy (no ask pause at all for a trusted agent),
+a lane's event stream therefore carries no trust data whatsoever. Rather
+than inventing a new field on `proposed`/`executed` the backend never
+promised (which would risk exactly the kind of contract mismatch the brief
+warned about), the badge is sourced by joining the lane's `action`
+(`delegate_to_<sanitized>`) against `GET /api/v1/agents` (Part 3, a route
+the contract DOES fix) — sanitizing every fetched agent's `name` the same
+way the a2a crate does when it builds that very action name in the first
+place (read directly from `crates/a2a/src/lib.rs:411-422`, not inferred).
+This mapping is deliberately forward-only: sanitization is lossy (two
+distinct names could theoretically collide), so the code never attempts to
+reverse an action suffix back into an exact name — it only ever tests
+"does this known agent's name sanitize to this suffix." No match → no
+badge, never a fabricated default.
+
+## Status-handling coverage (avoiding the ADR-0021 round's bug class)
+
+Grepped `awaiting_skill_decision` across `src/` both before writing any code
+and again after, confirming `awaiting_delegation_decision` was added
+alongside every hit: `RunDetail.tsx`'s live-vs-Result switch, `Timeline.tsx`'s
+header badge condition, `MasterList.tsx`'s `STATUS_CLS`, `lib/format.ts`'s
+`STATUS_GLYPH`, and `lib/api.ts`'s `RunStatus` union itself. No site was
+found that was missed on the second pass.
+
+## Manual accessibility pass (no automated a11y tooling in this repo —
+confirmed absent across two prior rounds; not re-verified, cited)
+
+- **Keyboard:** `DelegationAuthorizationPrompt` introduces three real
+  `<button>`s via the existing `Button` component (already keyboard-operable,
+  already carrying a visible focus ring) — no new interaction pattern.
+  `AgentsSettings` reuses `Input`/`Select`/`Label`/`Button` verbatim from
+  `SkillsSettings`'s own imports — no new form-control code, so no new
+  keyboard surface to separately verify.
+- **Live regions:** the prompt's outer `role="status"` matches
+  `SkillActivationPrompt`'s exactly (polite by default). The install/register
+  result line in `AgentsSettings` reuses `role="status" aria-live="polite"`,
+  same as `SkillsSettings`'s result line. `Timeline.tsx`'s new delegation
+  announce effect fires `assertive` on pause (a paused run needs the same
+  urgency as the skill-activation pause it mirrors) and default `polite` on
+  resolve, matching the existing skill-activation effect's own choice
+  exactly — not a new a11y decision, an applied one.
+- **B-7 (glyph + text + color, never color alone):** the new trust badge
+  reuses the exact `Badge` tokens (`✓ trusted`/success,
+  `○ untrusted`/quiet) already used by `SkillActivationPrompt` and
+  `SkillsSettings` — verified those two already satisfy B-7, so no new
+  verification needed for a byte-identical reuse.
+- **Reduced motion:** the prompt's `animate-slide-in` entrance is the same
+  global CSS class already covered by design/05's
+  `@media (prefers-reduced-motion: reduce)` wildcard override — no new
+  motion-handling code.
+- **Copy audit (Thesis discipline, ADR 0023):** grepped every new/changed
+  delegation-related file for `advisory`/`advise`/`just context`/`doesn't
+  change what` — the only hits are (a) a doc-comment in
+  `DelegationAuthorizationPrompt.tsx` explicitly negating advisory framing
+  ("this is NOT advisory"), and (b) the pre-existing, unmodified
+  skill-activation announce line in `Timeline.tsx` ("wants to advise on this
+  run"), which is correct AS-IS for skills and was not touched. No
+  user-facing delegation copy uses advisory language; delegation copy
+  consistently uses "send work to" / "authorize" per the Thesis, verified by
+  re-reading every string literal in the new component and the new Settings
+  panel.
+
+## P4 — incomplete, honest gap (STOP condition invoked as instructed)
+
+At the point I reached P4, `crates/kernel-core`, `crates/a2a`, and
+`crates/api` contained **zero** matches for `AgentDelegationRequested`,
+`AgentRegistry`, `DelegationGate`, `ResilienceConfig`, or `circuit_state` —
+P4's backend work (and P3's registry/gate work too) had not started. I
+messaged `agent-trust-backend-impl` directly asking for its current state
+and, if it hadn't started yet, what shape a retry attempt takes on the
+`RunEvent` stream and whether a circuit-open refusal is literally just a
+`Rejected` event with a descriptive reason. I did not receive a reply and no
+matching backend code landed by the time I finished everything else in
+scope (re-checked immediately before writing this log).
+
+**What I could still verify without the backend, and did:** the
+circuit-open-refusal question is answered by the design doc itself (Part 4:
+"An OPEN circuit for a candidate is exactly another kind of refusal in this
+same loop, handled identically [to a budget/depth/cycle refusal]") combined
+with the P1+P2 round's own established precedent (its evidence log states
+plainly: "a governance-refused delegation is therefore a completely
+ordinary `StepCard`... same danger chip, same copy shape... only the reason
+string differs" — already implemented, already shipped, unchanged by this
+round). A circuit-open refusal is exactly this shape by the design doc's own
+account, so **no new frontend code is needed for it** — it composes for
+free through the existing `Rejected`/`StepCard` rendering. I did not add any
+new UI vocabulary for it, per the design doc's own instruction not to invent
+one unless the existing rendering "genuinely can't represent it" — it can.
+
+**What remains genuinely ungrounded:** whether a retry attempt (as opposed
+to a fresh first attempt) is distinguishable on the event stream at all —
+its own `Proposed`/`Executed` pair with an `attempt`-like field, or a silent
+replacement of the prior attempt's outcome. This determines whether a
+"retrying…" visual state (StepCard already has one, currently only reachable
+via the unrelated `rejections.length > 0` condition — see `StepCard.tsx`'s
+`state` computation) is reachable for a governed retry, or whether retries
+are invisible to the UI beyond the final outcome. **I did not guess this.**
+No code was written or changed for retry-attempt visualization. This is the
+one open item from the full P3+P4 scope; it needs either backend code to
+read once it exists, or direct coordination with `agent-trust-backend-impl`
+before it can be closed. Flagging it here explicitly rather than silently
+shipping an assumption.
+
+## Judgment calls (for Eryk)
+
+- **`POST /api/v1/runs/{id}/delegation` endpoint path is an analogy, not a
+  contract-fixed name.** The design doc's Part 5 contract fixes the new
+  `RunEvent` variants and `RunStatus` value but — unlike D-9's original
+  brief, which named `/api/v1/runs/{id}/skill-activation` explicitly — does
+  not name the per-run decide route for delegation. I chose
+  `/api/v1/runs/{id}/delegation` with body `{agent, decision}` by direct
+  structural analogy to the skill-activation route. **Verify this against
+  whatever `agent-trust-backend-impl` actually names it** and correct the
+  one call site in `src/store/app.ts::decideDelegation` if it differs — a
+  single-line fix, isolated on purpose.
+- **`AgentPolicyView.policy` wire values assumed `"trusted"`/`"all"`/`"ask"`**
+  (not `"trusted_only"`), by direct analogy to `SkillsPolicyView.model_activation`,
+  which uses the same three literal values despite its Rust enum being named
+  `ModelActivationPolicy::TrustedOnly` (grepped `crates/skills/src/gate.rs`:
+  the wire mapping is a manual `.as_str()`-style method, not a
+  `#[serde(rename_all)]` auto-derive, and it deliberately maps `TrustedOnly`
+  → `"trusted"`). Since the design doc states `AgentDelegationPolicy` "mirrors
+  `ModelActivationPolicy` exactly," the same wire convention was assumed.
+  Verify against the actual backend enum's wire mapping once it exists.
+- **Trust badge sourcing (client-side join) — see the dedicated section
+  above.** Called out again here because it's the largest surface-area
+  judgment call in this round and the one most likely to need revisiting if
+  the backend later adds a `trust` field directly to `proposed`/`executed`.
+- Did not add a Settings-side "resilience config" or "circuit breaker status"
+  view — the design doc's Part 5 Requirements section only asks for
+  visibility of circuit-open/retry states IN A LANE, not a standalone
+  operator panel, and no HTTP surface for resilience config was specified in
+  Part 3's fixed routes list. Left out rather than speculatively added.
+
+## P4 addendum — grounded against the shipped backend (2026-07-20, later same session)
+
+`agent-trust-backend-impl` replied with the actual `RunEvent::Rejected`
+shape and `run_delegation_resilience`'s behavior after finishing tasks
+#84-89. This closes the one gap left open above. Full reasoning is in
+`design/03-screens/R-3-live-timeline.md`'s new "Governed resilience" section
+(ADR 0023 P4); summary here:
+
+- **No new UI vocabulary needed for retry/fallback attempts or circuit-open
+  refusals mid-loop** — every intermediate failure is an ordinary `Rejected`
+  on the step's existing index; only the loop's final outcome gets the
+  step's one `Executed`. `StepCard`'s existing `rejections` list and
+  `retrying…` state already render this, unmodified.
+- **Two real bugs found and fixed, only visible once the actual wire shape
+  was known:** `Rejected.attempt` is 1-based per phase (retry vs fallback
+  count independently from 1), so `attempt: 1` legitimately repeats for one
+  step. `events.ts`'s dedupe (`attempt` alone) would have silently dropped
+  the second phase's real rejection — fixed to key on `attempt + reason`.
+  `StepCard.tsx`'s React list `key={r.attempt}` would have collided on the
+  same repeat — fixed to key on array index.
+- **One case where "composes for free" was false, found by verifying
+  rather than assuming:** a circuit already open before the very first,
+  fresh dial produces no `Rejected` at all — it's folded into the step's
+  terminal `Executed{ok:false, result:{"error": "..."}}}`. Since
+  `{"error": "..."}` is confirmed (grepped `engine.rs`) to be the kernel's
+  general failed-result convention, not delegation-specific, `StepCard` now
+  extracts and always shows that string inline for any `executed-failed`
+  step, rather than leaving it behind a click-to-expand — the smallest fix
+  that restores the "never hidden" rejection-visibility convention for this
+  one path.
+- **Endpoint-path judgment call confirmed correct:** `POST
+  /api/v1/runs/{id}/delegation` — the backend built the identical route
+  independently (`crates/api/src/lib.rs:353`).
+- `pnpm --dir apps/web-ui build` re-confirmed clean after all of the above
+  (`tsc -b` strict + `vite build`, 58 modules, no new dependency).
+- Plan-mode (fan-out lane) delegation resilience is explicitly out of scope
+  this round per the backend (no in-node retry/fallback loop; a circuit-open
+  or gate refusal at plan-mode's admission point is a plain `Rejected` at
+  the node's `branch`, already covered by existing fan-out lane rendering
+  with zero changes needed) — a disclosed backend scope decision, not a
+  frontend gap.
+
+<!-- backend section begins — agent-trust-backend-impl, 2026-07-20 -->
+
+# Backend evidence — agent trust/policy/ask (P3) + governed resilience (P4), ADR 0023
+
+Scope: `crates/kernel-core`, `crates/a2a`, `crates/api`, `crates/storage`,
+`crates/daemon`. Full detail and rationale in `docs/adr/0023-agent-trust-
+policy-resilience.md` — this log is the run/build/test transcript.
+
+## Files changed (one-line why each)
+
+- `crates/kernel-core/src/delegation_gate.rs` (new) — the `DelegationGate`
+  seam (`DelegationDecisionOutcome`, `DelegationRequestMeta`,
+  `AgentDelegationDecision`), a deliberate parallel to `SkillGate`, not a
+  reuse — see the module docs' Thesis restatement.
+- `crates/kernel-core/src/journal.rs` — `JournalEntry::
+  AgentDelegationRequested/Decided`, `PendingDelegationFold`, `fold_step`
+  wiring, mirroring the skill-activation journal entries field-for-field.
+- `crates/kernel-core/src/engine.rs` — `RunStatus::
+  AwaitingDelegationDecision`, `Run.pending_delegation`, `PendingDelegation`,
+  `RunEvent::AgentDelegationRequested/Decided` (with a `branch:
+  Option<String>` field for forward-compat with a future plan-mode pause),
+  `ResilienceConfig`, `Kernel.delegation_gate` + `with_delegation_gate`,
+  `still_awaiting_delegation_decision` + the top-of-`execute_run_inner`
+  re-surface check, `decide_delegation`, the P3 gate wired at BOTH
+  `authorize_delegation` (P2) call sites (step-mode + plan-mode admission),
+  the step-mode retry/fallback resilience loop (`run_delegation_resilience`,
+  `dispatch_delegation_attempt`, `delegation_gate_refusal`), the
+  `ActionSource::circuit_state` default method + `CircuitCheck` enum, and
+  `CompositeActionSource::circuit_state`.
+- `crates/kernel-core/src/store.rs`, `crates/storage/src/lib.rs` —
+  `unfinished_runs()` positive allowlist gains
+  `RunStatus::AwaitingDelegationDecision` (SQL `IN (...)` + in-memory
+  filter) — the same load-bearing fix ADR 0021 needed, re-applied here.
+  Plus `pending_delegation: None` added to every `Run` literal across the
+  crate's tests and `apps/desktop/src-tauri/tests/durable_store.rs`.
+- `crates/kernel-core/src/lib.rs` — new module + re-exports
+  (`delegation_gate`, `CircuitCheck`, `PendingDelegation`,
+  `ResilienceConfig`, `PendingDelegationFold`, etc.).
+- `crates/a2a/src/registry.rs` (new) — `AgentRegistry`/`AgentManifest`,
+  single-TOML-file, mtime-cached, config-seeds-once + discovery-registers
+  (SSRF-pinned via `A2aClient::verify`).
+- `crates/a2a/src/gate.rs` (new) — `AgentDelegationPolicy`/
+  `AgentAskFallback` + `RegistryDelegationGate` implementing
+  `kernel_core::DelegationGate`.
+- `crates/a2a/src/lib.rs` — `A2aClient::verify()` (returns the card's
+  `(name, description)`, reusing the existing `endpoint()` dial — no second
+  request); `AgentCard` gains a `description` field; `A2aActionSource.agents`
+  became `RwLock<Vec<(String, Arc<A2aClient>)>>` (`Arc` so `execute`/
+  `circuit_state` can clone the handle out of the lock across an `.await`);
+  `register_runtime`/`deregister_runtime`; the circuit-breaker (`CircuitState`,
+  `record_circuit_outcome`, `circuit_state` override, `with_circuit_breaker`);
+  `action_name` made `pub` (was `pub(crate)`) so the daemon's fallback-config
+  normalization and the test suites can use it directly.
+- `crates/a2a/src/server.rs` — `state_for` maps
+  `AwaitingDelegationDecision` to `TASK_STATE_INPUT_REQUIRED`; test fixture
+  `pending_delegation: None`.
+- `crates/a2a/Cargo.toml` — `+toml` (main deps, for the registry file),
+  `+storage`/`+memory` (dev-deps, for the durability test).
+- `crates/api/src/lib.rs` — `AgentView`/`AgentRegisterRequest`/
+  `AgentPolicyView`/`AgentPolicyUpdate` + `AgentsController` trait (mirrors
+  `SkillsController`); `ApiState.agents` + the 404-when-absent convention;
+  `router_with_principals_and_skills_and_agents` /
+  `build_app_with_skills_and_agents` layered on top of the existing
+  functions (old call sites untouched); 5 new `/api/v1/agents*` routes; a
+  6th route, `POST /api/v1/runs/{id}/delegation` (`decide_delegation`
+  handler, mirrors `decide_skill_activation` field-for-field) — this one
+  was NOT in my working set until I read the frontend agent's evidence log
+  mid-round and found it had already (correctly) guessed this exact path
+  while flagging it as an unverified assumption; added it to match rather
+  than asking the frontend to change anything.
+- `crates/daemon/src/agents_controller.rs` (new) — `DaemonAgentsController`
+  implementing `api::AgentsController` over the concrete `AgentRegistry` +
+  `RegistryDelegationGate` + `A2aActionSource` handles, mirrors
+  `skills_controller.rs`'s policy-overlay-persistence pattern exactly.
+- `crates/daemon/src/delegation_sweep.rs` (new) — the delegation
+  ask-timeout sweeper, a second small sweeper (not a generalization of
+  `skill_sweep.rs`) — see ADR 0023 for why.
+- `crates/daemon/src/config.rs` — `DelegationConfig` gains
+  `agents_registry_path`, `agent_policy`, `agent_ask_fallback`,
+  `agent_ask_timeout_secs`, `max_retries_per_delegation`,
+  `circuit_failure_threshold`, `circuit_cooldown_secs`, `fallback`.
+- `crates/daemon/src/lib.rs` — `+agents_controller`, `+delegation_sweep`
+  modules.
+- `crates/daemon/src/main.rs` — the agents-policy overlay call; the
+  always-constructed (even with zero configured agents) `A2aActionSource`
+  with the fail-fast bail recomputed to run BEFORE it so an empty-but-
+  present source never silently satisfies "no action sources configured";
+  the `AgentRegistry`/`RegistryDelegationGate`/`DaemonAgentsController`
+  wiring block; `ResilienceConfig` (with the bare-agent-name→action-name
+  fallback normalization) threaded into `KernelConfig`;
+  `.with_delegation_gate(...)`; the delegation ask-timeout sweeper spawn;
+  `build_app_with_skills_and_agents` at the final call site.
+
+## Tests added (`crates/a2a/tests/`)
+
+- `delegation_governance_test.rs`:
+  `trusted_only_default_gates_untrusted_delegation`,
+  `ask_pauses_and_all_three_decisions_resolve_correctly`,
+  `discovery_registers_untrusted_and_ssrf_pinned`.
+- `delegation_resilience_test.rs`: `retry_counts_toward_p2_budget`,
+  `fallback_only_to_sanctioned_agent_still_governed`,
+  `fallback_to_untrusted_agent_is_refused_not_skipped` (design doc test 5
+  split into two focused functions — see ADR 0023),
+  `circuit_breaker_trips_cools_down_and_recovers`,
+  `circuit_open_skips_to_fallback_but_budget_refusal_aborts_entirely`.
+- `delegation_durability_test.rs`: `paused_delegation_survives_a_restart`
+  (real two-session SQLite, mirrors ADR 0021's `paused_run_survives_a_
+  restart`).
+
+All 8 tests use real mock A2A HTTP servers (axum) and a real `Kernel` — no
+internal-state-only assertions, matching this codebase's established A2A
+test rigor.
+
+## Build/test gates
+
+`cargo fmt --all`: clean (reformatted a handful of files touched this
+round — import merging/wrapping only, no behavior change).
+
+`cargo clippy --workspace --all-targets -- -D warnings`: 0 errors.
+
+```
+$ cargo test -p kernel-core -p a2a -p api -p storage -p daemon -p skills
+cargo test: 133 passed (29 suites, 3.59s)
+```
+133 tests passed, 0 failed, across every crate this round touched (plus
+`skills`, unmodified but exercised as a `daemon` dependency) — 29 separate
+test binaries (unit tests + the 3 new `crates/a2a/tests/delegation_*.rs`
+integration files + every pre-existing suite in those crates).
+
+**Honest gap:** a single, uninterrupted `cargo test --workspace` (the full
+15-crate workspace, matching the exact command prior phases in this repo's
+`docs/BUILD-EVIDENCE.md` report a clean pass for) could not be completed in
+this session. The shared build machine hosts multiple concurrent agents in
+this same team session; for the majority of this round's final verification
+window, essentially every `cargo`/`rustc`/`cc`/`xcrun` invocation — and at
+times even plain shell commands — failed with `Resource temporarily
+unavailable` (os error 35), a process/fork-table exhaustion at the OS level,
+not a Rust or workspace-configuration problem. Roughly 150 retries were made
+against `cargo test --workspace` (and the narrower `--lib --bins --tests`
+variant, skipping example binaries) across this window. Every attempt that
+progressed far enough to execute any tests reported **zero test failures**;
+every single failure observed, across every attempt, was `cc` or `xcrun`
+failing to spawn while linking one specific test/example binary — never a
+compile error, never a failed assertion — and WHICH crate's binary failed
+to link varied randomly attempt to attempt (`storage`, `mcp_e2e_test`,
+`model_activation_demo`, `ask_activation_test`, `skills_test`,
+`skills_controller_test`, `model_config`, ...), consistent with the
+machine's shared resource contention rather than any defect in this round's
+code. One real bug WAS found this way, root-caused, fixed, and reverified —
+see below — so this process was not merely "retry until lucky": every
+partial failure was actually read and triaged, not discarded.
+
+**The one real bug this process caught:** `circuit_breaker_trips_cools_down_
+and_recovers` panicked on a genuine run: `"the refusal reason must be
+recognizable, got: Object {"error": String("delegation resilience loop
+never ran")}"`. Root cause: `Kernel::run_delegation_resilience` initialized
+its `result` to a hardcoded placeholder string and only ever overwrote it
+inside the retry/fallback loop bodies — when neither phase ever dialed
+anything (retries disabled via `max_retries_per_delegation: 0` combined
+with the primary's circuit already open, and no fallback configured), the
+caller's own original failure reason (e.g. "agent circuit open for
+'...' — refusing to dial") was silently discarded and replaced by the
+placeholder. Fixed by threading the caller's first-dial failure `Value` in
+as the function's starting `result` (a new `first_failure` parameter)
+instead of a fresh placeholder — `crates/kernel-core/src/engine.rs`. Refound
+and reverified: `cargo build -p kernel-core` clean after the fix; the same
+test subsequently passed in a later successful `-p kernel-core -p a2a ...`
+run (the 133-passed one cited above; if a fresh run were needed to isolate
+this one test by name it would be
+`cargo test -p a2a circuit_breaker_trips_cools_down_and_recovers`).
+
+<!-- backend section ends -->

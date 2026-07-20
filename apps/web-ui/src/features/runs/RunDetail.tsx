@@ -31,7 +31,8 @@ export function RunDetail() {
   const live =
     run.status === "pending" ||
     run.status === "running" ||
-    run.status === "awaiting_skill_decision";
+    run.status === "awaiting_skill_decision" ||
+    run.status === "awaiting_delegation_decision";
   return (
     <div
       ref={headerRef}

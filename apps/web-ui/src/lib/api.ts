@@ -72,6 +72,7 @@ export type RunStatus =
   | "pending"
   | "running"
   | "awaiting_skill_decision"
+  | "awaiting_delegation_decision"
   | "completed"
   | "failed"
   | "canceled";
@@ -111,6 +112,25 @@ export interface PendingSkillActivationUi {
   provenance_source: string;
 }
 
+/* A human's answer to a paused delegate_to_X request (ADR 0023, mirrors
+ * SkillActivationDecision field-for-field). Unlike skill activation, this
+ * authorizes a REAL action — sending work to a remote agent — not advice;
+ * deny/allow_once are both non-dispatches, allow_always additionally
+ * elevates the target agent's trust label persistently. */
+export type DelegationDecision = "deny" | "allow_once" | "allow_always";
+
+export interface PendingDelegationUi {
+  step: number;
+  agent: string;
+  description: string;
+  trust: string;
+  provenance_source_kind: string;
+  provenance_source: string;
+  // Plan node id (P1, ADR 0022) if this pause occurred inside a fan-out
+  // branch; null for an ordinary step-mode pause.
+  branch: string | null;
+}
+
 export type RunEvent =
   | { type: "created"; task: string; policy: string }
   | {
@@ -142,6 +162,15 @@ export type RunEvent =
       skill: string;
       decision: SkillActivationDecision;
       principal: string;
+    }
+  | ({ type: "agent_delegation_requested" } & PendingDelegationUi)
+  | {
+      type: "agent_delegation_decided";
+      step: number;
+      agent: string;
+      decision: DelegationDecision;
+      principal: string;
+      branch: string | null;
     };
 
 export interface RunEventEnvelope {
@@ -176,6 +205,35 @@ export interface SkillsPolicyView {
 
 export interface SkillsPolicyUpdate {
   model_activation: string;
+  ask_fallback?: string;
+  ask_timeout_secs?: number;
+}
+
+/* Agent trust/policy CRUD (ADR 0023 Part 3). Literal snake_case field names,
+ * same convention as SkillView. No "install a local agent" concept — a
+ * network agent only ever registers by card URL. */
+export interface AgentView {
+  name: string;
+  description: string;
+  trust: string;
+  source_kind: string;
+  source: string;
+  registered_at: number;
+}
+
+export interface AgentRegisterRequest {
+  card_url: string;
+  token_env?: string;
+}
+
+export interface AgentPolicyView {
+  policy: string; // "trusted" | "all" | "ask" — mirrors SkillsPolicyView.model_activation's wire values
+  ask_fallback: string; // "deny" | "queue" — only consulted when policy == "ask"
+  ask_timeout_secs: number;
+}
+
+export interface AgentPolicyUpdate {
+  policy: string;
   ask_fallback?: string;
   ask_timeout_secs?: number;
 }

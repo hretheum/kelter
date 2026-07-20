@@ -13,6 +13,7 @@ use tracing::Instrument;
 use uuid::Uuid;
 
 use crate::action::{ActionSchema, ActionSpec, ValidatedAction};
+use crate::delegation_gate::{AgentDelegationDecision, DelegationDecisionOutcome, DelegationGate};
 use crate::journal::{fold_step, JournalEntry, Usage};
 use crate::oracle::{Latitude, PolicyContext, PolicyOracle};
 use crate::skill_gate::{ActivationAuthorization, SkillActivationDecision};
@@ -114,6 +115,30 @@ pub trait ActionSource: Send + Sync {
     fn a2a_origin(&self, _action: &str) -> Option<String> {
         None
     }
+
+    /// Daemon-level, cross-run circuit-breaker state for `action`'s target
+    /// (ADR 0023) — `Closed` (the default) for a non-A2A source or a target
+    /// with no recorded failures. This is deliberately NOT part of the
+    /// journaled/governed `authorize_delegation` check: a circuit is
+    /// observed operational health of a remote AGENT, not a run-scoped
+    /// governance decision, so it lives here as a third small probe
+    /// alongside `a2a_origin` rather than inside the kernel's own state.
+    /// The engine consults this before every dial (fresh, retry, or
+    /// fallback) and never dials a target whose circuit is open.
+    fn circuit_state(&self, _action: &str) -> CircuitCheck {
+        CircuitCheck::Closed
+    }
+}
+
+/// The result of probing [`ActionSource::circuit_state`] for one action's
+/// target (ADR 0023).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitCheck {
+    /// No known reason not to dial.
+    Closed,
+    /// Too many consecutive failures recently — refuse without dialing.
+    /// `retry_after` is how much cooldown remains.
+    Open { retry_after: std::time::Duration },
 }
 
 /// Merge several action sources into one space; execution routes to the
@@ -168,6 +193,16 @@ impl ActionSource for CompositeActionSource {
     fn a2a_origin(&self, action: &str) -> Option<String> {
         self.sources.iter().find_map(|s| s.a2a_origin(action))
     }
+
+    fn circuit_state(&self, action: &str) -> CircuitCheck {
+        self.sources
+            .iter()
+            .find_map(|s| match s.circuit_state(action) {
+                CircuitCheck::Closed => None,
+                open @ CircuitCheck::Open { .. } => Some(open),
+            })
+            .unwrap_or(CircuitCheck::Closed)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -194,6 +229,13 @@ pub enum RunStatus {
     /// deny/allow-once/allow-always decision. `unfinished_runs` INCLUDES this
     /// status — a restart must re-surface, never orphan, a paused run.
     AwaitingSkillDecision,
+    /// Non-terminal, PAUSED (ADR 0023): a `delegate_to_*` proposal was gated
+    /// `AskHuman` by the `DelegationGate` under an `Ask` policy, and the run
+    /// is waiting for a human's deny/allow-once/allow-always decision on
+    /// whether to authorize dialing that agent. `unfinished_runs` INCLUDES
+    /// this status for the same reason as `AwaitingSkillDecision` — a
+    /// restart must re-surface, never orphan, a paused delegation.
+    AwaitingDelegationDecision,
 }
 
 /// One executed step: which action ran, with what arguments, and how it went.
@@ -243,6 +285,10 @@ pub struct Run {
     /// `status == AwaitingSkillDecision` (ADR 0021). `None` otherwise.
     #[serde(default)]
     pub pending_skill_activation: Option<PendingSkillActivation>,
+    /// The pending `delegate_to_*` ask-request this run is paused on, when
+    /// `status == AwaitingDelegationDecision` (ADR 0023). `None` otherwise.
+    #[serde(default)]
+    pub pending_delegation: Option<PendingDelegation>,
     /// Chain depth reached by THIS run via inbound A2A delegation (ADR
     /// 0022): 0 for a run started directly (CLI/API/local), N for a run
     /// that arrived as the Nth hop of an A2A delegation chain. Fixed at run
@@ -271,6 +317,28 @@ pub struct PendingSkillActivation {
     pub provenance_source: String,
     /// Unix seconds when the request was made — the timeout sweeper compares
     /// against this, no journal read needed.
+    pub requested_at: u64,
+}
+
+/// A durable snapshot of one pending human delegation-authorization decision
+/// (ADR 0023), carried on the run record so the resume path and any client
+/// can re-render the prompt without re-reading the journal. Mirrors
+/// [`PendingSkillActivation`] field-for-field (`agent` instead of `skill`,
+/// plus `target_origin`, which a delegation has and a skill activation does
+/// not).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingDelegation {
+    pub step: u32,
+    /// The `delegate_to_*` ACTION NAME, not a human-readable agent name —
+    /// kernel-core knows agents only by the action they surface (mirrors how
+    /// `PendingSkillActivation::skill` is the skill's own identifying name).
+    /// Any display-name mapping lives in the a2a crate.
+    pub agent: String,
+    pub target_origin: String,
+    pub trust: String,
+    pub description: String,
+    pub provenance_source_kind: String,
+    pub provenance_source: String,
     pub requested_at: u64,
 }
 
@@ -344,6 +412,36 @@ pub enum RunEvent {
         decision: SkillActivationDecision,
         principal: String,
     },
+    /// A fresh `delegate_to_*` proposal was gated `AskHuman` (ADR 0023) — the
+    /// run has paused. Carries everything a client needs to render the
+    /// authorization prompt without a follow-up read. Field-for-field mirror
+    /// of `SkillActivationRequested` (`agent` instead of `skill`) plus
+    /// `target_origin`. `branch` reuses the SAME plan-node dimension as
+    /// `Proposed`/`Executed`/`Rejected` (ADR 0022) — always `None` today,
+    /// since this pause only ever fires from step mode (plan mode does not
+    /// implement the interactive pause this round, see ADR 0023); the field
+    /// exists now so the wire shape does not need to change if that changes
+    /// later.
+    AgentDelegationRequested {
+        step: u32,
+        agent: String,
+        target_origin: String,
+        description: String,
+        trust: String,
+        provenance_source_kind: String,
+        provenance_source: String,
+        branch: Option<String>,
+    },
+    /// A pending delegation-authorization request was resolved. Emitted by
+    /// `decide_delegation` itself (not by the resumed execution), so a
+    /// listening client sees the decision land instantly.
+    AgentDelegationDecided {
+        step: u32,
+        agent: String,
+        decision: AgentDelegationDecision,
+        principal: String,
+        branch: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -381,6 +479,8 @@ pub struct KernelConfig {
     pub pricing: crate::cost::PricingTable,
     /// Governed A2A delegation limits (ADR 0022).
     pub delegation: DelegationLimits,
+    /// Governed resilience: retry + sanctioned fallback (ADR 0023).
+    pub resilience: ResilienceConfig,
 }
 
 impl Default for KernelConfig {
@@ -393,6 +493,39 @@ impl Default for KernelConfig {
             trust_posture: Vec::new(),
             pricing: crate::cost::PricingTable::default(),
             delegation: DelegationLimits::default(),
+            resilience: ResilienceConfig::default(),
+        }
+    }
+}
+
+/// Governed resilience for A2A delegation (ADR 0023): bounded retry against
+/// the same target, plus an operator-declared, sanctioned-only fallback list
+/// per action — never auto-discovered. EVERY retry and fallback attempt
+/// re-enters `Kernel::authorize_delegation` (P2: budget/depth/cycle) and,
+/// when configured, the `DelegationGate` (P3: trust) exactly like a fresh
+/// proposal — this is the one non-negotiable of this whole mechanism (see
+/// ADR 0023). Defaults are reasonable-but-arbitrary, not derived from any
+/// measurement — same honest framing as `DelegationLimits::default()`.
+#[derive(Debug, Clone)]
+pub struct ResilienceConfig {
+    /// Additional dial attempts against the SAME target after the first one
+    /// fails, before falling through to the sanctioned fallback list (if
+    /// any). `0` disables same-target retry (fallback, if configured, still
+    /// applies).
+    pub max_retries_per_delegation: u32,
+    /// Sanctioned fallback targets, keyed by the PRIMARY action's name
+    /// (`delegate_to_*`), values also action names, in try-order. An action
+    /// with no entry here has no fallback — exhausting retries against it
+    /// (or finding its circuit open) ends the resilience loop with the last
+    /// failure as the outcome.
+    pub fallback: std::collections::HashMap<String, Vec<String>>,
+}
+
+impl Default for ResilienceConfig {
+    fn default() -> Self {
+        Self {
+            max_retries_per_delegation: 2,
+            fallback: std::collections::HashMap::new(),
         }
     }
 }
@@ -455,6 +588,10 @@ pub struct Kernel {
     /// offered, so the model can never propose them. kernel-core stays
     /// skills-agnostic — this is only a seam.
     skills: Option<Arc<dyn crate::skill_gate::SkillGate>>,
+    /// The agent-delegation authorization gate (ADR 0023). Optional: absent
+    /// → every P2-admitted delegation is authorized silently (no trust
+    /// gating) — kernel-core stays a2a-agnostic, this is only a seam.
+    delegation_gate: Option<Arc<dyn DelegationGate>>,
     events: broadcast::Sender<RunEventEnvelope>,
     config: KernelConfig,
 }
@@ -505,6 +642,47 @@ fn still_awaiting_skill_decision(journal: &[JournalEntry]) -> Option<PendingSkil
     pending
 }
 
+/// The most recent `AgentDelegationRequested` in the journal with no later
+/// matching `AgentDelegationDecided` — i.e. a delegation-authorization pause
+/// the run has not yet been resolved from. Mirrors
+/// `still_awaiting_skill_decision` exactly.
+fn still_awaiting_delegation_decision(journal: &[JournalEntry]) -> Option<PendingDelegation> {
+    let mut pending: Option<PendingDelegation> = None;
+    for entry in journal {
+        match entry {
+            JournalEntry::AgentDelegationRequested {
+                step,
+                agent,
+                target_origin,
+                trust,
+                description,
+                provenance_source_kind,
+                provenance_source,
+                requested_at,
+                ..
+            } => {
+                pending = Some(PendingDelegation {
+                    step: *step,
+                    agent: agent.clone(),
+                    target_origin: target_origin.clone(),
+                    trust: trust.clone(),
+                    description: description.clone(),
+                    provenance_source_kind: provenance_source_kind.clone(),
+                    provenance_source: provenance_source.clone(),
+                    requested_at: *requested_at,
+                });
+            }
+            JournalEntry::AgentDelegationDecided { agent, .. }
+                if pending.as_ref().is_some_and(|p| &p.agent == agent) =>
+            {
+                pending = None;
+            }
+            _ => {}
+        }
+    }
+    pending
+}
+
 impl Kernel {
     pub fn new(
         oracle: Arc<dyn PolicyOracle>,
@@ -521,6 +699,7 @@ impl Kernel {
             store,
             learned: None,
             skills: None,
+            delegation_gate: None,
             events,
             config,
         }
@@ -539,6 +718,15 @@ impl Kernel {
     /// entirely inert (no new actions offered).
     pub fn with_skills(mut self, skills: Arc<dyn crate::skill_gate::SkillGate>) -> Self {
         self.skills = Some(skills);
+        self
+    }
+
+    /// Attach an agent-delegation authorization gate (ADR 0023). Builder-
+    /// style so `Kernel::new` stays unchanged for every other caller;
+    /// absent → every P2-admitted delegation is authorized silently (no
+    /// trust gating on top of budget/depth/cycle).
+    pub fn with_delegation_gate(mut self, gate: Arc<dyn DelegationGate>) -> Self {
+        self.delegation_gate = Some(gate);
         self
     }
 
@@ -714,6 +902,7 @@ impl Kernel {
             cost_usd: None,
             active_skills: Vec::new(),
             pending_skill_activation: None,
+            pending_delegation: None,
             a2a_depth,
             a2a_ancestry,
         };
@@ -830,6 +1019,58 @@ impl Kernel {
         Ok(run)
     }
 
+    /// Resolve a pending `delegate_to_*` ask-request (ADR 0023) with a
+    /// human's decision. Journal + state write only — mirrors
+    /// `decide_skill_activation` exactly, including NOT calling
+    /// `execute_run` itself; the caller (the API handler, or the timeout
+    /// sweeper) is responsible for re-invoking `execute_run` to resume.
+    pub async fn decide_delegation(
+        &self,
+        run_id: Uuid,
+        agent: &str,
+        decision: AgentDelegationDecision,
+        principal: &str,
+    ) -> Result<Run, KernelError> {
+        let mut run = self.store.get(run_id).await?;
+        let pending = run
+            .pending_delegation
+            .as_ref()
+            .filter(|p| p.agent == agent)
+            .ok_or_else(|| {
+                KernelError::InvalidState(format!(
+                    "run {run_id} has no pending delegation request for '{agent}'"
+                ))
+            })?;
+        let step = pending.step;
+        self.store
+            .append_journal(
+                run_id,
+                JournalEntry::AgentDelegationDecided {
+                    step,
+                    agent: agent.to_string(),
+                    decision,
+                    principal: principal.to_string(),
+                },
+            )
+            .await?;
+        run.pending_delegation = None;
+        run.status = RunStatus::Running;
+        self.store.put(run.clone()).await?;
+        self.emit(
+            run_id,
+            0,
+            RunEvent::AgentDelegationDecided {
+                step,
+                agent: agent.to_string(),
+                decision,
+                principal: principal.to_string(),
+                branch: None,
+            },
+        );
+        tracing::info!(%run_id, %agent, ?decision, %principal, "agent delegation decided");
+        Ok(run)
+    }
+
     fn emit(&self, run_id: Uuid, seq: u64, event: RunEvent) {
         // A send error only means no subscriber is listening right now.
         let _ = self.events.send(RunEventEnvelope { run_id, seq, event });
@@ -879,6 +1120,340 @@ impl Kernel {
             ));
         }
         Ok(())
+    }
+
+    /// Governed resilience (ADR 0023, step-mode only — see the ADR for the
+    /// disclosed scope decision on why plan-mode nodes do not retry/fall
+    /// back in this round). Called only after the FIRST dial for
+    /// `primary_action` already failed (or was skipped because its circuit
+    /// was already open). Two phases:
+    ///
+    /// 1. Up to `resilience.max_retries_per_delegation` additional dials
+    ///    against the SAME target — skipped entirely if the target's circuit
+    ///    is open (retrying a known-broken agent is pointless; go straight
+    ///    to fallback).
+    /// 2. The sanctioned fallback list for `primary_action` (if any),
+    ///    in config order — an unconfigured alternative is NEVER tried.
+    ///
+    /// EVERY attempt in both phases re-enters `authorize_delegation` (P2:
+    /// budget/depth/cycle) and, when a `DelegationGate` is attached, its
+    /// `authorize_delegation_to` (P3: trust) — exactly like a fresh
+    /// proposal. This is the one non-negotiable of the whole mechanism (see
+    /// ADR 0023's cited test). A P2 or P3 refusal ABORTS the loop entirely
+    /// (it is a RUN-scoped or delegation-scoped refusal, not agent-scoped —
+    /// trying yet another candidate would not fix it). A circuit already
+    /// open on a SPECIFIC candidate only skips THAT candidate — an
+    /// agent-scoped operational fact, not a governance refusal — this is the
+    /// deliberate circuit-vs-budget loop-abort distinction ADR 0023 documents
+    /// explicitly.
+    ///
+    /// Returns the final `(result, ok)` plus any additional per-agent
+    /// attributions accumulated across attempts (the caller merges them into
+    /// `run.agent_usage`).
+    #[allow(clippy::too_many_arguments)]
+    async fn run_delegation_resilience(
+        &self,
+        run: &Run,
+        run_id: Uuid,
+        step_index: u32,
+        primary_action: &str,
+        task_arguments: &serde_json::Value,
+        schema: &ActionSchema,
+        seq: &mut u64,
+        first_failure: serde_json::Value,
+    ) -> Result<(serde_json::Value, bool, Vec<(String, u64)>), KernelError> {
+        // Preserve the caller's own failure reason (e.g. "circuit open...")
+        // as the outcome if NEITHER phase below ever dials anything — never
+        // silently discard it behind a placeholder. This matters whenever
+        // retries are disabled (`max_retries_per_delegation == 0`) and no
+        // fallback is configured: both phases are then no-ops, and the
+        // original failure must still be the one that gets journaled.
+        let mut result = first_failure;
+        let mut ok = false;
+        let mut attributions = Vec::new();
+        // The FIRST attempt already consumed one budget slot in the caller
+        // (either via the P2 admission check before Decision was journaled,
+        // or — for the circuit-open-skip case — it never dialed but still
+        // counts as this run's Nth a2a step once recorded). Every retry/
+        // fallback attempt here consumes one more, checked fresh each time.
+        let mut attempted = run
+            .steps
+            .iter()
+            .filter(|s| is_a2a_action(&s.action))
+            .count() as u32
+            + 1;
+        let mut aborted = false;
+
+        // ---- phase 1: retries against the primary target ------------------
+        let primary_open = matches!(
+            self.tools.circuit_state(primary_action),
+            CircuitCheck::Open { .. }
+        );
+        if !primary_open {
+            for attempt_n in 1..=self.config.resilience.max_retries_per_delegation {
+                let Some(origin) = self.tools.a2a_origin(primary_action) else {
+                    break;
+                };
+                if let Err(reason) = self.authorize_delegation(run, attempted, &origin) {
+                    self.emit(
+                        run_id,
+                        *seq,
+                        RunEvent::Rejected {
+                            step: step_index,
+                            reason: format!("retry refused: {reason}"),
+                            attempt: attempt_n,
+                            branch: None,
+                        },
+                    );
+                    *seq += 1;
+                    aborted = true;
+                    break;
+                }
+                attempted += 1;
+                if let Some(gate_refusal) = self.delegation_gate_refusal(primary_action, &origin) {
+                    self.emit(
+                        run_id,
+                        *seq,
+                        RunEvent::Rejected {
+                            step: step_index,
+                            reason: gate_refusal,
+                            attempt: attempt_n,
+                            branch: None,
+                        },
+                    );
+                    *seq += 1;
+                    aborted = true;
+                    break;
+                }
+                let (r, o, attrs) = self
+                    .dispatch_delegation_attempt(
+                        run_id,
+                        step_index,
+                        primary_action,
+                        task_arguments,
+                        &format!("retry{attempt_n}"),
+                        schema,
+                        run.a2a_depth,
+                        &run.a2a_ancestry,
+                        &origin,
+                    )
+                    .await;
+                attributions.extend(attrs);
+                result = r;
+                ok = o;
+                if ok {
+                    break;
+                }
+                self.emit(
+                    run_id,
+                    *seq,
+                    RunEvent::Rejected {
+                        step: step_index,
+                        reason: format!(
+                            "delegation attempt to '{primary_action}' failed: {} — retrying \
+                             ({attempt_n}/{})",
+                            result
+                                .get("error")
+                                .and_then(|e| e.as_str())
+                                .unwrap_or("unknown error"),
+                            self.config.resilience.max_retries_per_delegation
+                        ),
+                        attempt: attempt_n,
+                        branch: None,
+                    },
+                );
+                *seq += 1;
+            }
+        }
+
+        // ---- phase 2: sanctioned fallback, in config order -----------------
+        if !ok && !aborted {
+            if let Some(fallback_list) = self.config.resilience.fallback.get(primary_action) {
+                for (i, candidate) in fallback_list.iter().enumerate() {
+                    if matches!(
+                        self.tools.circuit_state(candidate),
+                        CircuitCheck::Open { .. }
+                    ) {
+                        self.emit(
+                            run_id,
+                            *seq,
+                            RunEvent::Rejected {
+                                step: step_index,
+                                reason: format!(
+                                    "sanctioned fallback '{candidate}' skipped — its circuit is \
+                                     open"
+                                ),
+                                attempt: (i + 1) as u32,
+                                branch: None,
+                            },
+                        );
+                        *seq += 1;
+                        continue;
+                    }
+                    let Some(origin) = self.tools.a2a_origin(candidate) else {
+                        continue;
+                    };
+                    if let Err(reason) = self.authorize_delegation(run, attempted, &origin) {
+                        self.emit(
+                            run_id,
+                            *seq,
+                            RunEvent::Rejected {
+                                step: step_index,
+                                reason: format!("fallback refused: {reason}"),
+                                attempt: (i + 1) as u32,
+                                branch: None,
+                            },
+                        );
+                        *seq += 1;
+                        break;
+                    }
+                    attempted += 1;
+                    if let Some(gate_refusal) = self.delegation_gate_refusal(candidate, &origin) {
+                        self.emit(
+                            run_id,
+                            *seq,
+                            RunEvent::Rejected {
+                                step: step_index,
+                                reason: gate_refusal,
+                                attempt: (i + 1) as u32,
+                                branch: None,
+                            },
+                        );
+                        *seq += 1;
+                        break;
+                    }
+                    let (r, o, attrs) = self
+                        .dispatch_delegation_attempt(
+                            run_id,
+                            step_index,
+                            candidate,
+                            task_arguments,
+                            &format!("fallback{}", i + 1),
+                            schema,
+                            run.a2a_depth,
+                            &run.a2a_ancestry,
+                            &origin,
+                        )
+                        .await;
+                    attributions.extend(attrs);
+                    result = r;
+                    ok = o;
+                    if ok {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok((result, ok, attributions))
+    }
+
+    /// A `DelegationGate` refusal (Deny or AskHuman) for one automated
+    /// retry/fallback candidate, as a human-readable reason — or `None` if
+    /// no gate is attached or it allows. An `AskHuman` outcome mid-loop is
+    /// treated as a refusal (not a pause): a headless automated retry/
+    /// fallback attempt has no durable story for pausing partway through an
+    /// in-progress resilience loop — only the FIRST, model-proposed attempt
+    /// can pause (see the call site in `execute_run_inner`).
+    fn delegation_gate_refusal(&self, action: &str, target_origin: &str) -> Option<String> {
+        let gate = self.delegation_gate.as_ref()?;
+        match gate.authorize_delegation_to(action, target_origin) {
+            DelegationDecisionOutcome::Allow(_) => None,
+            DelegationDecisionOutcome::Deny(reason) => Some(reason),
+            DelegationDecisionOutcome::AskHuman(meta) => Some(format!(
+                "agent '{action}' requires human authorization (trust={}) — automatic retry/\
+                 fallback does not pause for a decision",
+                meta.trust
+            )),
+        }
+    }
+
+    /// One dial attempt (retry or fallback) against `candidate_action`,
+    /// reusing the original delegation's `task` argument verbatim. Journals
+    /// its own `Intent` (a fresh durability boundary per attempt, keyed by a
+    /// distinct `attempt_tag` so a crash mid-retry resumes safely — see ADR
+    /// 0023); the CALLER journals the single final `Receipt` once the whole
+    /// resilience loop concludes. Builds its `ExecutionContext` with an
+    /// EMPTY notes map (deliberately NOT `folded.notes`): a retry must dial
+    /// fresh, never reconnect to a prior FAILED attempt's remote task.
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_delegation_attempt(
+        &self,
+        run_id: Uuid,
+        step_index: u32,
+        candidate_action: &str,
+        task_arguments: &serde_json::Value,
+        attempt_tag: &str,
+        schema: &ActionSchema,
+        run_a2a_depth: u32,
+        run_a2a_ancestry: &[String],
+        target_origin: &str,
+    ) -> (serde_json::Value, bool, Vec<(String, u64)>) {
+        let proposed = crate::action::ProposedAction {
+            action: candidate_action.to_string(),
+            arguments: task_arguments.clone(),
+            rationale: Some(format!("kernel-initiated delegation {attempt_tag}")),
+        };
+        let validated = match schema.validate(proposed) {
+            Ok(v) => v,
+            Err(e) => {
+                return (
+                    serde_json::json!({
+                        "error": format!("resilience candidate '{candidate_action}' invalid: {e}")
+                    }),
+                    false,
+                    Vec::new(),
+                )
+            }
+        };
+        let keyed = schema
+            .spec(candidate_action)
+            .map(|s| s.supports_idempotency_key())
+            .unwrap_or(false);
+        let idempotency_key = format!("{run_id}:{step_index}:{attempt_tag}");
+        if let Err(e) = self
+            .store
+            .append_journal(
+                run_id,
+                JournalEntry::Intent {
+                    step: step_index,
+                    action: candidate_action.to_string(),
+                    arguments: validated.arguments().clone(),
+                    idempotency_key: idempotency_key.clone(),
+                },
+            )
+            .await
+        {
+            return (
+                serde_json::json!({ "error": format!("cannot journal retry intent: {e}") }),
+                false,
+                Vec::new(),
+            );
+        }
+        let mut exec_action = validated.clone();
+        if keyed {
+            exec_action.inject_idempotency_key(&idempotency_key);
+        }
+        let mut ancestry = run_a2a_ancestry.to_vec();
+        ancestry.push(target_origin.to_string());
+        exec_action.inject_a2a_lineage(run_a2a_depth + 1, &ancestry);
+
+        let exec_ctx = ExecutionContext::new(
+            run_id,
+            step_index,
+            self.store.clone(),
+            std::collections::HashMap::new(),
+        );
+        let outcome = self.tools.execute(&exec_action, &exec_ctx).await;
+        let attributions = exec_ctx.agent_usage.into_inner().unwrap_or_default();
+        match outcome {
+            Ok(v) => (v, true, attributions),
+            Err(e) => (
+                serde_json::json!({ "error": e.to_string() }),
+                false,
+                attributions,
+            ),
+        }
     }
 
     /// The state machine. Deterministic control flow; the model only picks
@@ -945,6 +1520,36 @@ impl Kernel {
             );
             run.status = RunStatus::AwaitingSkillDecision;
             run.pending_skill_activation = Some(pending);
+            self.store.put(run.clone()).await?;
+            return Ok(run);
+        }
+
+        // Still awaiting a human delegation-authorization decision (ADR
+        // 0023)? Re-surface, do not advance. Mirrors the skill-activation
+        // check immediately above exactly.
+        if let Some(pending) = still_awaiting_delegation_decision(&journal) {
+            tracing::info!(
+                %run_id,
+                step = pending.step,
+                agent = %pending.agent,
+                "resume: still awaiting a human delegation-authorization decision — re-surfacing"
+            );
+            self.emit(
+                run_id,
+                0,
+                RunEvent::AgentDelegationRequested {
+                    step: pending.step,
+                    agent: pending.agent.clone(),
+                    target_origin: pending.target_origin.clone(),
+                    description: pending.description.clone(),
+                    trust: pending.trust.clone(),
+                    provenance_source_kind: pending.provenance_source_kind.clone(),
+                    provenance_source: pending.provenance_source.clone(),
+                    branch: None,
+                },
+            );
+            run.status = RunStatus::AwaitingDelegationDecision;
+            run.pending_delegation = Some(pending);
             self.store.put(run.clone()).await?;
             return Ok(run);
         }
@@ -1102,6 +1707,63 @@ impl Kernel {
                             .await?;
                         folded.decision =
                             Some((ACTIVATE_SKILL_ACTION.into(), pending.arguments.clone()));
+                    }
+                }
+            }
+
+            // A decided pending delegation-authorization request (ADR 0023):
+            // mirrors the skill-activation replay block immediately above,
+            // field-for-field, for `delegate_to_*` instead of
+            // `activate_skill`. Deny seeds `last_error`; Allow* synthesizes
+            // a Decision for the SAME action (the agent this run originally
+            // proposed), so the existing replay branch below dispatches it —
+            // no new execution path.
+            if let Some(pending) = folded.delegation.clone() {
+                match pending.decision {
+                    None => { /* defensive no-op: the top-of-fn check already handles this */ }
+                    Some(AgentDelegationDecision::Deny) => {
+                        last_error = Some(format!(
+                            "the operator declined to authorize delegating to '{}' for this \
+                             run — pick a different approach.",
+                            pending.agent
+                        ));
+                    }
+                    Some(AgentDelegationDecision::AllowAlways) => {
+                        if let Some(gate) = &self.delegation_gate {
+                            if let Err(e) = gate.elevate_trust(&pending.agent) {
+                                tracing::warn!(
+                                    %run_id, agent = %pending.agent,
+                                    "trust elevation failed (delegation still applies for \
+                                     this run): {e}"
+                                );
+                            }
+                        }
+                        self.store
+                            .append_journal(
+                                run_id,
+                                JournalEntry::Decision {
+                                    step: step_index,
+                                    action: pending.agent.clone(),
+                                    arguments: pending.arguments.clone(),
+                                    usage: None,
+                                },
+                            )
+                            .await?;
+                        folded.decision = Some((pending.agent.clone(), pending.arguments.clone()));
+                    }
+                    Some(AgentDelegationDecision::AllowOnce) => {
+                        self.store
+                            .append_journal(
+                                run_id,
+                                JournalEntry::Decision {
+                                    step: step_index,
+                                    action: pending.agent.clone(),
+                                    arguments: pending.arguments.clone(),
+                                    usage: None,
+                                },
+                            )
+                            .await?;
+                        folded.decision = Some((pending.agent.clone(), pending.arguments.clone()));
                     }
                 }
             }
@@ -1328,6 +1990,91 @@ impl Kernel {
                                     seq += 1;
                                     last_error = Some(reason);
                                     continue;
+                                }
+
+                                // Agent-trust gate (ADR 0023): runs SECOND,
+                                // only once P2 (budget/depth/cycle) already
+                                // allowed this delegation structurally — see
+                                // the module docs on `DelegationGate` for the
+                                // ordering rationale. `target_origin` is
+                                // guaranteed `Some` here (the `None` arm
+                                // above already refused and `continue`d).
+                                let origin = target_origin.expect(
+                                    "target_origin is Some: the None arm above already refused",
+                                );
+                                if let Some(gate) = &self.delegation_gate {
+                                    match gate.authorize_delegation_to(v.action(), &origin) {
+                                        DelegationDecisionOutcome::Allow(_) => { /* fall through */
+                                        }
+                                        DelegationDecisionOutcome::Deny(reason) => {
+                                            self.emit(
+                                                run_id,
+                                                seq,
+                                                RunEvent::Rejected {
+                                                    step: step_index,
+                                                    reason: reason.clone(),
+                                                    attempt,
+                                                    branch: None,
+                                                },
+                                            );
+                                            seq += 1;
+                                            last_error = Some(reason);
+                                            continue;
+                                        }
+                                        DelegationDecisionOutcome::AskHuman(meta) => {
+                                            let requested_at = now_secs();
+                                            self.store
+                                                .append_journal(
+                                                    run_id,
+                                                    JournalEntry::AgentDelegationRequested {
+                                                        step: step_index,
+                                                        agent: v.action().to_string(),
+                                                        target_origin: origin.clone(),
+                                                        arguments: v.arguments().clone(),
+                                                        trust: meta.trust.clone(),
+                                                        description: meta.description.clone(),
+                                                        provenance_source_kind: meta
+                                                            .provenance_source_kind
+                                                            .clone(),
+                                                        provenance_source: meta
+                                                            .provenance_source
+                                                            .clone(),
+                                                        requested_at,
+                                                    },
+                                                )
+                                                .await?;
+                                            run.status = RunStatus::AwaitingDelegationDecision;
+                                            run.pending_delegation = Some(PendingDelegation {
+                                                step: step_index,
+                                                agent: v.action().to_string(),
+                                                target_origin: origin.clone(),
+                                                trust: meta.trust.clone(),
+                                                description: meta.description.clone(),
+                                                provenance_source_kind: meta
+                                                    .provenance_source_kind
+                                                    .clone(),
+                                                provenance_source: meta.provenance_source.clone(),
+                                                requested_at,
+                                            });
+                                            self.store.put(run.clone()).await?;
+                                            self.emit(
+                                                run_id,
+                                                seq,
+                                                RunEvent::AgentDelegationRequested {
+                                                    step: step_index,
+                                                    agent: v.action().to_string(),
+                                                    target_origin: origin,
+                                                    description: meta.description,
+                                                    trust: meta.trust,
+                                                    provenance_source_kind: meta
+                                                        .provenance_source_kind,
+                                                    provenance_source: meta.provenance_source,
+                                                    branch: None,
+                                                },
+                                            );
+                                            return Ok(run);
+                                        }
+                                    }
                                 }
                             }
 
@@ -1662,31 +2409,95 @@ impl Kernel {
                     step = step_index,
                     tool = %validated.action()
                 );
-                let (result, ok) = match self
-                    .tools
-                    .execute(&exec_action, &exec_ctx)
-                    .instrument(tool_span)
-                    .await
-                {
-                    Ok(v) => (v, true),
-                    Err(e) => {
-                        let msg = e.to_string();
-                        last_error = Some(format!(
-                            "tool '{}' failed: {msg}. Adjust and continue.",
-                            validated.action()
-                        ));
-                        (serde_json::json!({ "error": msg }), false)
+                // Governed resilience (ADR 0023): a circuit already open on
+                // this action's target is refused WITHOUT dialing — never
+                // dial a known-broken agent, not even on the first attempt.
+                // The resilience loop below treats this identically to a
+                // failed first dial (and, since the primary's circuit is
+                // open, skips straight to any sanctioned fallback).
+                let primary_circuit = is_a2a_action(validated.action())
+                    .then(|| self.tools.circuit_state(validated.action()));
+                let (mut result, mut ok) = match primary_circuit {
+                    Some(CircuitCheck::Open { retry_after }) => {
+                        let reason = format!(
+                            "agent circuit open for '{}' (retry after {}s) — refusing to dial",
+                            validated.action(),
+                            retry_after.as_secs()
+                        );
+                        tracing::warn!(%run_id, step = step_index, "{reason}");
+                        (serde_json::json!({ "error": reason }), false)
                     }
+                    _ => match self
+                        .tools
+                        .execute(&exec_action, &exec_ctx)
+                        .instrument(tool_span)
+                        .await
+                    {
+                        Ok(v) => (v, true),
+                        Err(e) => {
+                            let msg = e.to_string();
+                            last_error = Some(format!(
+                                "tool '{}' failed: {msg}. Adjust and continue.",
+                                validated.action()
+                            ));
+                            (serde_json::json!({ "error": msg }), false)
+                        }
+                    },
                 };
 
                 crash_point("after_execute", validated.action());
 
-                // Per-agent accounting attributed during execution.
+                // Per-agent accounting attributed during the FIRST attempt.
                 if let Ok(attributions) = exec_ctx.agent_usage.into_inner() {
                     for (agent, elapsed_ms) in attributions {
                         let entry = run.agent_usage.entry(agent).or_default();
                         entry.delegations += 1;
                         entry.remote_ms += elapsed_ms;
+                    }
+                }
+
+                // Governed resilience (ADR 0023): bounded retry against the
+                // same target, then sanctioned fallback — ONLY for a failed
+                // A2A delegation. Every attempt re-enters
+                // `authorize_delegation` (P2) and, when configured, the
+                // `DelegationGate` (P3) exactly like a fresh proposal; see
+                // `run_delegation_resilience`'s docs for the full contract.
+                if is_a2a_action(validated.action()) {
+                    if ok {
+                        last_error = None;
+                    } else {
+                        let (r, o, extra_attributions) = self
+                            .run_delegation_resilience(
+                                &run,
+                                run_id,
+                                step_index,
+                                validated.action(),
+                                validated.arguments(),
+                                &schema,
+                                &mut seq,
+                                result.clone(),
+                            )
+                            .await?;
+                        result = r;
+                        ok = o;
+                        for (agent, elapsed_ms) in extra_attributions {
+                            let entry = run.agent_usage.entry(agent).or_default();
+                            entry.delegations += 1;
+                            entry.remote_ms += elapsed_ms;
+                        }
+                        last_error = if ok {
+                            None
+                        } else {
+                            Some(format!(
+                                "delegation via '{}' failed after retry/fallback: {}. Adjust \
+                                 and continue.",
+                                validated.action(),
+                                result
+                                    .get("error")
+                                    .and_then(|e| e.as_str())
+                                    .unwrap_or("unknown error")
+                            ))
+                        };
                     }
                 }
 
@@ -2047,6 +2858,32 @@ impl Kernel {
                         Some(origin) => self.authorize_delegation(&run, a2a_attempts, origin).err(),
                     };
                     a2a_attempts += 1;
+                    // Agent-trust gate + circuit-breaker (ADR 0023): both run
+                    // SECOND, only once P2 already allowed this delegation
+                    // structurally — same ordering as step mode. Plan-mode
+                    // does NOT implement the interactive `AskHuman` pause or
+                    // the retry/fallback resilience loop this round (a
+                    // disclosed scope decision, see ADR 0023): the
+                    // readiness-driven concurrent admission loop has no
+                    // single well-defined "the run is paused" moment when
+                    // several nodes may be ask-worthy at once, so an
+                    // `AskHuman` outcome here is treated as a refusal
+                    // (Rejected, node fails) rather than a durable pause —
+                    // only step mode's single-decision-at-a-time proposal
+                    // point implements the pause.
+                    let refusal = refusal.or_else(|| {
+                        let origin = target_origin.as_deref()?;
+                        if matches!(
+                            self.tools.circuit_state(&action_name),
+                            CircuitCheck::Open { .. }
+                        ) {
+                            return Some(format!(
+                                "agent circuit open for '{action_name}' — refusing to dial \
+                                 (plan-mode does not retry/fall back within a node this round)"
+                            ));
+                        }
+                        self.delegation_gate_refusal(&action_name, origin)
+                    });
                     if let Some(reason) = refusal {
                         self.emit(
                             run_id,

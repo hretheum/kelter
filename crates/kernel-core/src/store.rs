@@ -152,7 +152,10 @@ impl RunStore for InMemoryRunStore {
             .filter(|r| {
                 matches!(
                     r.status,
-                    RunStatus::Pending | RunStatus::Running | RunStatus::AwaitingSkillDecision
+                    RunStatus::Pending
+                        | RunStatus::Running
+                        | RunStatus::AwaitingSkillDecision
+                        | RunStatus::AwaitingDelegationDecision
                 )
             })
             .map(|r| r.id)
@@ -219,6 +222,7 @@ mod tests {
             cost_usd: None,
             active_skills: Vec::new(),
             pending_skill_activation: None,
+            pending_delegation: None,
             a2a_depth: 0,
             a2a_ancestry: Vec::new(),
         }

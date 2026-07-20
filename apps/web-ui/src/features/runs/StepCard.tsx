@@ -19,6 +19,22 @@ function remoteMsOf(result: unknown): number | null {
   return null;
 }
 
+/* `{"error": "..."}` is the kernel's general failed-result convention
+ * (engine.rs, not delegation-specific) — surfaced inline rather than left
+ * hidden behind the collapsed result pane, so a circuit-open refusal folded
+ * into a terminal `Executed{ok:false}` (ADR 0023 P4: happens only when the
+ * primary's circuit is already open before the very first dial, so there's
+ * no loud `Rejected` to show it — ungoverned attempts never generate one)
+ * is as visible as an ordinary rejection, matching the "never hidden"
+ * convention (design/00) rather than requiring an expand click to see why. */
+function errorOf(result: unknown): string | null {
+  if (result && typeof result === "object" && "error" in result) {
+    const v = (result as { error: unknown }).error;
+    if (typeof v === "string") return v;
+  }
+  return null;
+}
+
 export function StepCard({
   step,
   settled,
@@ -47,6 +63,7 @@ export function StepCard({
         ? "retrying"
         : "proposed";
   const remoteMs = step.executed ? remoteMsOf(step.executed.result) : null;
+  const errorMsg = state === "executed-failed" ? errorOf(step.executed?.result) : null;
 
   return (
     <div className="animate-slide-in rounded-md border border-border bg-card px-3 py-2">
@@ -93,15 +110,25 @@ export function StepCard({
         </span>
       </button>
 
-      {/* Rejections are the visible proof the kernel validates (design/00). */}
-      {step.rejections.map((r) => (
+      {/* Rejections are the visible proof the kernel validates (design/00).
+          Keyed by index, not `attempt`: ADR 0023 P4's governed resilience
+          loop numbers retry-phase and fallback-phase attempts independently
+          from 1, so `attempt: 1` can legitimately appear twice for one step
+          — an `attempt`-only key would collide and drop a React node. */}
+      {step.rejections.map((r, i) => (
         <p
-          key={r.attempt}
+          key={i}
           className="mt-1 rounded-sm bg-danger/10 px-2 py-1 text-caption text-danger"
         >
           Kernel rejected this step: {r.reason} · retry {r.attempt}
         </p>
       ))}
+
+      {errorMsg && (
+        <p className="mt-1 rounded-sm bg-danger/10 px-2 py-1 text-caption text-danger">
+          Ran, but failed: {errorMsg}
+        </p>
+      )}
 
       {step.rationale && (
         <p className="mt-1 text-caption2 text-muted-foreground italic">

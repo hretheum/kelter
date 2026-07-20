@@ -12,6 +12,7 @@ import { formatCost, formatElapsed, shortPolicy } from "@/lib/format";
 import { cancelRun } from "@/store/app";
 import { useAppState, useAxis } from "@/store/hooks";
 import type { Run } from "@/lib/api";
+import { DelegationAuthorizationPrompt } from "./DelegationAuthorizationPrompt";
 import { FanoutLanes } from "./FanoutLanes";
 import { SkillActivationPrompt } from "./SkillActivationPrompt";
 import { StepCard } from "./StepCard";
@@ -34,6 +35,7 @@ export function Timeline({ run }: { run: Run }) {
   const [now, setNow] = useState(Date.now());
   const announced = useRef(new Set<string>());
   const prevPendingSkill = useRef<string | null>(null);
+  const prevPendingDelegation = useRef<string | null>(null);
 
   // Live elapsed timer while running.
   useEffect(() => {
@@ -51,7 +53,7 @@ export function Timeline({ run }: { run: Run }) {
     } else {
       setShowPill(true);
     }
-  }, [steps.length, axis.terminal, axis.pendingSkillActivation]);
+  }, [steps.length, axis.terminal, axis.pendingSkillActivation, axis.pendingDelegation]);
 
   // Milestone announcements only (design/04 §6): rejected + executed + terminal.
   useEffect(() => {
@@ -85,6 +87,20 @@ export function Timeline({ run }: { run: Run }) {
     }
     prevPendingSkill.current = cur;
   }, [axis.pendingSkillActivation]);
+
+  // Delegation-authorization pause/resolve (ADR 0023): a paused delegation
+  // withholds a real action, so its pause is announced as assertively as the
+  // skill-activation pause above — same urgency, different stakes.
+  useEffect(() => {
+    const cur = axis.pendingDelegation?.agent ?? null;
+    const prev = prevPendingDelegation.current;
+    if (cur && cur !== prev) {
+      announce(`${cur} wants to send work to this agent — awaiting your authorization`, "assertive");
+    } else if (!cur && prev) {
+      announce(`${prev} delegation authorization decided`);
+    }
+    prevPendingDelegation.current = cur;
+  }, [axis.pendingDelegation]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -123,7 +139,8 @@ export function Timeline({ run }: { run: Run }) {
       <div className="border-b border-border px-4 py-3">
         <div className="flex items-start gap-3">
           <h2 className="flex-1 text-title3 font-semibold">{run.task}</h2>
-          {run.status === "awaiting_skill_decision" ? (
+          {run.status === "awaiting_skill_decision" ||
+          run.status === "awaiting_delegation_decision" ? (
             <Badge tone="warning" className="shrink-0">
               ◉ Awaiting your decision
             </Badge>
@@ -190,6 +207,9 @@ export function Timeline({ run }: { run: Run }) {
         <FanoutLanes axis={axis} now={now} />
         {axis.pendingSkillActivation && (
           <SkillActivationPrompt runId={run.id} pending={axis.pendingSkillActivation} />
+        )}
+        {axis.pendingDelegation && (
+          <DelegationAuthorizationPrompt runId={run.id} pending={axis.pendingDelegation} />
         )}
         {axis.reflections > 0 && (
           <p className="text-caption2 text-muted-foreground">

@@ -13,7 +13,9 @@
  * axis therefore has proposals + results but no retry detail. */
 
 import type {
+  AgentView,
   JournalEntry,
+  PendingDelegationUi,
   PendingSkillActivationUi,
   RunEvent,
   RunEventEnvelope,
@@ -56,6 +58,11 @@ export interface AxisState {
    * skill_activation_decided (ADR 0021) — not step-shaped, so it lives
    * top-level rather than on an AxisStep. */
   pendingSkillActivation: PendingSkillActivationUi | null;
+  /* Set by agent_delegation_requested, cleared by the paired
+   * agent_delegation_decided (ADR 0023) — mirrors pendingSkillActivation's
+   * shape exactly; a paused delegation is a real authorization gate, not
+   * advice, but the pause mechanics are identical. */
+  pendingDelegation: PendingDelegationUi | null;
 }
 
 function newAxis(runId: string): AxisState {
@@ -68,6 +75,7 @@ function newAxis(runId: string): AxisState {
     fromReplay: false,
     lastSeq: -1,
     pendingSkillActivation: null,
+    pendingDelegation: null,
   };
 }
 
@@ -104,8 +112,16 @@ export function applyEvent(axis: AxisState, ev: RunEvent): void {
     }
     case "rejected": {
       const s = stepOf(axis, ev.step);
-      // Keyed dedupe: replay + live can both deliver; attempts are unique.
-      if (!s.rejections.some((r) => r.attempt === ev.attempt)) {
+      // Keyed dedupe: replay + live can both deliver the identical event.
+      // `attempt` alone is NOT unique per step (ADR 0023 P4): the governed
+      // resilience loop's retry phase and fallback phase each number their
+      // own attempts from 1, so `attempt: 1` legitimately appears twice for
+      // one step (once per phase) — deduping on attempt alone would silently
+      // drop the second phase's real, distinct rejection. `reason` differs
+      // by phase (verified against crates/kernel-core/src/engine.rs's
+      // actual copy), so attempt+reason is the correct dedupe key.
+      const dup = s.rejections.some((r) => r.attempt === ev.attempt && r.reason === ev.reason);
+      if (!dup) {
         s.rejections.push({ reason: ev.reason, attempt: ev.attempt });
       }
       s.branch = ev.branch;
@@ -140,6 +156,22 @@ export function applyEvent(axis: AxisState, ev: RunEvent): void {
     case "skill_activation_decided":
       if (axis.pendingSkillActivation?.skill === ev.skill) {
         axis.pendingSkillActivation = null;
+      }
+      break;
+    case "agent_delegation_requested":
+      axis.pendingDelegation = {
+        step: ev.step,
+        agent: ev.agent,
+        description: ev.description,
+        trust: ev.trust,
+        provenance_source_kind: ev.provenance_source_kind,
+        provenance_source: ev.provenance_source,
+        branch: ev.branch,
+      };
+      break;
+    case "agent_delegation_decided":
+      if (axis.pendingDelegation?.agent === ev.agent) {
+        axis.pendingDelegation = null;
       }
       break;
   }
@@ -236,6 +268,32 @@ export function countDelegationAttempts(axis: AxisState): number {
     if (isA2aAction(s.action) && (s.executed !== null || s.rejections.length > 0)) n += 1;
   }
   return n;
+}
+
+/* Mirrors the a2a crate's `action_name` sanitization exactly
+ * (crates/a2a/src/lib.rs: ASCII-alphanumeric lowercased, everything else
+ * '_') — the only direction this mapping is safe to apply, since it is
+ * lossy (distinct agent names can sanitize to the same string). Forward-only:
+ * never attempt to reverse a `delegate_to_*` action back into an exact name. */
+function sanitizeAgentName(name: string): string {
+  return name
+    .split("")
+    .map((c) => (/[a-zA-Z0-9]/.test(c) ? c.toLowerCase() : "_"))
+    .join("");
+}
+
+/* Real trust badge source for an a2a lane (ADR 0023): no trust field exists
+ * on `proposed`/`executed` events (Part 5's contract only adds it to the
+ * ask-pause events), so this joins the lane's `delegate_to_<sanitized>`
+ * action against the registered-agents list (GET /api/v1/agents) by
+ * sanitized-name match. `null` when no registered agent's sanitized name
+ * matches — an honest "unknown", never a fabricated default. */
+export function trustOfLaneAgent(action: string, agents: AgentView[]): string | null {
+  const prefix = "delegate_to_";
+  if (!action.startsWith(prefix)) return null;
+  const suffix = action.slice(prefix.length);
+  const match = agents.find((a) => sanitizeAgentName(a.name) === suffix);
+  return match ? match.trust : null;
 }
 
 // ---- the bucketed event store ---------------------------------------------

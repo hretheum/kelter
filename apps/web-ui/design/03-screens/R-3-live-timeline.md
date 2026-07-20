@@ -207,3 +207,84 @@ known gap here rather than worked around with a guess.
   fabricated trust badge would violate the honesty convention worse than
   omitting one, so **no trust badge renders on A2A lanes**. If A2A ever
   gains a real per-agent trust concept, this is where its badge belongs.
+
+<!-- provenance: ai_authored | agent: claude-sonnet-5 | session_date: 2026-07-20 | context: ADR 0023 P3 — agent trust/policy/ask, closes the gap noted directly above. -->
+
+**Gap closed (ADR 0023, P3).** A2A gained a real per-agent trust concept
+(`AgentRegistry`, config-agents default-trusted / discovery-agents
+default-untrusted). Every a2a lane now renders the same trust badge token
+skills use (`✓ trusted`/success tone, `○ untrusted`/quiet tone), placed next
+to the `⇄ delegate` kind badge in the lane header. The event stream itself
+carries no trust field on ordinary `proposed`/`executed` events (only the new
+ask-pause events do — see below), so the badge is sourced client-side: the
+lane's `delegate_to_<name>` action is joined against `GET /api/v1/agents`
+using the same name-sanitization the a2a crate applies when building that
+action name in the first place. A lane whose target isn't found in the
+registry (e.g. the registry call failed, fail-silent like `tools`) simply
+shows no badge — an honest "unknown", never a fabricated default.
+
+### Delegation-authorization pause (ADR 0023, mirrors D-9's skill-activation pause)
+
+A run paused on `awaiting_delegation_decision` renders the same "◉ Awaiting
+your decision" header badge as a skill-activation pause, plus a new inline,
+non-modal prompt (`DelegationAuthorizationPrompt.tsx`) appended after the
+step list / fan-out lanes — structurally identical to
+`SkillActivationPrompt.tsx` (three buttons: deny / allow-once / allow-always;
+resolves via the paired `agent_delegation_decided` WS event, no local
+dismiss). The copy is **deliberately the opposite** of the skill prompt's: a
+skill decision is advice (D-9 explicitly bans "authorize"/"permission"
+copy there), a delegation decision authorizes a real dispatch to a remote
+agent, so this prompt says "wants to send work to this agent" and
+"Authorize this run" / "Always authorize" — see `07` D-11 for the full
+reasoning and the one open contract question (the decide endpoint's exact
+path is an analogy from D-9's, not contract-fixed) — **since resolved: the
+backend built `POST /api/v1/runs/{id}/delegation` to match exactly.**
+
+### Governed resilience (retry/fallback/circuit-breaker), ADR 0023 P4
+
+Grounded directly against the shipped backend (`engine.rs`'s
+`run_delegation_resilience`), not guessed: a governed retry or fallback
+attempt is neither "its own `Proposed`/`Executed` pair" nor "a silent
+replace" — it is a third shape. Every failed intermediate attempt (a retry
+against the same agent, or a dial against the next sanctioned fallback)
+surfaces as an ordinary `Rejected` event on the SAME step index; only the
+resilience loop's final outcome gets the step's one and only `Executed`.
+This is exactly the shape the honesty convention already renders for free
+— `StepCard`'s existing `rejections` list and `retrying…` state, unmodified,
+show every intermediate failure, and the eventual `Executed` (success or
+final failure) closes the card out. **No new UI vocabulary was needed or
+added for this.**
+
+One real wire-format wrinkle, found only by reading the backend's actual
+code (not assumed): `Rejected.attempt` is 1-based **per phase** — the retry
+phase and the fallback phase each count their own attempts from 1, so
+`attempt: 1` legitimately appears twice for one step (once per phase). The
+two prior assumptions in `events.ts` and `StepCard.tsx` that `attempt` was a
+step-unique number were wrong and have been fixed: the rejection dedupe key
+is now `attempt + reason` (not `attempt` alone, which silently dropped the
+second phase's real rejection), and the React list key is now the array
+index (not `attempt`, which collided). The phase itself is not called out
+with a separate badge — the `reason` text differs by phase already ("...
+retrying (N/max)" vs "fallback refused: ..." vs "circuit is open"), so a
+reader can tell retry from fallback from the visible chip text alone,
+matching the design doc's own instruction not to invent vocabulary the
+existing text already carries.
+
+**One case does NOT compose through `Rejected` at all, found by verifying
+rather than assuming the design doc's expectation:** if the target agent's
+circuit is already open before the very first (fresh, model-proposed) dial,
+there is no dial and no `Rejected` — the failure is folded directly into a
+synthetic `{"error": "agent circuit open for '<agent>' (retry after Ns) —
+refusing to dial"}` result on the step's one terminal `Executed{ok:false}`.
+If retry/fallback are configured, this only skips the retry phase (fallback
+still runs normally, producing ordinary loud `Rejected`s); if resilience is
+disabled entirely, this synthetic-error `Executed` is the ONLY signal a
+circuit-open refusal ever produces. Since `{"error": "..."}` turns out to be
+the kernel's general failed-result convention (grepped `engine.rs` — used
+for ordinary tool failures too, not delegation-specific), `StepCard` now
+extracts and always shows that string inline ("Ran, but failed: {error}")
+for any `executed-failed` step, rather than leaving it hidden behind the
+collapsed result pane — closing the one place this round's grounding found
+the design doc's "composes for free" assumption to be genuinely false for
+one specific path, while confirming it true for every other retry/fallback/
+circuit-open path.

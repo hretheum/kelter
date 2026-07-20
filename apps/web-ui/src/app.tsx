@@ -11,6 +11,7 @@ import { useAppState } from "@/store/hooks";
 import { ConnectionSheet } from "@/features/connection-sheet/ConnectionSheet";
 import { MasterList } from "@/features/runs/MasterList";
 import { RunDetail } from "@/features/runs/RunDetail";
+import { AgentsSettings } from "@/features/settings/AgentsSettings";
 import { ModelConfig } from "@/features/settings/ModelConfig";
 import { SkillsSettings } from "@/features/settings/SkillsSettings";
 import { TopBar } from "@/features/topbar/TopBar";
@@ -65,6 +66,10 @@ export function App() {
               <hr className="mx-auto w-full max-w-md border-border" />
             )}
             <SkillsSettings />
+            {s.agentsManagementSupported && (
+              <hr className="mx-auto w-full max-w-md border-border" />
+            )}
+            <AgentsSettings />
           </div>
         ) : (
           <>

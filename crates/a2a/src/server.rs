@@ -51,6 +51,9 @@ pub fn state_for(status: RunStatus) -> &'static str {
         // canonical A2A state for "the agent needs additional input before
         // it can continue" fits this exactly.
         RunStatus::AwaitingSkillDecision => "TASK_STATE_INPUT_REQUIRED",
+        // ADR 0023: paused awaiting a human's delegation-authorization
+        // decision — the same canonical state fits for the same reason.
+        RunStatus::AwaitingDelegationDecision => "TASK_STATE_INPUT_REQUIRED",
     }
 }
 
@@ -212,6 +215,7 @@ mod tests {
             cost_usd: None,
             active_skills: Vec::new(),
             pending_skill_activation: None,
+            pending_delegation: None,
             a2a_depth: 0,
             a2a_ancestry: Vec::new(),
         }

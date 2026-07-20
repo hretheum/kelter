@@ -12,6 +12,7 @@
 
 pub mod action;
 pub mod cost;
+pub mod delegation_gate;
 pub mod engine;
 pub mod journal;
 pub mod learned;
@@ -26,13 +27,16 @@ pub use action::{
     A2A_DEPTH_ARG, IDEMPOTENCY_KEY_ARG,
 };
 pub use cost::{ModelPrice, PricingTable};
-pub use engine::{
-    crash_point, is_a2a_action, ActionSource, AgentUsage, CompositeActionSource, DelegationLimits,
-    ExecutionContext, ExecutionError, Kernel, KernelConfig, KernelError, PendingSkillActivation,
-    Run, RunEvent, RunEventEnvelope, RunMode, RunStatus, StepRecord, ACTIVATE_SKILL_ACTION,
-    DEACTIVATE_SKILL_ACTION, FINISH_ACTION,
+pub use delegation_gate::{
+    AgentDelegationDecision, DelegationDecisionOutcome, DelegationGate, DelegationRequestMeta,
 };
-pub use journal::{JournalEntry, PendingActivationFold, Usage};
+pub use engine::{
+    crash_point, is_a2a_action, ActionSource, AgentUsage, CircuitCheck, CompositeActionSource,
+    DelegationLimits, ExecutionContext, ExecutionError, Kernel, KernelConfig, KernelError,
+    PendingDelegation, PendingSkillActivation, ResilienceConfig, Run, RunEvent, RunEventEnvelope,
+    RunMode, RunStatus, StepRecord, ACTIVATE_SKILL_ACTION, DEACTIVATE_SKILL_ACTION, FINISH_ACTION,
+};
+pub use journal::{JournalEntry, PendingActivationFold, PendingDelegationFold, Usage};
 pub use learned::{
     DistillReport, InMemoryLearnedStore, LearnedFact, LearnedProvenance, LearnedStore,
     LEARNED_LEVEL,

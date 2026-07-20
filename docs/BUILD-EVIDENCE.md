@@ -1387,3 +1387,113 @@ captured sample `branch`-carrying event JSON; and a real outbound
 `kelter_a2a_ancestry` metadata. Gates: **181 workspace tests (9 new, 0
 regressions — 172 → 181)**, clippy `-D warnings` clean, fmt clean,
 `cargo build -p daemon` clean.
+
+## Phase 15 — agent trust/policy/ask + governed resilience (ADR 0023)
+
+Extends the ADR 0020/0021 skill trust/policy/ask machinery to A2A
+delegation itself: a new `AgentRegistry` + `DelegationGate` seam gate
+`delegate_to_*` proposals on the target agent's TRUST (not just P2's
+budget/depth/cycle), with the same three-way `Allow`/`Deny`/`AskHuman`
+outcome and durable pause mechanism ADR 0021 established — mirrored, not
+reused, because delegation is a real capability gate (dials a remote
+endpoint, sends real work) where skill activation was advisory-only
+(changes what the model reads). Ships together with governed resilience:
+bounded retry, sanctioned-only fallback, and a per-agent circuit-breaker,
+none of which may ever bypass P2's budget/depth/cycle check.
+
+- **The default-trust split, stated plainly (not hidden).** A
+  config-declared agent starts `trust = "trusted"` (an operator's own act of
+  writing it into their config, exactly parallel to a manual skill sidecar
+  edit); a dynamically-discovered agent (registered by card URL over HTTP)
+  always starts `trust = "untrusted"`. A literal "always untrusted by
+  default" reading would break every existing static-config A2A deployment
+  on upgrade — this is a deliberate, disclosed deviation, not an oversight.
+- **Discovery is SSRF-pinned at registration, not deferred to first
+  delegation.** `AgentRegistry::register` dials the card immediately via
+  the SAME `A2aClient` origin-pinning real delegation already enforces (a
+  new `A2aClient::verify()`, reusing the existing `endpoint()` dial rather
+  than a second request) — a hostile/redirecting card is refused before
+  anything is persisted, proven by a real mock server whose card advertises
+  an off-host endpoint.
+- **Retry/fallback never bypass P2.** The resilience loop
+  (`Kernel::run_delegation_resilience`) is an ENGINE-level wrapper around
+  the existing per-step A2A dispatch, not a change inside
+  `A2aActionSource::execute` — every retry and fallback attempt re-enters
+  `authorize_delegation` (budget/depth/cycle) and, when a gate is attached,
+  `DelegationGate::authorize_delegation_to` (trust), exactly like a fresh
+  proposal. Proven by `retry_counts_toward_p2_budget`: a budget of 3 against
+  an always-failing agent with `max_retries_per_delegation = 5` produces
+  EXACTLY 3 dials, never a 4th, and the stop is a loud `Rejected` event
+  ("delegation budget exhausted"), never a silent halt.
+- **The circuit-vs-budget loop-abort distinction.** A circuit already open
+  on the primary agent skips straight to a sanctioned fallback (an
+  agent-scoped operational fact — retrying a known-broken agent is
+  pointless); a P2 budget/depth/cycle refusal aborts the WHOLE retry/
+  fallback loop entirely (a run-scoped governance fact — trying another
+  candidate would not fix it). Both proven distinctly in one test,
+  `circuit_open_skips_to_fallback_but_budget_refusal_aborts_entirely`,
+  including a real call-count assertion that a budget-refused fallback is
+  NEVER dialed despite being configured.
+- **Circuit-breaker with a real trip/cooldown/recovery cycle, not just the
+  refusal path.** `circuit_breaker_trips_cools_down_and_recovers` trips a
+  circuit after 3 consecutive failures against a real mock agent, asserts a
+  dial attempt during cooldown does NOT increase the mock's call count
+  (never dials a known-broken agent), then asserts exactly one half-open
+  probe dials after cooldown and, on success, closes the circuit (a
+  subsequent normal dial follows immediately).
+- **The load-bearing durability fix, re-applied.** `RunStatus::
+  AwaitingDelegationDecision` (a NEW status, not a reuse of
+  `AwaitingSkillDecision` — a paused run's reason should be discoverable
+  from its status alone) is in `unfinished_runs()`'s positive allowlist in
+  BOTH stores — the exact bug ADR 0021 caught once already, re-applied here
+  by grepping every `AwaitingSkillDecision` site and adding the delegation
+  counterpart alongside each one. Proven against real SQLite across a
+  restart (`paused_delegation_survives_a_restart`).
+- **A real bug found and fixed during this round's own test-writing.** The
+  resilience loop's initial implementation discarded the caller's own
+  failure reason (e.g. "circuit open...") behind a placeholder string
+  whenever neither retry nor fallback ever dialed anything (retries
+  disabled, no fallback configured) — caught by
+  `circuit_breaker_trips_cools_down_and_recovers` itself panicking with
+  `"the refusal reason must be recognizable, got: ... 'delegation
+  resilience loop never ran'"` on a real run. Fixed by threading the
+  original failure through as the loop's starting value rather than a
+  fresh placeholder.
+- **Scope decision, disclosed: plan-mode retry/fallback and the plan-mode
+  `AskHuman` pause are NOT implemented this round.** Plan mode's
+  concurrent admission loop (Phase 14) already threads a single-writer
+  budget counter specifically to avoid a race under concurrent node
+  admission; making retries also consume it safely from inside a spawned
+  node's own execution would need a shared, cross-task-synchronized counter
+  — a real concurrency change beyond this round. Plan mode DOES get the P3
+  trust gate and a circuit-breaker check at its existing admission point
+  (refuses outright, no loop, if the circuit is open or the target is
+  untrusted) — no plan-mode path bypasses governance; there is simply no
+  retry/fallback path there yet.
+
+**Proof (full detail: `docs/evidence/agent-trust-resilience.log`, backend
+section):** all 9 new tests (`crates/a2a/tests/delegation_governance_test.rs`
+×3, `delegation_resilience_test.rs` ×5, `delegation_durability_test.rs` ×1)
+pass against real mock A2A HTTP servers and a real `Kernel` — never
+internal-state-only assertions. A combined run of every crate this round
+touched (`kernel-core`, `a2a`, `api`, `storage`, `daemon`, `skills`) —
+**133 tests passed, 0 failed, across 29 test binaries** — plus `cargo fmt
+--all` clean and `cargo clippy --workspace --all-targets -- -D warnings`
+clean (0 errors). Full-workspace confirmation: individual `cargo build`/
+`cargo check` for every touched crate is clean; a single, uninterrupted
+`cargo test --workspace` invocation could not be completed in this session
+despite roughly 150 attempts — the shared build machine hosting this
+session's multiple concurrent agents hit sustained process/linker
+exhaustion (`Resource temporarily unavailable`, os error 35) for the
+*entire* session duration, confirmed by `cargo fmt`/`cargo clippy` and even
+plain shell commands failing the same way at times. Every attempt that got
+far enough to run any tests reported **zero test failures** — every failure
+observed across every attempt was `cc`/`xcrun` failing to spawn during
+linking (not a compile error, not a test assertion failure), and which
+specific crate's test binary failed to link varied randomly attempt to
+attempt, consistent with resource contention rather than a code defect.
+This is reported honestly rather than claimed as a clean full-workspace
+pass — the strongest available evidence (133/133 on every crate this round
+touched, 0 regressions observed anywhere) supports high confidence, but the
+single-command, all-crates confirmation other phases in this log report was
+not obtainable this session.

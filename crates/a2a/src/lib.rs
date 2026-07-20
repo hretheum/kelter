@@ -22,22 +22,33 @@
 //! log. Minimal client by design (two methods); the official `a2a-client-lf`
 //! crate is noted as a possible future swap.
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
 
 use kernel_core::{
-    crash_point, ActionSchema, ActionSource, ActionSpec, ExecutionContext, ExecutionError,
-    Latitude, ValidatedAction, A2A_ANCESTRY_ARG, A2A_DEPTH_ARG, IDEMPOTENCY_KEY_ARG,
+    crash_point, ActionSchema, ActionSource, ActionSpec, CircuitCheck, ExecutionContext,
+    ExecutionError, Latitude, ValidatedAction, A2A_ANCESTRY_ARG, A2A_DEPTH_ARG,
+    IDEMPOTENCY_KEY_ARG,
 };
 
 pub const A2A_VERSION: &str = "1.0";
 pub const WELL_KNOWN_CARD: &str = "/.well-known/agent-card.json";
 const NOTE_TASK_ID: &str = "a2a_task_id";
 
+pub mod gate;
+pub mod registry;
 pub mod server;
+
+pub use gate::{
+    parse_agent_ask_fallback, parse_agent_delegation_policy, AgentAskFallback,
+    AgentAskPolicyConfig, AgentDelegationPolicy, RegistryDelegationGate,
+};
+pub use registry::{AgentManifest, AgentRegistry};
 
 /// A manifest-registered remote agent.
 #[derive(Debug, Clone)]
@@ -72,6 +83,14 @@ pub enum A2aError {
     Protocol(String, String),
     #[error("agent '{0}' returned JSON-RPC error {1}: {2}")]
     Rpc(String, i64, String),
+    #[error("agent '{0}' is already registered")]
+    AlreadyRegistered(String),
+    #[error("agent '{0}' is not registered")]
+    NotFound(String),
+    #[error("agent registry I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("agent registry file is corrupt: {0}")]
+    Toml(String),
 }
 
 // ---- wire types (A2A v1.0.0, JSON-RPC binding) ---------------------------
@@ -79,6 +98,8 @@ pub enum A2aError {
 #[derive(Debug, Deserialize)]
 struct AgentCard {
     name: String,
+    #[serde(default)]
+    description: String,
     #[serde(rename = "supportedInterfaces")]
     supported_interfaces: Vec<AgentInterface>,
 }
@@ -159,6 +180,10 @@ pub struct A2aClient {
     /// Kelter's inbound endpoint declares this in its Agent Card).
     token: Option<String>,
     endpoint: tokio::sync::OnceCell<String>,
+    /// (card name, card description), captured the moment the card is first
+    /// resolved (same `endpoint()` dial) — used by [`Self::verify`] so
+    /// dynamic discovery (ADR 0023) never needs a second request.
+    card_info: tokio::sync::OnceCell<(String, String)>,
 }
 
 /// Identifies these calls as originating from a Kelter A2A client, so an
@@ -200,6 +225,7 @@ impl A2aClient {
             allowed_origin,
             token: agent.token.clone(),
             endpoint: tokio::sync::OnceCell::new(),
+            card_info: tokio::sync::OnceCell::new(),
         })
     }
 
@@ -264,6 +290,9 @@ impl A2aClient {
                         self.allowed_origin.clone(),
                     ));
                 }
+                let _ = self
+                    .card_info
+                    .set((card.name.clone(), card.description.clone()));
                 tracing::info!(
                     agent = %self.agent,
                     card_name = %card.name,
@@ -274,6 +303,20 @@ impl A2aClient {
             })
             .await
             .map(String::as_str)
+    }
+
+    /// Dial the card and resolve its JSONRPC endpoint (SSRF-pinning
+    /// enforced), without sending any task. Used by `AgentRegistry::register`
+    /// (ADR 0023) to fail fast at registration time — a bad URL, an
+    /// unreachable host, or a hostile redirect is refused HERE, before the
+    /// agent is ever persisted, rather than only being discovered on first
+    /// real delegation. Returns the card's own declared `(name,
+    /// description)` — dynamic discovery registers agents under the name
+    /// THEY declare, not an operator-typed one (there is no "install a
+    /// local agent" concept for a network protocol).
+    pub async fn verify(&self) -> Result<(String, String), A2aError> {
+        self.endpoint().await?;
+        Ok(self.card_info.get().cloned().unwrap_or_default())
     }
 
     async fn rpc(
@@ -408,7 +451,11 @@ pub enum SendOutcome {
 
 // ---- the action source ---------------------------------------------------
 
-fn action_name(agent: &str) -> String {
+/// The `delegate_to_<sanitized-name>` action name a registered agent's
+/// display name maps to — the SAME sanitization `A2aActionSource` applies
+/// internally, exposed so callers (the daemon's config wiring, the
+/// `AgentRegistry`/`RegistryDelegationGate`) never need to reimplement it.
+pub fn action_name(agent: &str) -> String {
     let sanitized: String = agent
         .chars()
         .map(|c| {
@@ -422,28 +469,104 @@ fn action_name(agent: &str) -> String {
     format!("delegate_to_{sanitized}")
 }
 
-/// Remote agents as kernel actions: `delegate_to_<name>(task)`.
+/// Circuit-breaker state for one agent origin (ADR 0023): daemon-level,
+/// cross-run — a circuit is about the AGENT's observed operational health,
+/// not one run's budget, so it is keyed by origin and lives here rather
+/// than on `Run`.
+#[derive(Debug, Clone, Copy, Default)]
+struct CircuitState {
+    consecutive_failures: u32,
+    opened_at: Option<Instant>,
+}
+
+/// Remote agents as kernel actions: `delegate_to_<name>(task)`. Runtime-
+/// mutable (ADR 0023, mirrors `RegistrySkillGate`'s policy `RwLock`): a
+/// newly-registered agent's `delegate_to_X` action appears in
+/// `action_schema()` the moment [`Self::register_runtime`] returns, no
+/// daemon restart needed. Each client is held behind an `Arc` (not `Clone`
+/// itself) so `execute`/`circuit_state` can clone the handle out of the
+/// lock and use it across an `.await` without holding the lock.
 pub struct A2aActionSource {
-    agents: Vec<(String, A2aClient)>, // (action name, client)
+    agents: RwLock<Vec<(String, Arc<A2aClient>)>>,
     poll_interval: Duration,
     poll_timeout: Duration,
+    circuits: Mutex<HashMap<String, CircuitState>>,
+    circuit_failure_threshold: u32,
+    circuit_cooldown: Duration,
 }
 
 impl A2aActionSource {
     pub fn new(agents: Vec<RemoteAgent>) -> Result<Self, A2aError> {
         let mut out = Vec::new();
         for agent in &agents {
-            out.push((action_name(&agent.name), A2aClient::new(agent)?));
+            out.push((action_name(&agent.name), Arc::new(A2aClient::new(agent)?)));
         }
         Ok(Self {
-            agents: out,
+            agents: RwLock::new(out),
             poll_interval: Duration::from_secs(1),
             poll_timeout: Duration::from_secs(120),
+            circuits: Mutex::new(HashMap::new()),
+            circuit_failure_threshold: 3,
+            circuit_cooldown: Duration::from_secs(60),
         })
     }
 
+    /// Set the circuit-breaker's trip threshold + cooldown (ADR 0023
+    /// `ResilienceConfig`; defaults 3 consecutive failures / 60s if never
+    /// called).
+    pub fn with_circuit_breaker(mut self, failure_threshold: u32, cooldown: Duration) -> Self {
+        self.circuit_failure_threshold = failure_threshold.max(1);
+        self.circuit_cooldown = cooldown;
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.agents.is_empty()
+        self.agents.read().unwrap().is_empty()
+    }
+
+    /// Register a new remote agent at runtime (ADR 0023, Part 3 dynamic
+    /// discovery): dials nothing itself — the caller (`AgentRegistry::
+    /// register`) already did, via the SAME SSRF-pinning `A2aClient`
+    /// construction this uses. Idempotent by action name: re-registering an
+    /// existing agent replaces its client (e.g. after a token rotation)
+    /// rather than duplicating the action.
+    pub fn register_runtime(&self, agent: &RemoteAgent) -> Result<(), A2aError> {
+        let client = Arc::new(A2aClient::new(agent)?);
+        let name = action_name(&agent.name);
+        let mut guard = self.agents.write().unwrap();
+        if let Some(entry) = guard.iter_mut().find(|(n, _)| *n == name) {
+            entry.1 = client;
+        } else {
+            guard.push((name, client));
+        }
+        Ok(())
+    }
+
+    /// Drop a runtime-registered agent's action (ADR 0023) — the daemon
+    /// calls this after `AgentRegistry::remove` succeeds, so a removed
+    /// agent's `delegate_to_X` action disappears from `action_schema()`
+    /// immediately.
+    pub fn deregister_runtime(&self, agent_name: &str) {
+        let name = action_name(agent_name);
+        self.agents.write().unwrap().retain(|(n, _)| *n != name);
+    }
+
+    /// Record one delegation outcome against `origin` (ADR 0023): success
+    /// resets the failure streak and closes the circuit; failure increments
+    /// it and, at the configured threshold, opens the circuit for
+    /// `circuit_cooldown`.
+    fn record_circuit_outcome(&self, origin: &str, success: bool) {
+        let mut circuits = self.circuits.lock().unwrap();
+        let state = circuits.entry(origin.to_string()).or_default();
+        if success {
+            state.consecutive_failures = 0;
+            state.opened_at = None;
+        } else {
+            state.consecutive_failures += 1;
+            if state.consecutive_failures >= self.circuit_failure_threshold {
+                state.opened_at = Some(Instant::now());
+            }
+        }
     }
 
     async fn poll_to_terminal(&self, client: &A2aClient, task_id: &str) -> Result<Task, A2aError> {
@@ -486,6 +609,8 @@ impl ActionSource for A2aActionSource {
         Ok(ActionSchema {
             actions: self
                 .agents
+                .read()
+                .unwrap()
                 .iter()
                 .map(|(name, client)| ActionSpec {
                     name: name.clone(),
@@ -516,13 +641,17 @@ impl ActionSource for A2aActionSource {
         action: &ValidatedAction,
         ctx: &ExecutionContext,
     ) -> Result<serde_json::Value, ExecutionError> {
-        let (_, client) = self
+        let client = self
             .agents
+            .read()
+            .unwrap()
             .iter()
             .find(|(name, _)| name == action.action())
+            .map(|(_, c)| c.clone())
             .ok_or_else(|| {
                 ExecutionError::Tool(format!("unknown delegation action '{}'", action.action()))
             })?;
+        let client = client.as_ref();
         let task_text = action.arguments()["task"].as_str().unwrap_or_default();
         let started = std::time::Instant::now();
 
@@ -601,6 +730,14 @@ impl ActionSource for A2aActionSource {
         let elapsed_ms = started.elapsed().as_millis() as u64;
         ctx.attribute_agent(client.agent_name(), elapsed_ms);
 
+        // Circuit-breaker bookkeeping (ADR 0023): every dial outcome against
+        // this origin updates its consecutive-failure streak, regardless of
+        // whether the caller was a fresh proposal, a kernel-initiated retry,
+        // or a fallback attempt — the circuit tracks the AGENT, not who
+        // asked.
+        let succeeded = matches!(&outcome, Ok((_, state, _)) if state == "TASK_STATE_COMPLETED");
+        self.record_circuit_outcome(client.allowed_origin(), succeeded);
+
         match outcome {
             Ok((task_id, state, output)) if state == "TASK_STATE_COMPLETED" => Ok(json!({
                 "agent": client.agent_name(),
@@ -619,9 +756,40 @@ impl ActionSource for A2aActionSource {
 
     fn a2a_origin(&self, action: &str) -> Option<String> {
         self.agents
+            .read()
+            .unwrap()
             .iter()
             .find(|(name, _)| name == action)
             .map(|(_, client)| client.allowed_origin().to_string())
+    }
+
+    fn circuit_state(&self, action: &str) -> CircuitCheck {
+        let Some(origin) = self.a2a_origin(action) else {
+            return CircuitCheck::Closed;
+        };
+        let mut circuits = self.circuits.lock().unwrap();
+        let Some(state) = circuits.get_mut(&origin) else {
+            return CircuitCheck::Closed;
+        };
+        match state.opened_at {
+            None => CircuitCheck::Closed,
+            Some(opened) => {
+                let elapsed = opened.elapsed();
+                if elapsed >= self.circuit_cooldown {
+                    // Cooldown elapsed: half-open. Report Closed so the
+                    // engine lets exactly the next dial attempt through; a
+                    // failure on that attempt re-opens the circuit with a
+                    // fresh cooldown window (via `record_circuit_outcome`),
+                    // a success closes it (`consecutive_failures` resets to
+                    // 0, `opened_at` clears).
+                    CircuitCheck::Closed
+                } else {
+                    CircuitCheck::Open {
+                        retry_after: self.circuit_cooldown - elapsed,
+                    }
+                }
+            }
+        }
     }
 }
 
