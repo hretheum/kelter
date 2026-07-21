@@ -2664,8 +2664,16 @@ impl Kernel {
                             %run_id,
                             step = step_index,
                             action = %validated.action(),
+                            // Audit finding 3-a: this is a contract on the
+                            // TOOL, not a kernel-verified guarantee — a
+                            // keyed tool is expected to dedupe by this key,
+                            // but the kernel cannot confirm every
+                            // registered ActionSource actually honors it
+                            // (the A2A source, for one, achieves its own
+                            // exactly-once via a separate reconnect-not-
+                            // redial mechanism and never reads this key).
                             "resume: dangling intent — re-dispatching with the journaled \
-                             idempotency key (tool-side dedupe guarantees exactly-once)"
+                             idempotency key (the tool is expected to dedupe by it)"
                         );
                         journaled_key
                     }

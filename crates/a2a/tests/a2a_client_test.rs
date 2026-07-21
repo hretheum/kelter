@@ -26,6 +26,9 @@ struct MockState {
     get_calls: AtomicUsize,
     /// Emit an unknown task state (hostile server).
     hostile: bool,
+    /// Reply to `SendMessage` with a bare inline `message` instead of a
+    /// `task` — the Task-less completion path (audit finding 3-a).
+    inline: bool,
     /// The endpoint URL the card advertises. Set once the port is known;
     /// an explicit value (SSRF tests) overrides self-pointing.
     endpoint: std::sync::Mutex<String>,
@@ -61,6 +64,12 @@ async fn rpc(State(st): State<Arc<MockState>>, Json(req): Json<Value>) -> Json<V
             st.send_calls.fetch_add(1, Ordering::SeqCst);
             *st.last_send_metadata.lock().unwrap() =
                 req["params"]["message"].get("metadata").cloned();
+            if st.inline {
+                // Bare inline Message reply — no Task, no id to reconnect to.
+                return Json(reply(json!({
+                    "message": {"parts": [{"text": "the remote's inline answer"}]}
+                })));
+            }
             // Always return a Task to poll (id fixed so reconnect is testable).
             Json(reply(json!({
                 "task": {"id": "task-42", "status": {"state": "TASK_STATE_SUBMITTED"}, "artifacts": []}
@@ -357,5 +366,99 @@ async fn hostile_unknown_task_state_is_rejected() {
     assert!(
         err.to_string().contains("unknown task state"),
         "hostile state must be rejected, got: {err}"
+    );
+}
+
+/// Regression test for audit finding 3-a (docs/audit/AUDIT-2026-07-21.md): a
+/// fresh dial whose remote answers INLINE (a bare `message`, no `task`) must
+/// journal a durable completion marker before returning — mirrors
+/// `fresh_delegation_journals_the_task_id` for the Task-returning path.
+#[tokio::test]
+async fn inline_delegation_journals_the_completion_marker() {
+    let state = Arc::new(MockState {
+        inline: true,
+        ..Default::default()
+    });
+    let base = spawn_server(state).await;
+
+    let src = A2aActionSource::new(vec![RemoteAgent {
+        name: "toy".into(),
+        card_url: base,
+        token: None,
+    }])
+    .unwrap();
+    let schema = src
+        .action_schema(kernel_core::Latitude::Wide)
+        .await
+        .unwrap();
+
+    let store: Arc<dyn RunStore> = Arc::new(InMemoryRunStore::new());
+    let run_id = uuid::Uuid::new_v4();
+    let ctx = ExecutionContext::new(run_id, 0, store.clone(), Default::default());
+    let action = delegate_action(&schema, "fresh inline");
+    let result = src.execute(&action, &ctx).await.unwrap();
+
+    assert_eq!(result["state"], "TASK_STATE_COMPLETED");
+    assert_eq!(result["output"], "the remote's inline answer");
+
+    let journal = store.journal(run_id).await.unwrap();
+    assert!(
+        journal.iter().any(|e| matches!(
+            e,
+            JournalEntry::Note { key, value, .. }
+                if key == "a2a_inline_complete"
+                    && value == &json!("the remote's inline answer")
+        )),
+        "the inline completion must be journaled as the exactly-once reconnect \
+         anchor before execute() returns: {journal:?}"
+    );
+}
+
+/// Regression test for audit finding 3-a: on resume, a journaled inline
+/// completion must be returned directly — NEVER re-dial `SendMessage`.
+/// Before this fix, an inline (Task-less) completion journaled nothing, so a
+/// crash after `execute()` returned but before the engine wrote its `Receipt`
+/// would resume into a dangling `Intent` with no reconnect marker and
+/// re-dispatch a FRESH `SendMessage` (a new `messageId`, since the wire
+/// protocol never carries `idempotency_key`) — double-executing the remote
+/// task. Mirrors `resume_reconnects_to_journaled_task_without_redelegating`
+/// for the Task-returning path.
+#[tokio::test]
+async fn resume_reconnects_to_journaled_inline_completion_without_redelegating() {
+    let state = Arc::new(MockState {
+        inline: true,
+        ..Default::default()
+    });
+    let base = spawn_server(state.clone()).await;
+
+    let src = A2aActionSource::new(vec![RemoteAgent {
+        name: "toy".into(),
+        card_url: base,
+        token: None,
+    }])
+    .unwrap();
+    let schema = src
+        .action_schema(kernel_core::Latitude::Wide)
+        .await
+        .unwrap();
+
+    // Simulate a crash-resume: the journal already has the inline completion
+    // marker (as if `execute` ran once, journaled it, then the process died
+    // before a Receipt was written) — so a re-dispatch must return the SAME
+    // output and must NOT call SendMessage again.
+    let store: Arc<dyn RunStore> = Arc::new(InMemoryRunStore::new());
+    let ctx = ctx_with_notes(
+        store,
+        &[("a2a_inline_complete", json!("an earlier inline answer"))],
+    );
+    let action = delegate_action(&schema, "resumed inline task");
+    let result = src.execute(&action, &ctx).await.unwrap();
+
+    assert_eq!(result["state"], "TASK_STATE_COMPLETED");
+    assert_eq!(result["output"], "an earlier inline answer");
+    assert_eq!(
+        state.send_calls.load(Ordering::SeqCst),
+        0,
+        "resume must NOT re-delegate — zero SendMessage calls expected"
     );
 }

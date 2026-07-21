@@ -45,6 +45,19 @@ const NOTE_TASK_ID: &str = "a2a_task_id";
 /// re-sending — the same at-most-reconnect durability the initial send's
 /// `NOTE_TASK_ID` provides.
 const NOTE_CONTINUATION_SENT: &str = "a2a_continuation_sent";
+/// Durability pivot for an inline (Task-less) `SendMessage` completion (audit
+/// finding 3-a hardening): `NOTE_TASK_ID` is only journaled when the remote
+/// returns a `Task` to reconnect to; a remote that answers inline (a bare
+/// `Message`, no task) had NOTHING journaled before `execute` returned
+/// `TASK_STATE_COMPLETED` — so a crash after that return but before the
+/// engine's `Receipt` lands would resume into a dangling `Intent` with no
+/// reconnect marker, and re-dispatch would send a FRESH `SendMessage` (a new
+/// `messageId`, since the wire protocol never carries `idempotency_key`),
+/// double-executing the remote task. Journaling the completed output under
+/// this key the moment it exists closes the gap exactly like `NOTE_TASK_ID`
+/// does for the Task-returning path: a resume checks this FIRST and returns
+/// the SAME output instead of re-dialing.
+const NOTE_INLINE_COMPLETE: &str = "a2a_inline_complete";
 
 /// Cap on the SSE reassembly buffer (ADR 0027 hardening, audit finding 9-a):
 /// `stream_to_terminal`'s `buf` grows with every chunk until a complete event
@@ -1099,6 +1112,23 @@ impl ActionSource for A2aActionSource {
         };
 
         let outcome: Result<(String, String, String), A2aError> = async {
+            // Exactly-once reconnect for an inline (Task-less) completion
+            // (audit finding 3-a): if this step already completed inline
+            // before a crash, return the SAME journaled output — never
+            // re-dial. Checked FIRST, before the NOTE_TASK_ID reconnect
+            // below, since an inline completion never creates a remote task
+            // id to reconnect to in the first place.
+            if let Some(output) = ctx.note(NOTE_INLINE_COMPLETE).and_then(|v| v.as_str()) {
+                tracing::info!(
+                    agent = %client.agent_name(),
+                    "a2a: resuming from a journaled inline completion — NOT re-dialing"
+                );
+                return Ok((
+                    "(inline)".to_string(),
+                    "TASK_STATE_COMPLETED".to_string(),
+                    output.to_string(),
+                ));
+            }
             // Durable reconnect: if this step already created a remote task
             // before a crash, reattach to it — never delegate twice.
             let task = if let Some(existing) = ctx.note(NOTE_TASK_ID).and_then(|v| v.as_str()) {
@@ -1150,6 +1180,24 @@ impl ActionSource for A2aActionSource {
             } else {
                 match client.send_message(task_text, lineage).await? {
                     SendOutcome::Message(text) => {
+                        // Durability pivot for the inline path (audit 3-a):
+                        // journal the completed output BEFORE returning, so a
+                        // crash after this point resumes into the
+                        // NOTE_INLINE_COMPLETE check above instead of
+                        // re-dialing a fresh SendMessage.
+                        ctx.record_note(NOTE_INLINE_COMPLETE, json!(text))
+                            .await
+                            .map_err(|e| {
+                                A2aError::Protocol(
+                                    client.agent.clone(),
+                                    format!("cannot journal inline completion: {e}"),
+                                )
+                            })?;
+                        tracing::info!(
+                            agent = %client.agent_name(),
+                            "a2a: inline completion journaled (exactly-once reconnect anchor)"
+                        );
+                        crash_point("after_a2a_inline_complete", action.action());
                         return Ok(("(inline)".to_string(), "TASK_STATE_COMPLETED".into(), text));
                     }
                     SendOutcome::Task(task) => {
