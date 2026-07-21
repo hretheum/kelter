@@ -1782,3 +1782,51 @@ fails, restored, confirmed green).
 --check` clean; codename grep over the tracked tree = 0. Not pushed (human
 gate). Items H-1/9-a/9-b/3-a/3-c/10-a from the audit's prioritized fix-list
 are now closed; the rest of that list remains open.
+
+## Fixes — audit remediation pass 2: LOW security/robustness cluster (2026-07-21)
+
+The LOW security/robustness items from `docs/audit/AUDIT-2026-07-21.md` §6,
+each its own commit + red-green-verified test.
+
+- **#9 SSRF on set_model_config (2-a, `9b7b8ae`).** Phase 11 added the
+  model-egress allowlist to the health-check `test` path only; `set` checked
+  nothing, so an authed caller could point every model call at an internal
+  host (and thereby also allowlist it for `test`). `set` now clears the same
+  allowlist BEFORE building/swapping the oracle (no side effect on refusal).
+  NOT already done by Phase 11 (diagnosed first).
+- **#15 registry TOCTOU (8-b, `594e21e`).** register/set_trust/remove did
+  read→mutate→write with only the cache lock; concurrent mutations lost
+  updates or double-inserted. Added a write_gate held across each whole
+  mutation, with the register collision re-check against a fresh read inside
+  it. Real-thread concurrency tests.
+- **#17 unbounded response body + ledger key set (2-c+9-d, `24befb7`).**
+  a2a `.json()` buffered whole bodies unbounded → read_json_capped (8 MiB,
+  content-length + streaming cap). The mcp ledger dedupe set grew unbounded →
+  capped at 100k with a file-scan fallback that keeps exactly-once past the
+  cap.
+- **#12 dead out-of-order buffer (3-b, `50a7dff`).** events.ts's reorder
+  buffer was dead code AND would be wrong to make blocking (legitimate
+  post-reconnect seq gaps are journal-replay-filled, not resent live — a
+  blocking buffer would deadlock). Deleted it; ingest is documented
+  forward-only. Added a vitest harness (dev-only; production build excludes
+  *.test.ts, unchanged).
+- **#16 auth-limiter parking_lot (4-a, `9855c06`).** The limiter's std Mutex
+  on the hot path would poison on a panic-under-lock → every later auth
+  panics (self-DoS). Swapped to parking_lot (no poison). Panic-under-lock
+  survival test.
+- **#10 re-key auth lockout (4-b, `735b2ff`).** is_locked() was checked
+  before the token check, so a valid token got 429 during a bad-auth flood (a
+  self-DoS), and success cleared the global window. Now the credential is
+  validated FIRST and a valid token is served unconditionally; only
+  unauthenticated failures are counted; success never clears. Per-source-IP
+  bucketing deliberately not added (the valid-token bypass makes it redundant
+  for the stated goal; ConnectInfo threading would be disproportionate) —
+  documented at the gate. NOT already done by Phase 11.
+
+**Proof:** each fix red-green verified (revert the fix → its test fails).
+`cargo test --workspace` **exit 0, 224 tests, 0 failures**; `cargo clippy
+--workspace --all-targets` clean; `cargo fmt --check` clean; web-ui `pnpm
+test` 4/4 and `pnpm build` (tsc -b && vite build) exit 0 (production build
+excludes the new vitest files, unchanged); codename grep over the tracked
+tree = 0. Default auth flow unchanged (valid token authenticates, bad token
+401s, brute-force still 429s). Not pushed (human gate).
