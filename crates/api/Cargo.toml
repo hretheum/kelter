@@ -26,4 +26,4 @@ memory.workspace = true
 storage.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.29"
