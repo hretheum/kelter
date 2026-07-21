@@ -1,0 +1,23 @@
+docs/adr/0026-interactive-multi-turn-delegation.md
+  s_7ac77bc07b52a5::t_17fac96e89170b 53-65
+crates/storage/src/lib.rs
+  s_7ac77bc07b52a5::t_30d22de78716bd 569-608
+  s_7ac77bc07b52a5::t_7e9b8ce43caeff 213
+  s_7ac77bc07b52a5::t_22bb6b5d1bb97c 609-610
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "a82a46d974789b5639522172a3d4111423d652fd",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
