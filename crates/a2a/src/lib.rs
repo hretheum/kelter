@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -107,6 +108,20 @@ struct AgentCard {
     description: String,
     #[serde(rename = "supportedInterfaces")]
     supported_interfaces: Vec<AgentInterface>,
+    /// The remote's declared capabilities. Only `streaming` is read (ADR
+    /// 0027): a card that does not advertise it is dialed with plain
+    /// `SendMessage` + `GetTask` polling, exactly as before — the client
+    /// never sends `SendStreamingMessage` to an endpoint that did not
+    /// announce support, so streaming can never accidentally create a second
+    /// task on a non-streaming peer.
+    #[serde(default)]
+    capabilities: AgentCapabilities,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct AgentCapabilities {
+    #[serde(default)]
+    streaming: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -189,6 +204,11 @@ pub struct A2aClient {
     /// resolved (same `endpoint()` dial) — used by [`Self::verify`] so
     /// dynamic discovery (ADR 0023) never needs a second request.
     card_info: tokio::sync::OnceCell<(String, String)>,
+    /// Whether the resolved card advertised `capabilities.streaming` (ADR
+    /// 0027), captured on the SAME `endpoint()` dial. Gates the streaming
+    /// path so the client never sends `SendStreamingMessage` to a peer that
+    /// did not announce support.
+    card_streaming: tokio::sync::OnceCell<bool>,
 }
 
 /// Identifies these calls as originating from a Kelter A2A client, so an
@@ -231,6 +251,7 @@ impl A2aClient {
             token: agent.token.clone(),
             endpoint: tokio::sync::OnceCell::new(),
             card_info: tokio::sync::OnceCell::new(),
+            card_streaming: tokio::sync::OnceCell::new(),
         })
     }
 
@@ -298,10 +319,12 @@ impl A2aClient {
                 let _ = self
                     .card_info
                     .set((card.name.clone(), card.description.clone()));
+                let _ = self.card_streaming.set(card.capabilities.streaming);
                 tracing::info!(
                     agent = %self.agent,
                     card_name = %card.name,
                     endpoint = %interface.url,
+                    streaming = card.capabilities.streaming,
                     "a2a: card resolved (origin-pinned)"
                 );
                 Ok(interface.url.clone())
@@ -463,6 +486,68 @@ impl A2aClient {
             .await?;
         Ok(())
     }
+
+    /// Whether the resolved Agent Card advertised `capabilities.streaming`
+    /// (ADR 0027). Resolves the card first if it has not been (the same
+    /// origin-pinned dial `endpoint()` performs), so a caller can gate the
+    /// streaming path before ever sending a message.
+    pub async fn supports_streaming(&self) -> Result<bool, A2aError> {
+        self.endpoint().await?;
+        Ok(self.card_streaming.get().copied().unwrap_or(false))
+    }
+
+    /// Open a `SendStreamingMessage` request (ADR 0027) and return the raw
+    /// `text/event-stream` response for the caller to consume frame by frame.
+    /// Same message shape (and `lineage` metadata) as [`Self::send_message`],
+    /// with origin re-pinned exactly as `rpc` does. A generous per-request
+    /// timeout overrides the client's short default so a legitimately
+    /// long-running stream is not cut mid-flight — the caller still bounds the
+    /// whole consume with its own deadline.
+    pub async fn open_message_stream(
+        &self,
+        text: &str,
+        lineage: Option<(u32, &[String])>,
+    ) -> Result<reqwest::Response, A2aError> {
+        let endpoint = self.endpoint().await?.to_string();
+        let origin = origin_of(&endpoint).map_err(|e| A2aError::BadUrl(endpoint.clone(), e))?;
+        if origin != self.allowed_origin {
+            return Err(A2aError::SsrfViolation(
+                self.agent.clone(),
+                endpoint,
+                self.allowed_origin.clone(),
+            ));
+        }
+        let mut message = json!({
+            "messageId": uuid::Uuid::new_v4().to_string(),
+            "role": "ROLE_USER",
+            "parts": [{"text": text}],
+        });
+        if let Some((depth, ancestry)) = lineage {
+            message["metadata"] = json!({
+                "kelter_a2a_depth": depth,
+                "kelter_a2a_ancestry": ancestry,
+            });
+        }
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": uuid::Uuid::new_v4().to_string(),
+            "method": "SendStreamingMessage",
+            "params": { "message": message },
+        });
+        let resp = self
+            .with_headers(self.http.post(&endpoint))
+            .header("Accept", "text/event-stream")
+            .timeout(Duration::from_secs(600))
+            .json(&body)
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| A2aError::Http {
+                agent: self.agent.clone(),
+                source: e,
+            })?;
+        Ok(resp)
+    }
 }
 
 pub enum SendOutcome {
@@ -514,6 +599,12 @@ pub struct A2aActionSource {
     circuits: Mutex<HashMap<String, CircuitState>>,
     circuit_failure_threshold: u32,
     circuit_cooldown: Duration,
+    /// Whether to consume streamed progress (ADR 0027) for a fresh delegation
+    /// dial when the remote's card advertises `capabilities.streaming`. `true`
+    /// by default: it is safe (a non-streaming card silently falls back to the
+    /// unchanged `SendMessage` + `GetTask` poll path), and a mid-stream
+    /// transport failure also falls back to polling the already-created task.
+    streaming: bool,
 }
 
 impl A2aActionSource {
@@ -529,7 +620,16 @@ impl A2aActionSource {
             circuits: Mutex::new(HashMap::new()),
             circuit_failure_threshold: 3,
             circuit_cooldown: Duration::from_secs(60),
+            streaming: true,
         })
+    }
+
+    /// Toggle streamed-progress consumption (ADR 0027). Off restores the
+    /// pure `SendMessage` + `GetTask` polling behaviour for every dial,
+    /// regardless of what a card advertises.
+    pub fn with_streaming(mut self, streaming: bool) -> Self {
+        self.streaming = streaming;
+        self
     }
 
     /// Set the circuit-breaker's trip threshold + cooldown (ADR 0023
@@ -625,6 +725,269 @@ impl A2aActionSource {
             tokio::time::sleep(self.poll_interval).await;
         }
     }
+
+    /// A fresh streaming dial (ADR 0027): `SendStreamingMessage`, then consume
+    /// the `text/event-stream` reply. Each non-final update is recorded as
+    /// advisory progress (`ctx.record_progress`) — journaled AND surfaced live
+    /// on the timeline, but never a validated action. Returns the final `Task`
+    /// (terminal or `input-required`), exactly what `poll_to_terminal` returns,
+    /// so `execute`'s downstream handling is identical whether the dial
+    /// streamed or polled.
+    ///
+    /// Durability parity with the poll path: the moment the remote task id
+    /// first appears in the stream it is journaled (`NOTE_TASK_ID`) — the same
+    /// durability pivot the polling dial has — so a crash mid-stream, or a
+    /// mid-stream transport failure, resumes/falls back by POLLING the existing
+    /// task, never by re-dialing. Streaming is therefore strictly a
+    /// lower-latency-progress enhancement, never a durability regression.
+    async fn stream_to_terminal(
+        &self,
+        client: &A2aClient,
+        ctx: &ExecutionContext,
+        task_text: &str,
+        lineage: Option<(u32, &[String])>,
+        action_name: &str,
+    ) -> Result<Task, A2aError> {
+        let resp = client.open_message_stream(task_text, lineage).await?;
+        let mut stream = resp.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut task_id: Option<String> = None;
+        let mut last_state = String::from("TASK_STATE_SUBMITTED");
+        let deadline = tokio::time::Instant::now() + self.poll_timeout;
+
+        loop {
+            let chunk = match tokio::time::timeout_at(deadline, stream.next()).await {
+                Ok(Some(Ok(bytes))) => bytes,
+                // Transport error mid-stream, or the stream closed before a
+                // final frame, or our deadline elapsed: fall back to polling
+                // the already-created task (resilience). If we never even
+                // learned the task id, there is nothing to poll — surface it.
+                Ok(Some(Err(e))) => {
+                    return self
+                        .stream_fallback(
+                            client,
+                            &task_id,
+                            A2aError::Http {
+                                agent: client.agent.clone(),
+                                source: e,
+                            },
+                        )
+                        .await;
+                }
+                Ok(None) => {
+                    return self
+                        .stream_fallback(
+                            client,
+                            &task_id,
+                            A2aError::Protocol(
+                                client.agent.clone(),
+                                "stream ended before a terminal frame".into(),
+                            ),
+                        )
+                        .await;
+                }
+                Err(_) => {
+                    return self
+                        .stream_fallback(
+                            client,
+                            &task_id,
+                            A2aError::Protocol(
+                                client.agent.clone(),
+                                format!(
+                                    "stream did not reach terminal within {:?}",
+                                    self.poll_timeout
+                                ),
+                            ),
+                        )
+                        .await;
+                }
+            };
+            buf.extend_from_slice(&chunk);
+
+            while let Some(event) = split_sse_event(&mut buf) {
+                let Some(json) = parse_sse_data(&event) else {
+                    continue;
+                };
+                // Unwrap the JSON-RPC envelope if present; a bare result is
+                // also accepted (permissive on shape, strict on state below).
+                let result = json.get("result").cloned().unwrap_or(json);
+                let frame = extract_frame(&result);
+
+                // Governance parity with the poll path: an unknown task state
+                // is a protocol violation, never guessed about.
+                if let Some(state) = &frame.state {
+                    if !KNOWN_STATES.contains(&state.as_str()) {
+                        return Err(A2aError::Protocol(
+                            client.agent.clone(),
+                            format!("unknown task state '{state}' in stream"),
+                        ));
+                    }
+                    last_state = state.clone();
+                }
+
+                // Durability pivot: journal the task id the FIRST time it
+                // appears, before doing anything else with it.
+                if let Some(id) = &frame.task_id {
+                    if task_id.is_none() {
+                        task_id = Some(id.clone());
+                        ctx.record_note(NOTE_TASK_ID, json!(id))
+                            .await
+                            .map_err(|e| {
+                                A2aError::Protocol(
+                                    client.agent.clone(),
+                                    format!("cannot journal streamed task id: {e}"),
+                                )
+                            })?;
+                        tracing::info!(
+                            agent = %client.agent_name(),
+                            task_id = %id,
+                            "a2a: streamed remote task created and journaled"
+                        );
+                        crash_point("after_a2a_create", action_name);
+                    }
+                }
+
+                if frame.is_final {
+                    let id = task_id
+                        .clone()
+                        .or_else(|| frame.task_id.clone())
+                        .unwrap_or_default();
+                    let state = frame.state.clone().unwrap_or_else(|| last_state.clone());
+                    return Ok(Task {
+                        id,
+                        status: TaskStatus { state },
+                        artifacts: vec![Artifact {
+                            parts: vec![Part {
+                                text: Some(frame.text),
+                            }],
+                        }],
+                    });
+                }
+
+                // Intermediate progress: advisory only. Needs a known task id
+                // (the durability anchor); a progress frame that arrives before
+                // any task id is simply skipped rather than mis-attributed.
+                if let Some(id) = &task_id {
+                    let note = if frame.text.is_empty() {
+                        format!("remote task is {last_state}")
+                    } else {
+                        frame.text.clone()
+                    };
+                    ctx.record_progress(client.agent_name(), id, &last_state, &note)
+                        .await;
+                }
+            }
+        }
+    }
+
+    /// After a streamed dial is interrupted (ADR 0027), either poll the
+    /// already-created task to a terminal/stop state (resilience — the task
+    /// exists remotely regardless of our broken stream) or, if the stream
+    /// broke before we ever learned a task id, surface the original error.
+    async fn stream_fallback(
+        &self,
+        client: &A2aClient,
+        task_id: &Option<String>,
+        err: A2aError,
+    ) -> Result<Task, A2aError> {
+        match task_id {
+            Some(id) => {
+                tracing::warn!(
+                    agent = %client.agent_name(),
+                    task_id = %id,
+                    "a2a: stream interrupted ({err}) — falling back to GetTask polling"
+                );
+                self.poll_to_terminal(client, id).await
+            }
+            None => Err(err),
+        }
+    }
+}
+
+/// One decoded SSE update frame (ADR 0027), reduced to the fields the kernel
+/// acts on. Permissive across the A2A streaming shapes (a full task
+/// snapshot, a `TaskStatusUpdateEvent`, or a `TaskArtifactUpdateEvent`);
+/// state validation happens at the call site.
+struct StreamFrame {
+    task_id: Option<String>,
+    state: Option<String>,
+    text: String,
+    is_final: bool,
+}
+
+fn collect_parts(parts: &serde_json::Value, out: &mut Vec<String>) {
+    if let Some(arr) = parts.as_array() {
+        for p in arr {
+            if let Some(t) = p.get("text").and_then(|t| t.as_str()) {
+                out.push(t.to_string());
+            }
+        }
+    }
+}
+
+fn extract_frame(result: &serde_json::Value) -> StreamFrame {
+    let task_id = result
+        .get("id")
+        .or_else(|| result.get("taskId"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let state = result
+        .get("status")
+        .and_then(|s| s.get("state"))
+        .or_else(|| result.get("state"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let mut texts = Vec::new();
+    if let Some(parts) = result.get("artifact").and_then(|a| a.get("parts")) {
+        collect_parts(parts, &mut texts);
+    }
+    if let Some(arr) = result.get("artifacts").and_then(|a| a.as_array()) {
+        for a in arr {
+            if let Some(parts) = a.get("parts") {
+                collect_parts(parts, &mut texts);
+            }
+        }
+    }
+    let is_final = result
+        .get("final")
+        .and_then(|f| f.as_bool())
+        .unwrap_or(false)
+        || state
+            .as_deref()
+            .map(|s| is_terminal(s) || s == "TASK_STATE_INPUT_REQUIRED")
+            .unwrap_or(false);
+    StreamFrame {
+        task_id,
+        state,
+        text: texts.join("\n"),
+        is_final,
+    }
+}
+
+/// Split one complete SSE event (bytes up to the next `\n\n`) out of `buf`,
+/// consuming it and its separator. Returns `None` if no complete event is
+/// buffered yet.
+fn split_sse_event(buf: &mut Vec<u8>) -> Option<Vec<u8>> {
+    let pos = buf.windows(2).position(|w| w == b"\n\n")?;
+    let event: Vec<u8> = buf.drain(..pos).collect();
+    buf.drain(..2); // drop the "\n\n" separator
+    Some(event)
+}
+
+/// Concatenate the `data:` payload lines of one SSE event and JSON-parse
+/// them. `None` for a comment/keep-alive event or unparseable data.
+fn parse_sse_data(event: &[u8]) -> Option<serde_json::Value> {
+    let text = String::from_utf8_lossy(event);
+    let mut data = String::new();
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("data:") {
+            data.push_str(rest.trim_start());
+        }
+    }
+    if data.is_empty() {
+        return None;
+    }
+    serde_json::from_str(&data).ok()
 }
 
 #[async_trait]
@@ -741,6 +1104,17 @@ impl ActionSource for A2aActionSource {
                     );
                 }
                 self.poll_to_terminal(client, existing).await?
+            } else if self.streaming && client.supports_streaming().await.unwrap_or(false) {
+                // Streaming first dial (ADR 0027): `stream_to_terminal` journals
+                // NOTE_TASK_ID itself (durability pivot) and records advisory
+                // progress as it goes; it returns the final Task exactly like
+                // the poll path, so the outcome mapping below is unchanged.
+                tracing::info!(
+                    agent = %client.agent_name(),
+                    "a2a: dialing with SendStreamingMessage (card advertises streaming)"
+                );
+                self.stream_to_terminal(client, ctx, task_text, lineage, action.action())
+                    .await?
             } else {
                 match client.send_message(task_text, lineage).await? {
                     SendOutcome::Message(text) => {

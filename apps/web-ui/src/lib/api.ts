@@ -192,6 +192,19 @@ export type RunEvent =
       agent: string;
       principal: string;
       branch: string | null;
+    }
+  // Streamed progress from a running remote delegation (ADR 0027). Advisory
+  // observation only — never a validated action. Rides envelope `seq` 0
+  // (off the ordered stream); clients order/dedupe by `ordinal` within a step.
+  | {
+      type: "agent_delegation_progress";
+      step: number;
+      agent: string;
+      task_id: string;
+      state: string;
+      note: string;
+      ordinal: number;
+      branch: string | null;
     };
 
 export interface RunEventEnvelope {

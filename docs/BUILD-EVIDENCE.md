@@ -1650,5 +1650,51 @@ resolves it). Full A2A regression green (client/durability/governance/
 resilience, 26 tests). Full `cargo test --workspace` **exit 0, 49 suites, 0
 failures**; clippy + fmt clean.
 
+## Phase 19 — streamed remote-delegation progress (ADR 0027, P5 M4)
+
+A delegation whose remote advertises `capabilities.streaming` is now dialed
+with `SendStreamingMessage` and its SSE reply consumed frame by frame, so
+intermediate progress reaches the timeline live instead of a blind "waiting on
+remote agent…" spinner — while every kernel invariant holds.
+
+- **Advisory, never authorizing (ADR 0016 preserved).** Each non-final frame
+  is one `ExecutionContext::record_progress` call: it journals a durable note
+  (`a2a.progress.<ordinal>`) and emits an `AgentDelegationProgress` event —
+  nothing else. It never builds a `ValidatedAction`, never touches control
+  flow, never feeds the model. The real result still flows through the
+  identical terminal handling + validation floor.
+- **Capability-gated + opt-in.** Streaming fires only when
+  `A2aActionSource` streaming is on (`with_streaming`, default true; daemon
+  `[delegation] stream_progress`) AND the card advertises `streaming`. A
+  non-streaming card takes the unchanged `SendMessage` + `GetTask` path — so
+  the client never sends a streaming request to a peer that did not announce
+  it, and cannot create a duplicate task there.
+- **Strict durability enhancement.** The task id is journaled (`NOTE_TASK_ID`)
+  the instant it first appears in the stream (same pivot as the poll path); a
+  mid-stream transport failure / early-close / timeout **falls back to polling
+  the already-created task**, never re-dialing. Streaming can only add
+  latency-of-progress, never regress exactly-once delegation.
+- **Off the ordered stream (seq 0).** Progress rides envelope `seq` 0 with its
+  own per-`(run, step)` `ordinal`; the client applies it immediately, bypassing
+  the `seq <= lastSeq` gate and never advancing `lastSeq`. Ordered events are
+  untouched — no engine seq-counter surgery.
+- **Frontend.** StepCard renders an honest, indeterminate progress trail
+  (`↳ note · state`, newest pulses while running), reused verbatim by the
+  fan-out swimlanes so a plan A2A node's streamed lines land in its own lane
+  (branch = node id). Reconnect replay does not reconstruct progress (stored
+  as notes the replay path skips) — a disclosed best-effort-live limit.
+
+**Proof (`docs/evidence/agent-progress-streaming.log`):** 3 new tests
+(`crates/a2a/tests/delegation_streaming_test.rs`) against a real `Kernel` +
+a mock axum SSE server — (1) a streamed dial completes with the remote's
+terminal answer AND surfaces ≥2 advisory progress events live (seq 0,
+monotonic ordinals from 0) AND journals them durably as attributed notes; (2)
+a stream that drops before a final frame falls back to `GetTask` polling and
+still completes, with no re-dial; (3) `with_streaming(false)` forces the pure
+poll path on a streaming-capable card and emits no progress. Full A2A
+regression green (8 suites, 29 tests). Full `cargo test --workspace` **exit 0,
+50 suites, 209 tests, 0 failures**; clippy `No issues found`; fmt clean;
+web-ui `pnpm build` (tsc + vite) exit 0.
+
 **Still deferred:** remote-progress SSE streaming; the frontend; plan-mode
 interactive + multi-round continuation.

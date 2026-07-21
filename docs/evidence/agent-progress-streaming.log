@@ -1,0 +1,20 @@
+# Evidence — P5 M4: streamed remote-delegation progress (ADR 0027)
+# Generated 2026-07-21T08:56:15Z on be4698b (pre-commit working tree)
+
+## streaming test suite (mock axum SSE server, real Kernel step mode)
+running 3 tests
+test streamed_delegation_completes_and_surfaces_progress ... ok
+test with_streaming_false_forces_the_poll_path_on_a_streaming_card ... ok
+test streamed_delegation_falls_back_to_polling_when_stream_drops ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+## full a2a regression (8 suites)
+29 tests passed across the a2a crate, 0 failed
+
+## full workspace
+209 tests passed across the workspace, 0 failed
+
+## clippy (workspace, all targets)
+clippy: no issues found
+## fmt
+fmt: clean

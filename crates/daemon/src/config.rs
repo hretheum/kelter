@@ -158,6 +158,13 @@ pub struct DelegationConfig {
     /// `worker_a = ["worker_b", "worker_c"]`.
     #[serde(default)]
     pub fallback: std::collections::HashMap<String, Vec<String>>,
+    /// Consume streamed progress from a running delegation (ADR 0027) when
+    /// the remote agent's card advertises `capabilities.streaming`. `true`
+    /// by default and safe to leave on: a non-streaming remote transparently
+    /// falls back to the unchanged `SendMessage` + `GetTask` polling, and a
+    /// mid-stream failure falls back to polling the already-created task.
+    /// Set `false` to force polling for every dial.
+    pub stream_progress: bool,
 }
 
 impl Default for DelegationConfig {
@@ -173,6 +180,7 @@ impl Default for DelegationConfig {
             circuit_failure_threshold: 3,
             circuit_cooldown_secs: 60,
             fallback: std::collections::HashMap::new(),
+            stream_progress: true,
         }
     }
 }

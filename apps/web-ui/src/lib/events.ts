@@ -29,6 +29,11 @@ export interface AxisStep {
   rationale: string | null;
   rejections: { reason: string; attempt: number }[];
   executed: { ok: boolean; result: unknown } | null;
+  /* Streamed remote-delegation progress (ADR 0027): advisory intermediate
+   * updates from a running A2A step, ordered by `ordinal`. Live-only — the
+   * journal stores these as notes the replay path does not render, so a
+   * reconnect may show fewer lines (disclosed best-effort, design/08). */
+  progress: { ordinal: number; state: string; note: string; agent: string }[];
   /* Plan node id for a parallel-plan-fanout node (P1, ADR 0022); `null` for
    * an ordinary step-mode step — today's single-lane behavior, unchanged. */
   branch: string | null;
@@ -96,6 +101,7 @@ function stepOf(axis: AxisState, step: number): AxisStep {
       rationale: null,
       rejections: [],
       executed: null,
+      progress: [],
       branch: null,
       receivedAt: Date.now(),
     };
@@ -195,6 +201,22 @@ export function applyEvent(axis: AxisState, ev: RunEvent): void {
         axis.pendingDelegationInput = null;
       }
       break;
+    case "agent_delegation_progress": {
+      const s = stepOf(axis, ev.step);
+      if (ev.branch) s.branch = ev.branch;
+      // Dedupe by ordinal (replay + live, or a duplicated broadcast, can
+      // deliver the same update twice); keep ordered for rendering.
+      if (!s.progress.some((p) => p.ordinal === ev.ordinal)) {
+        s.progress.push({
+          ordinal: ev.ordinal,
+          state: ev.state,
+          note: ev.note,
+          agent: ev.agent,
+        });
+        s.progress.sort((a, b) => a.ordinal - b.ordinal);
+      }
+      break;
+    }
   }
 }
 
@@ -359,6 +381,17 @@ export function onAnyEvent(l: (env: RunEventEnvelope) => void): () => void {
 /* Feed a live WS envelope: bucket by run_id, order by seq, fold, notify. */
 export function ingestEnvelope(env: RunEventEnvelope): void {
   const axis = axisFor(env.run_id);
+  // Streamed delegation progress (ADR 0027) rides seq 0 — it is advisory and
+  // OFF the ordered stream, so it must bypass the seq gate below (which would
+  // otherwise drop every progress event once real events have advanced
+  // lastSeq) and must NOT advance lastSeq itself. applyEvent dedupes by
+  // ordinal, so re-delivery is harmless.
+  if (env.event.type === "agent_delegation_progress") {
+    applyEvent(axis, env.event);
+    notify(env.run_id);
+    globalListeners.forEach((l) => l(env));
+    return;
+  }
   const queue = pending.get(env.run_id) ?? [];
   queue.push(env);
   queue.sort((a, b) => a.seq - b.seq);

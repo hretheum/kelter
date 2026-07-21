@@ -2,6 +2,7 @@
 //! persistence and error handling. The model is consulted at explicit
 //! decision points and never executes anything itself.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -43,6 +44,26 @@ pub struct ExecutionContext {
     store: Arc<dyn RunStore>,
     notes: std::collections::HashMap<String, serde_json::Value>,
     agent_usage: std::sync::Mutex<Vec<(String, u64)>>,
+    /// Live progress channel (ADR 0027), attached by the engine only for
+    /// delegation dispatch sites. `None` for tests, the WASM host, and any
+    /// non-delegation execution — a source that emits progress into a
+    /// context without one still journals it durably (see
+    /// [`Self::record_progress`]); only the live event is skipped.
+    progress: Option<ProgressSink>,
+}
+
+/// The live half of streamed delegation progress (ADR 0027): where an
+/// [`ExecutionContext::record_progress`] call publishes its advisory
+/// `AgentDelegationProgress` event. Carries a per-context monotonic
+/// `ordinal` so successive progress lines for one step order and dedupe on
+/// the client independently of the ordered event `seq`.
+#[derive(Clone)]
+struct ProgressSink {
+    events: broadcast::Sender<RunEventEnvelope>,
+    run_id: Uuid,
+    step: u32,
+    branch: Option<String>,
+    ordinal: Arc<AtomicU64>,
 }
 
 impl ExecutionContext {
@@ -61,6 +82,75 @@ impl ExecutionContext {
             store,
             notes,
             agent_usage: std::sync::Mutex::new(Vec::new()),
+            progress: None,
+        }
+    }
+
+    /// Attach a live progress channel (ADR 0027) so [`Self::record_progress`]
+    /// also publishes an advisory `AgentDelegationProgress` event, not just a
+    /// journal note. The engine calls this only for delegation dispatch; a
+    /// context without it still journals progress durably.
+    fn with_progress(
+        mut self,
+        events: broadcast::Sender<RunEventEnvelope>,
+        branch: Option<String>,
+    ) -> Self {
+        self.progress = Some(ProgressSink {
+            events,
+            run_id: self.run_id,
+            step: self.step,
+            branch,
+            ordinal: Arc::new(AtomicU64::new(0)),
+        });
+        self
+    }
+
+    /// Record one intermediate progress observation from a streaming remote
+    /// delegation (ADR 0027). ALWAYS journals a durable side-note (so the
+    /// progress survives in the audit trail); ADDITIONALLY publishes a live
+    /// `AgentDelegationProgress` event when a progress sink is attached.
+    ///
+    /// Advisory by construction: this never validates, authorizes, or alters
+    /// the run's control flow — a hostile remote streaming garbage can only
+    /// add notes/timeline lines, never influence what the kernel executes.
+    /// Best-effort: a journal failure is logged and swallowed, never
+    /// propagated, so a flaky store cannot fail an otherwise-fine delegation
+    /// over an advisory note.
+    pub async fn record_progress(&self, agent: &str, task_id: &str, state: &str, note: &str) {
+        let ordinal = match &self.progress {
+            Some(p) => p.ordinal.fetch_add(1, Ordering::Relaxed),
+            None => 0,
+        };
+        if let Err(e) = self
+            .record_note(
+                &format!("a2a.progress.{ordinal}"),
+                serde_json::json!({
+                    "agent": agent,
+                    "task_id": task_id,
+                    "state": state,
+                    "note": note,
+                }),
+            )
+            .await
+        {
+            tracing::warn!(%agent, %task_id, "a2a: could not journal progress note: {e}");
+        }
+        if let Some(p) = &self.progress {
+            // seq 0: progress is OFF the ordered stream (advisory, best-effort
+            // live) — clients order it by `ordinal`, not `seq`.
+            let _ = p.events.send(RunEventEnvelope {
+                run_id: p.run_id,
+                seq: 0,
+                event: RunEvent::AgentDelegationProgress {
+                    step: p.step,
+                    agent: agent.to_string(),
+                    task_id: task_id.to_string(),
+                    state: state.to_string(),
+                    note: note.to_string(),
+                    ordinal,
+                    branch: p.branch.clone(),
+                },
+            });
         }
     }
 
@@ -507,6 +597,25 @@ pub enum RunEvent {
         step: u32,
         agent: String,
         principal: String,
+        branch: Option<String>,
+    },
+    /// Intermediate progress streamed from a running remote delegation (ADR
+    /// 0027): a status transition or partial artifact the remote agent
+    /// emitted over SSE (`SendStreamingMessage`) while still WORKING. Purely
+    /// ADVISORY observation — it is journaled as a side-note and shown on the
+    /// timeline, but it is NEVER a validated action and NEVER authorizes
+    /// anything; the delegation's real result still flows through the same
+    /// terminal-state handling and validation floor. `ordinal` is monotonic
+    /// within one `(run, step)` so a client can order/dedupe progress lines
+    /// independently of the ordered event `seq` (progress rides seq 0, off
+    /// the ordered stream, since it is advisory and best-effort-live).
+    AgentDelegationProgress {
+        step: u32,
+        agent: String,
+        task_id: String,
+        state: String,
+        note: String,
+        ordinal: u64,
         branch: Option<String>,
     },
 }
@@ -1594,7 +1703,11 @@ impl Kernel {
             step_index,
             self.store.clone(),
             std::collections::HashMap::new(),
-        );
+        )
+        // Streamed progress (ADR 0027) for kernel-initiated retries/fallbacks
+        // too — a retry dial streams just like the first one (step mode: no
+        // plan branch).
+        .with_progress(self.events.clone(), None);
         let outcome = self.tools.execute(&exec_action, &exec_ctx).await;
         let attributions = exec_ctx.agent_usage.into_inner().unwrap_or_default();
         match outcome {
@@ -2582,7 +2695,12 @@ impl Kernel {
                     step_index,
                     self.store.clone(),
                     folded.notes.clone(),
-                );
+                )
+                // Streamed delegation progress (ADR 0027): attach the live
+                // channel so an A2A source can publish intermediate progress
+                // as it streams. Harmless for a non-A2A action — those never
+                // call `record_progress`. Step mode has no plan branch.
+                .with_progress(self.events.clone(), None);
                 let tool_span = tracing::info_span!(
                     parent: &step_span,
                     "kelter.tool_call",
@@ -3313,6 +3431,7 @@ impl Kernel {
                     self.store.clone(),
                     self.tools.clone(),
                     self.oracle.clone(),
+                    self.events.clone(),
                 ));
                 in_flight.push(handle);
             }
@@ -3528,6 +3647,7 @@ async fn dispatch_plan_node_execution(
     store: Arc<dyn RunStore>,
     tools: Arc<dyn ActionSource>,
     oracle: Arc<dyn PolicyOracle>,
+    events: broadcast::Sender<RunEventEnvelope>,
 ) -> Result<PlanNodeOutcome, KernelError> {
     // Build the node's validated action. Every node — tool, a2a, review —
     // goes through kernel-side schema validation (governance is NOT
@@ -3679,7 +3799,11 @@ async fn dispatch_plan_node_execution(
         }
     }
 
-    let exec_ctx = ExecutionContext::new(run_id, step, store.clone(), folded.notes.clone());
+    // Streamed delegation progress (ADR 0027): a plan A2A node streams under
+    // its own plan branch (`node.id`), so a client can lane the progress into
+    // the right fan-out swimlane.
+    let exec_ctx = ExecutionContext::new(run_id, step, store.clone(), folded.notes.clone())
+        .with_progress(events, Some(node.id.clone()));
     let (result, ok) = match tools.execute(&exec_action, &exec_ctx).await {
         Ok(v) => (v, true),
         Err(e) => (serde_json::json!({ "error": e.to_string() }), false),

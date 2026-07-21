@@ -668,7 +668,8 @@ async fn main() -> anyhow::Result<()> {
             .with_circuit_breaker(
                 cfg.delegation.circuit_failure_threshold,
                 std::time::Duration::from_secs(cfg.delegation.circuit_cooldown_secs),
-            ),
+            )
+            .with_streaming(cfg.delegation.stream_progress),
     );
     sources.push(a2a_source.clone());
     let action_source: Arc<dyn kernel_core::ActionSource> = match sources.len() {

@@ -35,6 +35,14 @@ function errorOf(result: unknown): string | null {
   return null;
 }
 
+/* Humanize an A2A task state ("TASK_STATE_WORKING" → "working") for the
+ * streamed-progress trail (ADR 0027). Unknown/blank falls back to the raw
+ * value rather than fabricating a friendlier label. */
+function humanState(state: string): string {
+  const s = state.replace(/^TASK_STATE_/, "").toLowerCase();
+  return s || state;
+}
+
 export function StepCard({
   step,
   settled,
@@ -128,6 +136,34 @@ export function StepCard({
         <p className="mt-1 rounded-sm bg-danger/10 px-2 py-1 text-caption text-danger">
           Ran, but failed: {errorMsg}
         </p>
+      )}
+
+      {/* Streamed remote-delegation progress (ADR 0027): an advisory trail of
+          intermediate updates the remote agent emitted while working. Shown
+          as an honest, indeterminate trace — never a progress percentage or
+          fabricated step count. Kept visible after the step settles as part
+          of the audit trail; the newest line pulses only while still
+          running. */}
+      {step.progress.length > 0 && (
+        <ol className="mt-1.5 space-y-0.5 border-l border-border/70 pl-2.5">
+          {step.progress.map((p, i) => {
+            const isLatest = i === step.progress.length - 1;
+            const live = isLatest && !step.executed;
+            return (
+              <li
+                key={p.ordinal}
+                className={cn(
+                  "text-caption2 text-muted-foreground",
+                  live && "animate-pulse-live text-ev-proposed"
+                )}
+              >
+                <span aria-hidden="true">↳ </span>
+                {p.note}
+                <span className="text-muted-foreground/70"> · {humanState(p.state)}</span>
+              </li>
+            );
+          })}
+        </ol>
       )}
 
       {step.rationale && (
