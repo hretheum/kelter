@@ -1,0 +1,19 @@
+deploy/kelter.container
+  s_7ac77bc07b52a5::t_b24a0a5d24862b 31-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ac6deb2712a41a3838c4d0cfcda7c6fc9fd7013a",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
