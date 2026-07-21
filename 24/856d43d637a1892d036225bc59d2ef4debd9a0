@@ -1,0 +1,29 @@
+crates/a2a/tests/delegation_streaming_test.rs
+  s_7ac77bc07b52a5::t_14303514720cea 25
+  s_7ac77bc07b52a5::t_442b3aa9a2ab17 47-52
+  s_7ac77bc07b52a5::t_1961689754e01b 92
+  s_7ac77bc07b52a5::t_653c100eaf9d7e 135-153
+  s_7ac77bc07b52a5::t_bda5b52d4204d9 417-421,432-438
+  s_7ac77bc07b52a5::t_a888369ae93f5a 413-416,422-431,439-467
+  s_7ac77bc07b52a5::t_3173145e7f37f2 91,93
+crates/a2a/src/lib.rs
+  s_7ac77bc07b52a5::t_74ffab289a24af 49-57
+  s_7ac77bc07b52a5::t_cb818fee94d7ed 889-896,898-911
+  s_7ac77bc07b52a5::t_cfb6442702cb4d 897
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "24856d43d637a1892d036225bc59d2ef4debd9a0",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
