@@ -1,0 +1,28 @@
+crates/a2a/src/lib.rs
+  s_7ac77bc07b52a5::t_8ab9322ad3f6f4 48-60
+  s_7ac77bc07b52a5::t_0009890ffb937d 1183-1200
+  s_7ac77bc07b52a5::t_dc052f2fbd0f39 1115-1120,1122-1131
+  s_7ac77bc07b52a5::t_e7b7e40e6723cf 1121
+crates/a2a/tests/a2a_client_test.rs
+  s_7ac77bc07b52a5::t_8275189401e56f 371-464
+  s_7ac77bc07b52a5::t_b49d6455e27607 29-31
+  s_7ac77bc07b52a5::t_90de0f332779ab 67-72
+crates/kernel-core/src/engine.rs
+  s_7ac77bc07b52a5::t_3ceac7d3e07d97 2667-2674,2676
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "bbba250159fd07f9294e099d23d6279c029f06b1",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
