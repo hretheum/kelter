@@ -428,7 +428,11 @@ mod tests {
             .expect_err("off-allowlist base_url must be refused");
         assert!(err.contains("allowlist"), "{err}");
         // No side effect: the configured base_url is unchanged.
-        assert_eq!(c.get().await.base_url, before, "config must not have changed");
+        assert_eq!(
+            c.get().await.base_url,
+            before,
+            "config must not have changed"
+        );
     }
 
     #[tokio::test]
