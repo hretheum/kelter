@@ -58,6 +58,18 @@ struct Cache {
 pub struct AgentRegistry {
     path: PathBuf,
     cache: Mutex<Cache>,
+    /// Serializes every read-modify-write file mutation (audit finding
+    /// 8-b/#15). The `cache` Mutex only guards the in-memory read cache — it
+    /// does NOT cover the read→mutate→write of the TOML file. Without this
+    /// gate, two concurrent operator mutations (`register`/`set_trust`/
+    /// `remove`) could each read the same file, mutate their own copy, and
+    /// have the second write clobber the first (a silently lost update), or
+    /// two `register`s of the same name could both pass the collision check
+    /// and both persist a duplicate (TOCTOU). Every mutation holds this across
+    /// its whole read→mutate→write and re-checks invariants (name collision)
+    /// against a FRESH read taken inside the lock. Never held across an
+    /// `.await` (the async `register` dials the network BEFORE acquiring it).
+    write_gate: Mutex<()>,
 }
 
 fn now_secs() -> u64 {
@@ -85,32 +97,53 @@ impl AgentRegistry {
                 agents: Vec::new(),
                 stamp: None,
             }),
+            write_gate: Mutex::new(()),
         };
         reg.seed_from_config(configured)?;
         Ok(reg)
     }
 
-    fn seed_from_config(&self, configured: &[RemoteAgent]) -> Result<(), A2aError> {
+    /// Run a mutation under the write gate (audit 8-b/#15): lock, read FRESH,
+    /// let `f` mutate the copy (returning `Ok(false)` to skip the write when
+    /// nothing changed — avoids a needless mtime bump that would invalidate
+    /// the read cache), then write + invalidate the cache. Synchronous by
+    /// design: the `std::sync::Mutex` guard must never be held across an
+    /// `.await`.
+    fn with_write(
+        &self,
+        f: impl FnOnce(&mut StoredAgents) -> Result<bool, A2aError>,
+    ) -> Result<(), A2aError> {
+        let _guard = self.write_gate.lock().unwrap();
         let mut stored = self.read()?;
-        let mut changed = false;
-        for agent in configured {
-            if !stored.agents.iter().any(|m| m.name == agent.name) {
-                stored.agents.push(AgentManifest {
-                    name: agent.name.clone(),
-                    card_url: agent.card_url.clone(),
-                    description: String::new(),
-                    token_env: None,
-                    trust: "trusted".into(),
-                    source_kind: "config".into(),
-                    source: agent.card_url.clone(),
-                    registered_at: now_secs(),
-                });
-                changed = true;
-            }
-        }
-        if changed {
+        if f(&mut stored)? {
             self.write(&stored)?;
+            self.touch();
         }
+        Ok(())
+    }
+
+    fn seed_from_config(&self, configured: &[RemoteAgent]) -> Result<(), A2aError> {
+        self.with_write(|stored| {
+            let mut changed = false;
+            for agent in configured {
+                if !stored.agents.iter().any(|m| m.name == agent.name) {
+                    stored.agents.push(AgentManifest {
+                        name: agent.name.clone(),
+                        card_url: agent.card_url.clone(),
+                        description: String::new(),
+                        token_env: None,
+                        trust: "trusted".into(),
+                        source_kind: "config".into(),
+                        source: agent.card_url.clone(),
+                        registered_at: now_secs(),
+                    });
+                    changed = true;
+                }
+            }
+            Ok(changed)
+        })?;
+        // Ensure the cache re-reads even when nothing was written (first open
+        // of an existing file): the old code always `touch()`ed here.
         self.touch();
         Ok(())
     }
@@ -181,6 +214,8 @@ impl AgentRegistry {
             token,
         };
         let client = A2aClient::new(&probe)?;
+        // The network dial happens BEFORE the write gate is taken — the gate
+        // is a std Mutex and must not be held across this `.await`.
         let (name, description) = client.verify().await?;
         if name.trim().is_empty() {
             return Err(A2aError::Protocol(
@@ -188,12 +223,9 @@ impl AgentRegistry {
                 "agent card declares no name".into(),
             ));
         }
-        if self.list().iter().any(|m| m.name == name) {
-            return Err(A2aError::AlreadyRegistered(name));
-        }
 
         let manifest = AgentManifest {
-            name,
+            name: name.clone(),
             card_url: card_url.to_string(),
             description,
             token_env: token_env.map(String::from),
@@ -202,10 +234,23 @@ impl AgentRegistry {
             source: card_url.to_string(),
             registered_at: now_secs(),
         };
-        let mut stored = self.read()?;
-        stored.agents.push(manifest.clone());
-        self.write(&stored)?;
-        self.touch();
+        // Collision re-check + push happen atomically under the write gate,
+        // against a FRESH read (not the possibly-stale cache) — so two
+        // concurrent registrations of the same name cannot both slip past the
+        // check and persist a duplicate (audit 8-b/#15).
+        let to_store = manifest.clone();
+        let mut collided = false;
+        self.with_write(|stored| {
+            if stored.agents.iter().any(|m| m.name == to_store.name) {
+                collided = true;
+                return Ok(false);
+            }
+            stored.agents.push(to_store);
+            Ok(true)
+        })?;
+        if collided {
+            return Err(A2aError::AlreadyRegistered(name));
+        }
         Ok(manifest)
     }
 
@@ -215,15 +260,22 @@ impl AgentRegistry {
     /// decision reaches this — never model-initiated, never a self-claim
     /// from the agent being trusted.
     pub fn set_trust(&self, name: &str, trust: &str) -> Result<(), A2aError> {
-        let mut stored = self.read()?;
-        let entry = stored
-            .agents
-            .iter_mut()
-            .find(|m| m.name == name)
-            .ok_or_else(|| A2aError::NotFound(name.to_string()))?;
-        entry.trust = trust.to_string();
-        self.write(&stored)?;
-        self.touch();
+        let mut not_found = false;
+        self.with_write(
+            |stored| match stored.agents.iter_mut().find(|m| m.name == name) {
+                Some(entry) => {
+                    entry.trust = trust.to_string();
+                    Ok(true)
+                }
+                None => {
+                    not_found = true;
+                    Ok(false)
+                }
+            },
+        )?;
+        if not_found {
+            return Err(A2aError::NotFound(name.to_string()));
+        }
         Ok(())
     }
 
@@ -232,14 +284,19 @@ impl AgentRegistry {
     }
 
     pub fn remove(&self, name: &str) -> Result<(), A2aError> {
-        let mut stored = self.read()?;
-        let before = stored.agents.len();
-        stored.agents.retain(|m| m.name != name);
-        if stored.agents.len() == before {
+        let mut not_found = false;
+        self.with_write(|stored| {
+            let before = stored.agents.len();
+            stored.agents.retain(|m| m.name != name);
+            if stored.agents.len() == before {
+                not_found = true;
+                return Ok(false);
+            }
+            Ok(true)
+        })?;
+        if not_found {
             return Err(A2aError::NotFound(name.to_string()));
         }
-        self.write(&stored)?;
-        self.touch();
         Ok(())
     }
 
@@ -248,5 +305,101 @@ impl AgentRegistry {
     /// kernel-core only ever sees action names, never agent display names.
     pub fn manifest_for_action(&self, action: &str) -> Option<AgentManifest> {
         self.with_fresh(|a| a.iter().find(|m| action_name(&m.name) == action).cloned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    fn tmp_path() -> PathBuf {
+        static N: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "kelter-registry-test-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("agents.toml")
+    }
+
+    fn agent(name: &str) -> RemoteAgent {
+        RemoteAgent {
+            name: name.into(),
+            card_url: format!("http://127.0.0.1:9/{name}"),
+            token: None,
+        }
+    }
+
+    /// Regression test for audit finding 8-b/#15: concurrent `set_trust` calls
+    /// on DISTINCT agents must ALL persist. Before the write gate, each call
+    /// did an independent read→mutate→write, so concurrent writers clobbered
+    /// each other (last-writer-wins) and all-but-one update was silently lost.
+    #[test]
+    fn concurrent_set_trust_on_distinct_agents_never_loses_an_update() {
+        const N: usize = 12;
+        let names: Vec<String> = (0..N).map(|i| format!("agent{i}")).collect();
+        let configured: Vec<RemoteAgent> = names.iter().map(|n| agent(n)).collect();
+        let reg = Arc::new(AgentRegistry::open(tmp_path(), &configured).unwrap());
+        // All start "trusted" (config-seeded).
+        assert!(reg.list().iter().all(|m| m.trust == "trusted"));
+
+        let mut handles = Vec::new();
+        for n in &names {
+            let reg = reg.clone();
+            let n = n.clone();
+            handles.push(std::thread::spawn(move || {
+                reg.set_trust(&n, "untrusted").unwrap();
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Every single flip must have survived — no lost update.
+        let list = reg.list();
+        assert_eq!(list.len(), N, "no agent lost/duplicated");
+        for n in &names {
+            let m = list.iter().find(|m| &m.name == n).expect("agent present");
+            assert_eq!(m.trust, "untrusted", "agent {n} lost its trust update");
+        }
+    }
+
+    /// Concurrent `remove` of distinct agents must also all land (same TOCTOU
+    /// class): the file must end with exactly the agents that were NOT removed.
+    #[test]
+    fn concurrent_remove_of_distinct_agents_all_land() {
+        const N: usize = 10;
+        let names: Vec<String> = (0..N).map(|i| format!("r{i}")).collect();
+        let configured: Vec<RemoteAgent> = names.iter().map(|n| agent(n)).collect();
+        let reg = Arc::new(AgentRegistry::open(tmp_path(), &configured).unwrap());
+
+        // Remove the even-indexed agents concurrently.
+        let mut handles = Vec::new();
+        for i in (0..N).step_by(2) {
+            let reg = reg.clone();
+            let n = names[i].clone();
+            handles.push(std::thread::spawn(move || reg.remove(&n).unwrap()));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let list = reg.list();
+        assert_eq!(list.len(), N / 2, "exactly the odd-indexed agents remain");
+        for i in (1..N).step_by(2) {
+            assert!(
+                list.iter().any(|m| m.name == names[i]),
+                "kept agent missing"
+            );
+        }
+        for i in (0..N).step_by(2) {
+            assert!(
+                !list.iter().any(|m| m.name == names[i]),
+                "removed agent still present"
+            );
+        }
     }
 }
