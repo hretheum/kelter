@@ -1,4 +1,4 @@
-<!-- provenance: ai_authored | agent: claude-opus-4-8 | session_date: 2026-07-18 | human_validated: false | context: roadmap + Phase 4 suggestions -->
+<!-- provenance: ai_authored | agent: claude-opus-4-8 | session_date: 2026-07-20 | human_validated: false | context: roadmap current through Phase 15 (multi-agent trust/resilience, ADR 0023) + parked follow-ups -->
 
 # Kelter roadmap
 
@@ -46,16 +46,25 @@ swappable policy engine, and it stays reliable even on small local models.
   (extracted to `crates/model-config`), so the model config surface works
   end-to-end there too (no more 501); the web UI degrades to read-only when a
   deployment returns 501.
-- **Phase 9 — data-lifecycle & log hardening.** Store retention/pruning (the
-  unbounded-SQLite gap), a deployment-level log-size cap (Quadlet), and a
-  secrets-in-logs redaction pass. In progress.
+- **Phase 9 — data-lifecycle & log hardening (ADR 0017).** Store
+  retention/pruning (the unbounded-SQLite gap): `RetentionPolicy` +
+  `RunStore::prune` removes only terminal (completed/failed/canceled) aged /
+  over-count runs — journal + episodes + row in one transaction; in-flight and
+  paused runs are never candidates, by construction. `[retention]` config
+  (`prune_on_start` default on, `max_runs` default 10 000, `max_age_days`;
+  0 → noop, disable-able). A deployment log-size cap (Quadlet `LogOpt=max-size`
+  + `max-file`, ≤30 MB rotation; journald alternative documented). A
+  secrets-in-logs redaction pass (`scrub_secrets` at the logging boundary,
+  capture-tested, extending ADR 0015). Done (on `origin/main`).
 - **Phase 10 — governed self-learning (D).** The runtime distils reusable
   facts from past runs into memory — provenance-tagged, completely reversible,
   and entering only as validated context, so a learned (even poisoned) fact can
   never trigger an unvalidated action (ADR 0016). Done.
-- **Phase 11 — security hardening.** Bearer-gate/allowlist the config
-  connection-test, WebSocket auth, per-caller principals, and opt-in TLS
-  (tailnet stays the default transport). Queued.
+- **Phase 11 — security hardening (ADR 0018).** SSRF fix, per-caller
+  principals (named bearer tokens → principal identities, attributed per run —
+  additive: one token stays principal `default`, no behaviour change),
+  WebSocket-channel auth, and opt-in TLS termination (tailnet stays the default
+  transport). Done (on `origin/main`).
 - **Web-UI redesign.** Full IA + UX respec (`apps/web-ui/design/`, both human
   gates passed) and its implementation: the vanilla web UI replaced by a React
   19 + Tailwind v4 + shadcn-style app (Vite → RustEmbed, same single artifact
@@ -130,6 +139,38 @@ swappable policy engine, and it stays reliable even on small local models.
   never re-delegates) proven against real SQLite + two real mock A2A HTTP
   servers, not just reasoned about. 9 new tests, 0 regressions
   (172 → 181). Done.
+- **Phase 15 — agent trust/policy/ask + governed resilience (ADR 0023).**
+  Extends the ADR 0020/0021 skill trust/policy/ask machinery to A2A
+  delegation itself — a new `AgentRegistry` + `DelegationGate` seam gates
+  `delegate_to_*` proposals on the target agent's TRUST, with the same
+  three-way `Allow`/`Deny`/`AskHuman` outcome and durable pause mechanism,
+  mirrored rather than reused since delegation is a real capability gate
+  (dials a remote endpoint) where skill activation was advisory-only. A
+  config-declared agent starts trusted (an operator's own act, non-breaking
+  for existing deployments); a dynamically-discovered agent (registered by
+  card URL over `/api/v1/agents`) always starts untrusted, SSRF-pinned at
+  registration via the same origin-pinning real delegation already
+  enforces. Ships with governed resilience — bounded retry, sanctioned-only
+  fallback (`[delegation.fallback]`, never auto-discovered), and a
+  per-agent circuit-breaker — none of which may bypass the existing P2
+  budget/depth/cycle check (proven: a budget of 3 against an always-failing
+  agent with 5 retries configured produces exactly 3 dials, never a 4th).
+  Circuit-open on the primary skips straight to fallback (agent-scoped);
+  a budget/depth/cycle refusal aborts the whole retry/fallback loop
+  (run-scoped) — proven as two distinct behaviors in one test. Plan-mode
+  retry/fallback and its `AskHuman` pause are explicitly out of scope this
+  round (disclosed, not silent) — the concurrent admission loop's
+  single-writer budget counter would need to become cross-task-shareable
+  first; plan mode still gets the trust gate and circuit-breaker check at
+  its existing admission point. 9 new tests (all against real mock A2A
+  servers + a real `Kernel`), 0 regressions in every crate this round
+  touched (133/133 passing); a genuine bug (a discarded failure reason
+  under a specific retry/fallback no-op path) was caught by the round's own
+  test-writing, root-caused, and fixed. Full-workspace `cargo test
+  --workspace` could not be completed as a single clean run this session
+  due to sustained shared-machine resource contention (disclosed honestly
+  in the evidence log, not papered over) — every crate touched compiles
+  and tests clean individually and in combination. Done.
 
 ## Phase 4 — the governed extension platform (delivered)
 
@@ -219,7 +260,7 @@ will be built. In rough priority.
   agents (and plans) via Agent Cards so other systems can delegate to Kelter
   and inherit its governance and durability. Completes the A2A story, out and
   in; more completeness than new wedge.
-- **C · Hardening and real deployment** — *shipped as Phase 8 (ADR 0014); the store-retention / log-size / redaction slice is Phase 9 (in progress).* Close the accumulated honest deferrals
+- **C · Hardening and real deployment** — *shipped as Phase 8 (ADR 0014); the store-retention / log-size / redaction slice is Phase 9 (done, ADR 0017).* Close the accumulated honest deferrals
   — desktop on the durable store, cost in dollars, OpenTelemetry metrics and
   logs, the embeddings retrieval switch, ledger-dedupe scaling, auth — plus
   packaging (above) and deployment on real rootless-podman hardware. Necessary
@@ -243,16 +284,41 @@ Dockerfile.
 Items intentionally left for later, triaged by who should build them. None
 block a launch; the core is complete.
 
-- **Security hardening (Phase 11, next).** Bearer-gate / host-allowlist the
-  config connection-test (a low-risk unauthenticated outbound probe today),
-  WebSocket-channel auth, per-caller principals with per-run attribution, and
-  opt-in TLS termination (tailnet stays the default transport). mTLS, OAuth/OIDC
-  and OS-level subprocess containment are deferred further.
+- **Security hardening — further (core shipped as Phase 11, ADR 0018).** The
+  Phase 11 slice (SSRF fix, per-caller principals with per-run attribution,
+  WebSocket-channel auth, opt-in TLS termination — tailnet stays the default
+  transport) is done. Still deferred: mTLS, OAuth/OIDC, and OS-level subprocess
+  containment.
 - **Correctness-sensitive extensions.** Adaptive re-planning (a re-plan must
   stay validated + durable), plan distillation (the second self-learning slice —
   a learned plan re-validated like any plan, reversible per ADR 0016), and WASM
   for the memory / agent / policy capabilities plus the component model and a
   real network host-fn.
+- **Governed shared-memory backend (Postgres + pgvector) — being built.** A
+  concurrent-safe shared memory backend behind the existing memory seam (ADR
+  0005/0008/0024), so two independent kernels (desktop + a server) can share
+  memory + learned facts — with Kelter's governance intact (provenance-tagged,
+  completely reversible, learned-as-validated-context, re-proven on the shared
+  store). A dumb store Kelter controls, deliberately NOT an opaque "smart
+  memory" service (no Hindsight-style belief-formation, which would break the
+  reversible/governed thesis). Opt-in; local SQLite stays the default; enables
+  the two-independent-kernels sharing path (thin-client sharing already works
+  via ADR 0004).
+- **Plan-mode delegation ask + resilience (deferred from ADR 0023).** In plan
+  mode the delegation `AskHuman` outcome currently degrades to a refusal — safe
+  (the trust gate is never bypassed, only the interactive deny/allow-once/
+  allow-always pause is absent), and plan-mode retry/fallback is unbuilt. Both
+  wait on the concurrent admission loop's single-writer budget counter becoming
+  cross-task-shareable, and will likely land together with interactive
+  multi-turn delegation (below), since both need the same paused-awaiting state.
+  A future round, not a launch blocker.
+- **Multi-agent, further (see `docs/multi-agent-expansion-plan.md`).** P1–P4 of
+  that plan shipped as Phases 14–15 (parallel fan-out + governed limits; agent
+  trust/policy/ask + resilience). Remaining: **P5** — interactive multi-turn
+  delegation (a delegation that pauses awaiting the remote agent, reusing the
+  paused-awaiting-decision machinery from the ask flow) and streaming a remote
+  agent's progress into the timeline (today a delegated sub-task is opaque until
+  it completes, shown as an indeterminate lane). Fast-follows, not blockers.
 - **Additive / lower-stakes.** A2A SSE streaming, webhooks and per-tool skills;
   multi-profile model configs; an embeddings retrieval-quality harness (the
   adapter is done — this is the eval plus a dedicated embedding server).
