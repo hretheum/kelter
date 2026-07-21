@@ -1,0 +1,28 @@
+Cargo.toml
+  s_7ac77bc07b52a5::t_673524b894129e 46
+crates/api/src/lib.rs
+  s_7ac77bc07b52a5::t_ae02a37c81c46e 564
+  s_7ac77bc07b52a5::t_073128efa025f4 533-539,543,554-555,559-560
+  s_7ac77bc07b52a5::t_dca0ff8173db9e 1588-1617
+  s_7ac77bc07b52a5::t_d88d0665043bf3 1618-1623
+crates/api/Cargo.toml
+  s_7ac77bc07b52a5::t_203d5825c9d29b 13
+Cargo.lock
+  s_7ac77bc07b52a5::t_8abb6c0f0f91ff 94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "9855c0641e68f1d2ceb5925540546518e63a0e3e",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
