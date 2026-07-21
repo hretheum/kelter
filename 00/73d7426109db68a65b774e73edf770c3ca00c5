@@ -1,0 +1,19 @@
+crates/kernel-core/tests/plan_delegation_ask_test.rs
+  s_7ac77bc07b52a5::t_d10e1e5d2d9451 527-530
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "0073d7426109db68a65b774e73edf770c3ca00c5",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
