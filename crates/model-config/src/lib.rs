@@ -218,6 +218,26 @@ impl ModelConfigController for DaemonModelConfig {
             latitude: None,
             api_key: resolve_key(&self.dir),
         };
+        // SSRF guard (audit finding 2-a/#9): a `set` that points model egress
+        // at a NEW base_url must clear the SAME allowlist the health-check
+        // `test` already enforces — otherwise an authenticated caller could
+        // route every subsequent model call at an internal host (e.g. a cloud
+        // metadata IP), and that host would then also be trusted by `test`
+        // (`origin_allowed` allows the configured base_url). Checked BEFORE the
+        // oracle is built/swapped, so a refusal has no side effect. The
+        // currently-configured base_url stays allowed (a no-op re-set never
+        // trips this), and operator extras go in `[auth] test_allowlist`.
+        if let Some(base) = cfg.base_url.as_deref() {
+            let base = base.trim().trim_end_matches('/');
+            if !self.origin_allowed(base).await {
+                return Err(
+                    "refused: base_url origin is not on the model-egress allowlist \
+                     (presets + current base_url + [auth] test_allowlist) — add it there to \
+                     point the model at a new host"
+                        .to_string(),
+                );
+            }
+        }
         let (oracle, _latitude) = policy::build_oracle(&cfg).map_err(|e| e.to_string())?;
         // Apply live, then persist so it survives a restart.
         self.swappable.swap(oracle);
@@ -391,5 +411,56 @@ mod tests {
             "extra refused: {}",
             r.detail
         );
+    }
+
+    #[tokio::test]
+    async fn set_off_allowlist_base_url_is_refused_with_no_side_effect() {
+        let c = controller(vec![]);
+        let before = c.get().await.base_url;
+        // Point model egress at a cloud-metadata IP — the SSRF target `set`
+        // used to accept unchecked. Must be refused BEFORE the oracle swaps.
+        let err = c
+            .set(api::ModelConfigUpdate {
+                engine: "local:evil".into(),
+                base_url: Some("http://169.254.169.254".into()),
+            })
+            .await
+            .expect_err("off-allowlist base_url must be refused");
+        assert!(err.contains("allowlist"), "{err}");
+        // No side effect: the configured base_url is unchanged.
+        assert_eq!(c.get().await.base_url, before, "config must not have changed");
+    }
+
+    #[tokio::test]
+    async fn set_to_a_preset_base_url_is_allowed() {
+        let c = controller(vec![]);
+        // A preset origin is NOT an allowlist refusal (it may still succeed or
+        // fail on other grounds, but never for the allowlist reason).
+        let res = c
+            .set(api::ModelConfigUpdate {
+                engine: "local:qwen".into(),
+                base_url: Some("http://127.0.0.1:11434".into()),
+            })
+            .await;
+        if let Err(e) = res {
+            assert!(!e.contains("allowlist"), "preset refused by allowlist: {e}");
+        }
+    }
+
+    #[tokio::test]
+    async fn set_operator_extra_base_url_is_allowed() {
+        let c = controller(vec!["http://10.0.0.5:8080".into()]);
+        let res = c
+            .set(api::ModelConfigUpdate {
+                engine: "local:custom".into(),
+                base_url: Some("http://10.0.0.5:8080".into()),
+            })
+            .await;
+        if let Err(e) = res {
+            assert!(
+                !e.contains("allowlist"),
+                "operator-extra base refused by allowlist: {e}"
+            );
+        }
     }
 }
