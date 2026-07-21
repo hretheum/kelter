@@ -57,6 +57,12 @@ struct TimedTools {
     delays: HashMap<String, Duration>,
     origins: HashMap<String, String>,
     executions: Mutex<Vec<String>>,
+    /// When set, this action's `execute` never returns (`future::pending`) —
+    /// used to simulate a crash mid-dispatch: the Intent is journaled (that
+    /// happens before `execute` is called) but no Receipt ever follows,
+    /// since the process (here: the awaiting test) abandons the call via an
+    /// outer `tokio::time::timeout` instead of actually crashing.
+    hang: HashMap<String, ()>,
 }
 impl TimedTools {
     fn new(delays: &[(&str, Duration)], origins: &[(&str, &str)]) -> Arc<Self> {
@@ -67,7 +73,15 @@ impl TimedTools {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             executions: Mutex::new(Vec::new()),
+            hang: HashMap::new(),
         })
+    }
+    fn with_hang(mut self: Arc<Self>, action: &str) -> Arc<Self> {
+        Arc::get_mut(&mut self)
+            .expect("with_hang must be called before cloning the Arc")
+            .hang
+            .insert(action.to_string(), ());
+        self
     }
     async fn ran(&self) -> Vec<String> {
         self.executions.lock().await.clone()
@@ -86,12 +100,33 @@ impl ActionSource for TimedTools {
                 "additionalProperties": false
             }),
         };
+        // Declares idempotency_key support (audit finding 3-c test only):
+        // plan mode, like step mode, refuses to safely resume a dangling
+        // Intent for an action that does NOT declare this — so the
+        // two-crash scenario needs a keyed action to reach the resume-arm
+        // double-count path at all, rather than failing earlier on an
+        // unrelated "manual check required".
+        let keyed_delegate = |name: &str| ActionSpec {
+            name: name.into(),
+            description: "".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string"},
+                    kernel_core::IDEMPOTENCY_KEY_ARG: {"type": "string"}
+                },
+                "required": ["task"],
+                "additionalProperties": false
+            }),
+        };
         Ok(ActionSchema {
             actions: vec![
                 delegate("delegate_to_ask"),
+                keyed_delegate("delegate_to_ask_keyed"),
                 delegate("delegate_to_ok"),
                 delegate("delegate_to_ok2"),
                 delegate("delegate_to_ok3"),
+                delegate("delegate_to_ok4"),
             ],
         })
     }
@@ -104,6 +139,9 @@ impl ActionSource for TimedTools {
             .lock()
             .await
             .push(action.action().to_string());
+        if self.hang.contains_key(action.action()) {
+            std::future::pending::<()>().await;
+        }
         if let Some(d) = self.delays.get(action.action()) {
             tokio::time::sleep(*d).await;
         }
@@ -387,6 +425,117 @@ async fn ask_pause_survives_a_restart_and_budget_stays_exact() {
     assert_eq!(
         a2a_steps, 2,
         "each delegation recorded exactly once across the restart"
+    );
+}
+
+/// Regression test for audit finding 3-c (docs/audit/AUDIT-2026-07-21.md):
+/// the `a2a_attempts` seed loop (counts a node with a dangling Intent OR a
+/// Receipt) and the `AllowOnce`/`AllowAlways` resume-arm (which used to
+/// increment unconditionally) could double-count the SAME node's single real
+/// attempt across a TWO-crash resume — crash #1 after the human decides
+/// (Decision journaled) and dispatch begins (Intent journaled), crash #2
+/// before a Receipt is ever written. With budget=2, a double-count would
+/// spuriously refuse a fresh sibling with "delegation budget exhausted" even
+/// though only ONE real attempt has actually happened.
+#[tokio::test]
+async fn a2a_attempts_not_double_counted_across_two_crashes() {
+    let store: Arc<dyn RunStore> = Arc::new(kernel_core::InMemoryRunStore::new());
+    // "ask" (AskHuman, ordered first) pauses the run before "sibling" (its
+    // dependent, Allow policy) is ever considered — so only "ask" advances
+    // in session A; "sibling" stays completely fresh going into session B.
+    let plan = json!({"nodes": [
+        {"id": "ask", "type": "a2a", "action": "delegate_to_ask_keyed", "arguments": {"task": "x"}, "deps": []},
+        {"id": "sibling", "type": "a2a", "action": "delegate_to_ok4", "arguments": {"task": "y"}, "deps": ["ask"]}
+    ]});
+    let origins = &[
+        ("delegate_to_ask_keyed", "mock://ask-keyed"),
+        ("delegate_to_ok4", "mock://ok4"),
+    ];
+    let budget = KernelConfig {
+        mode: RunMode::Plan,
+        latitude: Latitude::Standard,
+        max_steps: 12,
+        delegation: DelegationLimits {
+            max_delegations_per_run: 2,
+            max_depth: 3,
+        },
+        ..KernelConfig::default()
+    };
+
+    // ---- session A: pause, decide AllowOnce, then resume into a HANG so
+    // the Intent is journaled but no Receipt ever follows (crash #2) ----
+    let tools_a = TimedTools::new(&[], origins).with_hang("delegate_to_ask_keyed");
+    let run_id = {
+        let k1 = Kernel::new(
+            FixedPlanOracle::new(plan.clone()),
+            tools_a.clone(),
+            Arc::new(InMemoryProvider::new()),
+            store.clone(),
+            budget.clone(),
+        )
+        .with_delegation_gate(ScriptedGate::new(&["delegate_to_ask_keyed"]));
+
+        let paused = k1.run_task("two-crash".into()).await.unwrap();
+        assert_eq!(paused.status, RunStatus::AwaitingDelegationDecision);
+        k1.decide_delegation(
+            paused.id,
+            "delegate_to_ask_keyed",
+            AgentDelegationDecision::AllowOnce,
+            "operator",
+        )
+        .await
+        .unwrap();
+
+        // Abandon the resume once "ask"'s Intent is journaled and its
+        // (hung) dispatch is in flight — simulating a second crash. The
+        // spawned dispatch task is left hung; it's dropped with the
+        // per-test runtime at the end of this function.
+        let _ = tokio::time::timeout(Duration::from_millis(300), k1.execute_run(paused.id)).await;
+        paused.id
+    };
+
+    // ---- session B: fresh Kernel + fresh (non-hanging) tools over the SAME
+    // store — the "ask" node now has BOTH a recorded AllowOnce decision AND
+    // a dangling Intent from session A: exactly the two-crash scenario. ----
+    let tools_b = TimedTools::new(&[], origins);
+    let k2 = Kernel::new(
+        FixedPlanOracle::new(plan),
+        tools_b.clone(),
+        Arc::new(InMemoryProvider::new()),
+        store,
+        budget,
+    )
+    .with_delegation_gate(ScriptedGate::new(&["delegate_to_ask_keyed"]));
+
+    let run = k2.execute_run(run_id).await.unwrap();
+
+    // Without the fix: a2a_attempts is seeded to 1 (ask's dangling intent),
+    // then double-incremented to 2 by the resume-arm BEFORE "ask" even
+    // finishes — so by the time "sibling" (budget=2) is considered,
+    // authorize_delegation sees attempted=2 >= max=2 and refuses it,
+    // failing the whole plan. With the fix, a2a_attempts stays 1 through
+    // ask's resume, "sibling" is correctly authorized at attempted=1, and
+    // the plan completes.
+    assert_eq!(
+        run.status,
+        RunStatus::Completed,
+        "a double-counted budget must not spuriously refuse the fresh sibling: {:?}",
+        run.error
+    );
+    assert_eq!(
+        tools_b.ran().await,
+        vec!["delegate_to_ask_keyed".to_string(), "delegate_to_ok4".to_string()],
+        "exactly one real dial per node — session B re-dispatches the dangling \
+         ask (reconnect via the journaled key) then dispatches the sibling once"
+    );
+    let a2a_steps = run
+        .steps
+        .iter()
+        .filter(|s| s.action.starts_with("delegate_to_"))
+        .count();
+    assert_eq!(
+        a2a_steps, 2,
+        "both nodes recorded exactly once — the real attempt count is 2, matching the budget"
     );
 }
 

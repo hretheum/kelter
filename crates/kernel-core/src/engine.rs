@@ -3294,11 +3294,26 @@ impl Kernel {
                                         );
                                     }
                                 }
-                                a2a_attempts += 1;
+                                // Audit finding 3-c: only count this node's
+                                // attempt here if the seed loop above did NOT
+                                // already count it via a dangling Intent — a
+                                // two-crash resume (decided in session A,
+                                // Intent journaled in session A, crashed
+                                // AGAIN before a Receipt) would otherwise hit
+                                // this same arm a second time and double-count
+                                // a single attempt. Direction was safe
+                                // (over-count → may over-refuse a sibling,
+                                // never over-admit past the real budget), but
+                                // could spuriously fail an otherwise-fine plan.
+                                if folded.intent.is_none() {
+                                    a2a_attempts += 1;
+                                }
                                 // Fall through to dispatch (gate NOT re-checked).
                             }
                             Some(AgentDelegationDecision::AllowOnce) => {
-                                a2a_attempts += 1;
+                                if folded.intent.is_none() {
+                                    a2a_attempts += 1;
+                                }
                                 // Fall through to dispatch (gate NOT re-checked).
                             }
                             None => {
