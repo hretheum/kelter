@@ -1,0 +1,21 @@
+crates/daemon/tests/delegation_sweep_test.rs
+  s_7ac77bc07b52a5::t_2f23c573353a0b 202-229
+docs/BUILD-EVIDENCE.md
+  s_7ac77bc07b52a5::t_cf888b3d9e2599 1932-1987
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "691bfa9774d1516547c9b623c66ba0345e38ebf2",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
