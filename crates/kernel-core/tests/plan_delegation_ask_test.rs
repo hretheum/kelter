@@ -524,7 +524,10 @@ async fn a2a_attempts_not_double_counted_across_two_crashes() {
     );
     assert_eq!(
         tools_b.ran().await,
-        vec!["delegate_to_ask_keyed".to_string(), "delegate_to_ok4".to_string()],
+        vec![
+            "delegate_to_ask_keyed".to_string(),
+            "delegate_to_ok4".to_string()
+        ],
         "exactly one real dial per node — session B re-dispatches the dangling \
          ask (reconnect via the journaled key) then dispatches the sibling once"
     );
