@@ -19,6 +19,63 @@ fn generate_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The optional (memory provider, learned store) pair a memory backend yields.
+type MemoryBackends = (
+    Option<Arc<dyn MemoryProvider>>,
+    Option<Arc<dyn kernel_core::LearnedStore>>,
+);
+
+/// Build the shared Postgres memory + learned backend (ADR 0028). Real only
+/// when compiled with the `postgres` feature; otherwise a clear build-time
+/// bail so a `backend = "postgres"` config never silently degrades. The
+/// connection string is read from the env var named in the config — never
+/// from the config file, never logged.
+#[cfg(feature = "postgres")]
+async fn build_postgres_memory(cfg: &Config) -> anyhow::Result<MemoryBackends> {
+    let url = std::env::var(&cfg.memory.postgres_url_env).with_context(|| {
+        format!(
+            "memory.backend = \"postgres\" but env var '{}' (memory.postgres_url_env) is unset — \
+             the connection string must live in the environment, never in the config file",
+            cfg.memory.postgres_url_env
+        )
+    })?;
+    // Optional pgvector cosine path: reuse the same embeddings config the
+    // sqlite memory-server uses (BM25 when absent).
+    let embed: Option<Arc<dyn memory::embeddings::EmbeddingBackend>> = cfg
+        .memory
+        .embeddings_url
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .map(|u| {
+            let model = cfg.memory.embeddings_model.clone().unwrap_or_default();
+            Arc::new(memory::embeddings::LlamaEmbeddingBackend::new(u, model))
+                as Arc<dyn memory::embeddings::EmbeddingBackend>
+        });
+    let store = pgstore::PgStore::connect(&url, embed)
+        .await
+        .context("cannot connect to the shared Postgres memory backend (ADR 0028)")?;
+    tracing::info!(
+        "memory: SHARED Postgres backend (ADR 0028){}",
+        if store.uses_embeddings() {
+            " with pgvector cosine retrieval"
+        } else {
+            " (BM25 retrieval)"
+        }
+    );
+    let mem: Arc<dyn MemoryProvider> = Arc::new(pgstore::PgMemoryProvider::new(store.clone()));
+    let learned: Arc<dyn kernel_core::LearnedStore> = Arc::new(pgstore::PgLearnedStore::new(store));
+    Ok((Some(mem), Some(learned)))
+}
+
+#[cfg(not(feature = "postgres"))]
+async fn build_postgres_memory(_cfg: &Config) -> anyhow::Result<MemoryBackends> {
+    anyhow::bail!(
+        "memory.backend = \"postgres\" but this daemon was built WITHOUT the `postgres` \
+         feature — rebuild with `cargo build --features postgres` (or set memory.backend = \
+         \"sqlite\")"
+    )
+}
+
 /// The `prune` subcommand (ADR 0017): open the durable store and apply the
 /// configured retention policy once, then exit. Terminal runs only — never an
 /// in-flight run.
@@ -694,10 +751,25 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Shared Postgres memory backend (ADR 0028) — opt-in via
+    // `memory.backend = "postgres"` AND the `postgres` build feature. When
+    // active it provides BOTH the episodic `MemoryProvider` and the learned
+    // layer, SHARED across independent kernels. Built once here; the memory
+    // selection below prefers it over the sqlite builtin.
+    let (pg_memory, pg_learned): MemoryBackends = if cfg.memory.backend == "postgres" {
+        build_postgres_memory(&cfg).await?
+    } else {
+        (None, None)
+    };
+
     // Governed self-learning (Phase 10, ADR 0016): a DISTINCT, reversible
-    // learned-fact layer on the same durable database (a second handle, like
-    // the desktop store). Only for the sqlite backend — the layer must persist.
-    let learned: Option<Arc<dyn kernel_core::LearnedStore>> = if cfg.storage.backend == "sqlite" {
+    // learned-fact layer. Shared Postgres (ADR 0028) when configured;
+    // otherwise the local sqlite layer on the same durable database (a second
+    // handle, like the desktop store). The layer must persist, so never for
+    // the ephemeral in-memory storage backend.
+    let learned: Option<Arc<dyn kernel_core::LearnedStore>> = if let Some(l) = pg_learned {
+        Some(l)
+    } else if cfg.storage.backend == "sqlite" {
         let db = storage::Db::open(&cfg.storage.path)
             .with_context(|| format!("cannot open database '{}'", cfg.storage.path))?;
         Some(Arc::new(storage::SqliteLearnedStore::new(db)))
@@ -711,10 +783,16 @@ async fn main() -> anyhow::Result<()> {
     // durable memory is itself dogfooded through the same registry seam
     // (spawned `memory-server`, no in-process shortcut). Exactly one external
     // backend, counted across BOTH mechanisms.
-    if memory_extensions.len() + usize::from(wasm_memory.is_some()) > 1 {
+    if memory_extensions.len()
+        + usize::from(wasm_memory.is_some())
+        + usize::from(pg_memory.is_some())
+        > 1
+    {
         anyhow::bail!(
-            "multiple memory extensions registered ({memory_extension_names:?}) — exactly one \
-             memory backend is supported"
+            "multiple memory backends configured (extensions {memory_extension_names:?}, \
+             wasm={}, postgres={}) — exactly one memory backend is supported",
+            wasm_memory.is_some(),
+            pg_memory.is_some()
         );
     }
     let memory: Arc<dyn MemoryProvider> = if let Some(provider) = wasm_memory.take() {
@@ -740,6 +818,10 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .context("failed to start the registered memory extension")?,
         )
+    } else if let Some(provider) = pg_memory {
+        // Shared Postgres backend (ADR 0028): in-process, not dogfooded via
+        // the memory-server subprocess (that transport is SQLite-file-shaped).
+        provider
     } else if cfg.storage.backend == "sqlite" {
         let exe_dir = std::env::current_exe()?
             .parent()

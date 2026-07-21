@@ -1,0 +1,36 @@
+[package]
+name = "pgstore"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# A shared, concurrent-safe memory + learned-fact backend on Postgres +
+# pgvector, behind the SAME `MemoryProvider`/`LearnedStore` seams the SQLite
+# backend implements (ADR 0005/0008/0016/0024). Opt-in: the daemon depends on
+# this crate ONLY under its `postgres` feature, so default builds never pull
+# the Postgres driver.
+#
+# Driver = tokio-postgres (+ deadpool-postgres pool), NOT sqlx: sqlx's facade
+# crate unconditionally drags `sqlx-sqlite` -> `libsqlite3-sys` into the
+# workspace dependency graph, which collides on `links = "sqlite3"` with the
+# `storage` crate's rusqlite (Cargo forbids two packages linking the same
+# native lib). tokio-postgres has zero sqlite involvement and composes
+# cleanly; deadpool-postgres gives the connection pooling the shared,
+# multi-instance concurrency story needs.
+
+[dependencies]
+kernel-core.workspace = true
+memory.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+tokio-postgres = { version = "0.7", features = ["with-uuid-1"] }
+deadpool-postgres = "0.14"
+pgvector = { version = "0.4", default-features = false, features = ["postgres"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

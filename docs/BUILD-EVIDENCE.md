@@ -1877,3 +1877,55 @@ The well-specified, low-stakes cluster from `docs/audit/AUDIT-2026-07-21.md`
 grep = 0. Not pushed (human gate). Escalations for Fable: reqwest/tungstenite
 dedupe's harder half, 3 cast sites, 3 INFO items — see this section for
 exact reasoning on each.
+
+## Phase 20 — shared Postgres + pgvector memory backend (ADR 0028)
+
+A shared, concurrent-safe memory + learned-fact backend so TWO independent
+kernels (desktop + server) share episodic memory + learned facts — behind the
+existing `MemoryProvider`/`LearnedStore` seams (ADR 0005/0008/0016/0024), with
+Kelter's governance preserved and RE-PROVEN on the shared store. New crate
+`crates/pgstore`; opt-in; SQLite stays the default.
+
+- **Reversibility COMPLETE — no persistent ranking index.** The crux of
+  keeping ADR 0016 on Postgres. BM25 recomputed per query; the pgvector path
+  stores a per-row `vector` column and does an EXACT per-query cosine scan
+  (`ORDER BY embedding <=> $q`) with NO ANN index. `forget` = a row `DELETE` →
+  fact + embedding gone, zero residue. Proven live: `pg_indexes` shows ONLY PK
+  btrees + a `batch_id` lookup btree (same lookup SQLite has) — never a
+  relevance index (see docs/evidence/shared-memory-postgres.log).
+- **Concurrency = Postgres MVCC + deadpool pool.** Two independent `PgStore`
+  handles (separate pools, same DB = two kernels) write/retrieve/forget
+  concurrently with no corruption and a consistent view. Found + fixed a real
+  concurrency bug: `CREATE TABLE IF NOT EXISTS` is NOT race-safe (two
+  simultaneous connects collide on `pg_type`) → schema now runs under
+  `pg_advisory_xact_lock`.
+- **Provenance survives; dumb store.** Learned facts round-trip their full
+  `LearnedProvenance` (`ai_extracted`, `human_validated:false`, source run ids,
+  batch id) verbatim; a poisoned fact is only ever `[learned]` context, never
+  an authority. ZERO belief-formation / auto-consolidation (deliberate line vs
+  Hindsight-style learning).
+- **Driver = tokio-postgres + deadpool, NOT sqlx** — sqlx's facade
+  unconditionally drags `sqlx-sqlite → libsqlite3-sys`, hard-colliding on
+  `links="sqlite3"` with `storage`'s rusqlite; tokio-postgres has zero sqlite
+  involvement. (ADR 0028 decision 6.)
+- **Opt-in, non-breaking.** `memory.backend = "sqlite"` (default) | `"postgres"`;
+  the driver compiles ONLY under the daemon's `postgres` feature. Verified:
+  `cargo tree -p daemon` (default) has no tokio-postgres/pgvector/pgstore. A
+  `postgres` config on a non-feature build fails loudly.
+- **Secrets env-only.** Connection string from the env var named by
+  `memory.postgres_url_env` — never in the config file, never logged.
+
+**Proof (docs/evidence/shared-memory-postgres.log):** 7 integration tests
+against a REAL Postgres 16 + pgvector 0.8.5 (podman `pgvector/pgvector:pg16`) —
+the three money-shots (concurrency two-instance; governance re-proof
+provenance/forget-zero-residue/poisoned-is-context; sharing A distils→B
+sees→A forgets→B stops) + base write/retrieve/upsert + forget_batch + the
+pgvector cosine path (with a mock embedder) proving cosine ordering AND that a
+row DELETE removes the vector. Tests SKIP when `KELTER_TEST_POSTGRES_URL` is
+unset, so `cargo test --workspace` stays hermetic. `cargo build`/`test` green;
+`cargo clippy --workspace --all-targets -D warnings` clean (default AND
+`--features postgres`); `cargo fmt --check` clean; codename grep over the
+tracked tree = 0.
+Not pushed (human gate). Deferred (disclosed): Hindsight-as-store adapter,
+cross-user ACL/multi-region, TLS-to-Postgres (rustls connector), ANN index
+(permanent non-goal under reversibility).

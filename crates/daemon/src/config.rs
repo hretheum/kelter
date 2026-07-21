@@ -257,15 +257,41 @@ impl RetentionConfig {
 /// Memory retrieval configuration (Phase 8, item D). BM25 is the default; set
 /// `embeddings_url` to point the built-in durable memory at a real embedding
 /// server (a dedicated llama.cpp `--embedding` instance) for cosine retrieval.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct MemoryConfig {
+    /// Which backend holds episodic memory + learned facts:
+    /// - `"sqlite"` (default) — the local single-file store (single instance).
+    /// - `"postgres"` — a SHARED Postgres+pgvector backend (ADR 0028) so TWO
+    ///   independent kernels (desktop + server) share memory + learned facts.
+    ///   Requires the daemon to be built with the `postgres` feature; the
+    ///   connection string is read from the env var named by
+    ///   `postgres_url_env` (never from this file). Opt-in and non-breaking:
+    ///   existing sqlite deployments are unaffected.
+    pub backend: String,
+    /// Name of the env var holding the Postgres connection string (with any
+    /// password) when `backend = "postgres"`. The value stays in the
+    /// environment — never in the config file or logs. Default:
+    /// `KELTER_MEMORY_POSTGRES_URL`.
+    pub postgres_url_env: String,
     /// OpenAI-compatible embeddings server origin (e.g. http://127.0.0.1:8090).
-    /// Absent → BM25 lexical retrieval (the default, no network).
+    /// Absent → BM25 lexical retrieval (the default, no network). When
+    /// `backend = "postgres"` this also turns on the pgvector cosine path.
     pub embeddings_url: Option<String>,
     /// Model name sent in the embeddings request (llama.cpp ignores the value
     /// but the field is required by the OpenAI schema).
     pub embeddings_model: Option<String>,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            backend: "sqlite".into(),
+            postgres_url_env: "KELTER_MEMORY_POSTGRES_URL".into(),
+            embeddings_url: None,
+            embeddings_model: None,
+        }
+    }
 }
 
 /// Operator-side trust policy (ADR 0012). The manifest declares a trust

@@ -201,6 +201,21 @@ implement `MemoryProvider`, wire it where the daemon selects the storage
 backend. All writes are provenance-tagged and versioned; the reflection
 stub is gated by config. No silent self-mutation.
 
+**Shared backend — `crates/pgstore` (ADR 0028).** For the two-independent-kernel
+topology (below), an opt-in Postgres + pgvector backend implements the SAME
+`MemoryProvider` + `LearnedStore` seams so a desktop kernel and a server kernel
+**share episodic memory + learned facts** (a single-file SQLite store cannot
+have two concurrent writers). Governance is preserved and re-proven on the
+shared store: provenance survives verbatim; reversibility is COMPLETE — there
+is no persistent ranking index (BM25 recomputed per query; the pgvector path is
+an exact per-query cosine scan `ORDER BY embedding <=> $q` with NO ANN index),
+so a `forget` (row `DELETE`) leaves zero residue; and a learned fact is still
+only ever validated context, never an authority. It is a **dumb store** —
+storage + retrieval only, zero belief-formation. Opt-in (`memory.backend =
+"postgres"`) and behind the daemon's `postgres` build feature, so default
+(SQLite) deployments never pull the driver; the connection string lives in the
+environment, never the tree/logs.
+
 ### API — `crates/api`
 
 The one stable contract every client uses (ADR 0004): HTTP for commands
@@ -230,8 +245,15 @@ without a real cert.
 - **remote client**: the same shell (or any browser/PWA) pointed at a
   daemon URL; no kernel code on the client.
 
-The kernel owns state; clients are stateless views. CRDT offline sync is
-explicitly v2+.
+- **two independent kernels, shared memory** (ADR 0028): a desktop kernel AND
+  a server kernel each run their own loop but point at one shared Postgres
+  memory backend, sharing episodic memory + learned facts. Distinct from the
+  thin-client case above (stateless view onto one kernel) — here both are real
+  kernels; only the memory layer is shared, governance intact.
+
+The kernel owns state; clients are stateless views (thin-client topology) or
+share only the governed memory layer (two-kernel topology). CRDT offline sync
+is explicitly v2+.
 
 ## Crate map
 

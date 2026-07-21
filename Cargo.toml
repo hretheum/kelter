@@ -12,6 +12,7 @@ members = [
     "crates/daemon",
     "crates/model-config",
     "crates/skills",
+    "crates/pgstore",
 ]
 exclude = ["apps/desktop/src-tauri", "examples/wasm-tools/wordcount", "examples/wasm-tools/netpeek"]
 # The desktop app (apps/desktop/src-tauri) is intentionally excluded from the
@@ -36,6 +37,7 @@ skills = { path = "crates/skills" }
 storage = { path = "crates/storage" }
 a2a = { path = "crates/a2a" }
 wasmhost = { path = "crates/wasmhost" }
+pgstore = { path = "crates/pgstore" }
 
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
