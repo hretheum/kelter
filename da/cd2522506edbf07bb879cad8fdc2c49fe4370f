@@ -1,0 +1,19 @@
+docs/BUILD-EVIDENCE.md
+  s_7ac77bc07b52a5::t_0d3d0774469931 1833-1879
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "dacd2522506edbf07bb879cad8fdc2c49fe4370f",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
