@@ -1,4 +1,4 @@
-a2a v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/a2a)
+a2a v0.1.0
 ├── async-trait v0.1.89 (proc-macro)
 │   ├── proc-macro2 v1.0.106
 │   │   └── unicode-ident v1.0.24
@@ -33,7 +33,7 @@ a2a v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/a2a)
 │   ├── futures-sink v0.3.33
 │   ├── futures-task v0.3.33
 │   └── futures-util v0.3.33 (*)
-├── kernel-core v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/kernel-core)
+├── kernel-core v0.1.0
 │   ├── async-trait v0.1.89 (proc-macro) (*)
 │   ├── futures v0.3.33 (*)
 │   ├── jsonschema v0.28.3
@@ -357,7 +357,7 @@ a2a v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/a2a)
 │   │       │   │   └── libc v0.2.186
 │   │       │   └── serde_core v1.0.228
 │   │       └── vsimd v0.8.0
-│   ├── memory v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/memory)
+│   ├── memory v0.1.0
 │   │   ├── async-trait v0.1.89 (proc-macro) (*)
 │   │   ├── jsonschema v0.28.3 (*)
 │   │   ├── reqwest v0.12.28 (*)
@@ -398,8 +398,8 @@ a2a v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/a2a)
 ├── tracing v0.1.44 (*)
 └── uuid v1.24.0 (*)
 
-api v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/api)
-├── a2a v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/a2a) (*)
+api v0.1.0
+├── a2a v0.1.0 (*)
 ├── async-trait v0.1.89 (proc-macro) (*)
 ├── axum v0.8.9
 │   ├── axum-core v0.5.6
@@ -471,7 +471,7 @@ api v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/api)
 │   ├── tower-layer v0.3.3
 │   ├── tower-service v0.3.3
 │   └── tracing v0.1.44 (*)
-├── kernel-core v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/kernel-core) (*)
+├── kernel-core v0.1.0 (*)
 ├── mime_guess v2.0.5
 │   ├── mime v0.3.17
 │   └── unicase v2.9.0
@@ -506,10 +506,10 @@ api v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/api)
 ├── tracing v0.1.44 (*)
 └── uuid v1.24.0 (*)
 
-daemon v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/daemon)
-├── a2a v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/a2a) (*)
+daemon v0.1.0
+├── a2a v0.1.0 (*)
 ├── anyhow v1.0.103
-├── api v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/api) (*)
+├── api v0.1.0 (*)
 ├── async-trait v0.1.89 (proc-macro) (*)
 ├── axum v0.8.9 (*)
 ├── axum-server v0.8.0
@@ -529,13 +529,13 @@ daemon v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/daemon)
 │   ├── tokio v1.53.0 (*)
 │   ├── tokio-rustls v0.26.4 (*)
 │   └── tower-service v0.3.3
-├── kernel-core v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/kernel-core) (*)
-├── mcp v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/mcp)
+├── kernel-core v0.1.0 (*)
+├── mcp v0.1.0
 │   ├── anyhow v1.0.103
 │   ├── async-trait v0.1.89 (proc-macro) (*)
 │   ├── jsonschema v0.28.3 (*)
-│   ├── kernel-core v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/kernel-core) (*)
-│   ├── memory v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/memory) (*)
+│   ├── kernel-core v0.1.0 (*)
+│   ├── memory v0.1.0 (*)
 │   ├── reqwest v0.12.28 (*)
 │   ├── rmcp v2.2.0
 │   │   ├── async-trait v0.1.89 (proc-macro) (*)
@@ -602,10 +602,10 @@ daemon v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/daemon)
 │   ├── schemars v1.2.1 (*)
 │   ├── serde v1.0.228 (*)
 │   ├── serde_json v1.0.150 (*)
-│   ├── storage v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/storage)
+│   ├── storage v0.1.0
 │   │   ├── async-trait v0.1.89 (proc-macro) (*)
-│   │   ├── kernel-core v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/kernel-core) (*)
-│   │   ├── memory v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/memory) (*)
+│   │   ├── kernel-core v0.1.0 (*)
+│   │   ├── memory v0.1.0 (*)
 │   │   ├── rusqlite v0.40.1
 │   │   │   ├── bitflags v2.13.1
 │   │   │   ├── fallible-iterator v0.3.0
@@ -624,13 +624,13 @@ daemon v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/daemon)
 │   ├── toml v0.8.23 (*)
 │   ├── tracing v0.1.44 (*)
 │   └── uuid v1.24.0 (*)
-├── memory v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/memory) (*)
-├── model-config v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/model-config)
-│   ├── api v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/api) (*)
+├── memory v0.1.0 (*)
+├── model-config v0.1.0
+│   ├── api v0.1.0 (*)
 │   ├── async-trait v0.1.89 (proc-macro) (*)
-│   ├── policy v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/policy)
+│   ├── policy v0.1.0
 │   │   ├── async-trait v0.1.89 (proc-macro) (*)
-│   │   ├── kernel-core v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/kernel-core) (*)
+│   │   ├── kernel-core v0.1.0 (*)
 │   │   ├── reqwest v0.12.28 (*)
 │   │   ├── serde v1.0.228 (*)
 │   │   ├── serde_json v1.0.150 (*)
@@ -741,13 +741,13 @@ daemon v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/daemon)
 │   ├── reqwest v0.13.4 (*)
 │   └── thiserror v2.0.18 (*)
 ├── opentelemetry_sdk v0.32.1 (*)
-├── policy v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/policy) (*)
+├── policy v0.1.0 (*)
 ├── rand v0.9.5 (*)
 ├── reqwest v0.12.28 (*)
 ├── rustls v0.23.42 (*)
 ├── serde v1.0.228 (*)
 ├── serde_json v1.0.150 (*)
-├── skills v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/skills)
+├── skills v0.1.0
 │   ├── async-trait v0.1.89 (proc-macro) (*)
 │   ├── flate2 v1.1.9
 │   │   ├── crc32fast v1.5.0
@@ -755,7 +755,7 @@ daemon v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/daemon)
 │   │   └── miniz_oxide v0.8.9
 │   │       ├── adler2 v2.0.1
 │   │       └── simd-adler32 v0.3.10
-│   ├── kernel-core v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/kernel-core) (*)
+│   ├── kernel-core v0.1.0 (*)
 │   ├── reqwest v0.12.28 (*)
 │   ├── serde v1.0.228 (*)
 │   ├── tar v0.4.46
@@ -771,7 +771,7 @@ daemon v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/daemon)
 │   ├── thiserror v2.0.18 (*)
 │   ├── toml v0.8.23 (*)
 │   └── tracing v0.1.44 (*)
-├── storage v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/storage) (*)
+├── storage v0.1.0 (*)
 ├── tokio v1.53.0 (*)
 ├── toml v0.8.23 (*)
 ├── tracing v0.1.44 (*)
@@ -784,10 +784,10 @@ daemon v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/daemon)
 │   └── tracing-subscriber v0.3.23 (*)
 ├── tracing-subscriber v0.3.23 (*)
 ├── uuid v1.24.0 (*)
-└── wasmhost v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/wasmhost)
+└── wasmhost v0.1.0
     ├── async-trait v0.1.89 (proc-macro) (*)
-    ├── kernel-core v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/kernel-core) (*)
-    ├── memory v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/memory) (*)
+    ├── kernel-core v0.1.0 (*)
+    ├── memory v0.1.0 (*)
     ├── serde_json v1.0.150 (*)
     ├── thiserror v2.0.18 (*)
     ├── tokio v1.53.0 (*)
@@ -946,18 +946,18 @@ daemon v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/daemon)
         ├── wasmtime-internal-unwinder v46.0.1 (*)
         └── wasmtime-internal-versioned-export-macros v46.0.1 (proc-macro) (*)
 
-kernel-core v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/kernel-core) (*)
+kernel-core v0.1.0 (*)
 
-mcp v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/mcp) (*)
+mcp v0.1.0 (*)
 
-memory v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/memory) (*)
+memory v0.1.0 (*)
 
-model-config v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/model-config) (*)
+model-config v0.1.0 (*)
 
-policy v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/policy) (*)
+policy v0.1.0 (*)
 
-skills v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/skills) (*)
+skills v0.1.0 (*)
 
-storage v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/storage) (*)
+storage v0.1.0 (*)
 
-wasmhost v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/wasmhost) (*)
+wasmhost v0.1.0 (*)

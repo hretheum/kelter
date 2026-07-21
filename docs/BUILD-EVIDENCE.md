@@ -1710,7 +1710,8 @@ self-praise); raw scans in `docs/evidence/audit-*`.
   structurally unforgeable (private fields, `Serialize`-not-`Deserialize`,
   sole constructor `validate`), all 5 execute sites validated, replay
   re-validates, learned/WASM output context-only, every route authed,
-  `cargo audit` = 0 vulns / 395 deps, `git grep -i hermes` = 0.
+  `cargo audit` = 0 vulns / 395 deps, codename grep (repo's pre-rename dir
+  name) over the tracked tree = 0.
 - **1 HIGH (must-fix):** the SQLite production `unfinished_runs`
   (`storage/src/lib.rs:213`) omits `awaiting_delegation_input`, so an ADR 0026
   interactive-delegation pause is orphaned across a daemon restart — masked by

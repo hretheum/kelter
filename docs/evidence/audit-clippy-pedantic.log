@@ -1,4 +1,4 @@
-    Checking memory v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/memory)
+    Checking memory v0.1.0 (crates/memory)
 warning: docs for function which may panic missing `# Panics` section
   --> crates/memory/src/embeddings.rs:45:5
    |
@@ -287,7 +287,7 @@ help: add the attribute
     |
 
 warning: `memory` (lib) generated 21 warnings (1 duplicate) (run `cargo clippy --fix --lib -p memory -- -W clippy::pedantic` to apply 12 suggestions)
-    Checking kernel-core v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/kernel-core)
+    Checking kernel-core v0.1.0 (crates/kernel-core)
 warning: `memory` (lib test) generated 22 warnings (20 duplicates)
 warning: this method could have a `#[must_use]` attribute
   --> crates/kernel-core/src/action.rs:35:12
@@ -1729,11 +1729,11 @@ warning: calling `HashMap::default()` is more clear than this expression
     = help: to override `-W clippy::pedantic` add `#[allow(clippy::default_trait_access)]`
 
 warning: `kernel-core` (lib) generated 96 warnings (run `cargo clippy --fix --lib -p kernel-core -- -W clippy::pedantic` to apply 56 suggestions)
-    Checking storage v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/storage)
-    Checking a2a v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/a2a)
-    Checking skills v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/skills)
-    Checking policy v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/policy)
-    Checking wasmhost v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/wasmhost)
+    Checking storage v0.1.0 (crates/storage)
+    Checking a2a v0.1.0 (crates/a2a)
+    Checking skills v0.1.0 (crates/skills)
+    Checking policy v0.1.0 (crates/policy)
+    Checking wasmhost v0.1.0 (crates/wasmhost)
 warning: `kernel-core` (lib test) generated 100 warnings (96 duplicates) (run `cargo clippy --fix --lib -p kernel-core --tests -- -W clippy::pedantic` to apply 3 suggestions)
 warning: binding's name is too similar to existing binding
    --> crates/policy/src/local.rs:113:13
@@ -2305,7 +2305,7 @@ help: try
     |
 
 warning: `storage` (lib) generated 13 warnings (run `cargo clippy --fix --lib -p storage -- -W clippy::pedantic` to apply 6 suggestions)
-    Checking mcp v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/mcp)
+    Checking mcp v0.1.0 (crates/mcp)
 warning: `skills` (lib) generated 30 warnings (run `cargo clippy --fix --lib -p skills -- -W clippy::pedantic` to apply 12 suggestions)
 warning: item in documentation is missing backticks
  --> crates/policy/src/lib.rs:8:39
@@ -3379,7 +3379,7 @@ warning: unchecked subtraction of a `Duration`
      = help: to override `-W clippy::pedantic` add `#[allow(clippy::unchecked_time_subtraction)]`
 
 warning: `a2a` (lib) generated 59 warnings (run `cargo clippy --fix --lib -p a2a -- -W clippy::pedantic` to apply 26 suggestions)
-    Checking api v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/api)
+    Checking api v0.1.0 (crates/api)
 warning: docs for function returning `Result` missing `# Errors` section
   --> crates/wasmhost/src/lib.rs:67:5
    |
@@ -3944,7 +3944,7 @@ warning: this `continue` expression is redundant
 
 warning: `a2a` (test "a2a_client_test") generated 6 warnings (run `cargo clippy --fix --test "a2a_client_test" -p a2a -- -W clippy::pedantic` to apply 5 suggestions)
 warning: `api` (lib) generated 18 warnings (run `cargo clippy --fix --lib -p api -- -W clippy::pedantic` to apply 8 suggestions)
-    Checking model-config v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/model-config)
+    Checking model-config v0.1.0 (crates/model-config)
 warning: docs for function returning `Result` missing `# Errors` section
   --> crates/mcp/src/client.rs:42:5
    |
@@ -4754,7 +4754,7 @@ warning: unused `self` argument
     = help: to override `-W clippy::pedantic` add `#[allow(clippy::unused_self)]`
 
 warning: `model-config` (lib) generated 11 warnings (run `cargo clippy --fix --lib -p model-config -- -W clippy::pedantic` to apply 9 suggestions)
-    Checking daemon v0.1.0 (/Users/eorlowski/dev/better-hermes/crates/daemon)
+    Checking daemon v0.1.0 (crates/daemon)
 warning: calling `Usage::default()` is more clear than this expression
    --> crates/a2a/src/server.rs:216:20
     |

@@ -1,7 +1,7 @@
 # Kelter audit — automated scan summary — HEAD 2e6a326 — 2026-07-21T09:41:40Z
 
 ## Naming
-git grep -i hermes: 0 (must be 0)
+codename grep (repo's pre-rename dir name, tracked tree): 0 (must be 0)
 agentkernel: only in historical logs/notes (CLAUDE.md, BUILD-EVIDENCE, docs/evidence/*, PHASE-1-RESULTS) — allowed per CLAUDE.md
 
 ## cargo audit (RUSTSEC)
