@@ -1,0 +1,30 @@
+crates/kernel-core/src/engine.rs
+  s_7ac77bc07b52a5::t_49f4d246c80662 137
+  s_7ac77bc07b52a5::t_57d57a2520ebe7 102
+  s_7ac77bc07b52a5::t_29cbfd146e8ddd 80-83
+  s_7ac77bc07b52a5::t_3c4e101ff2073d 136,138-146
+  s_7ac77bc07b52a5::t_fc5de45a932e7a 53-59,64,73-79
+  s_7ac77bc07b52a5::t_0ab6723251e5c0 84
+crates/a2a/tests/delegation_streaming_test.rs
+  s_7ac77bc07b52a5::t_2b84f52abc7db4 485-527
+  s_7ac77bc07b52a5::t_f3fe7085f314ad 53-58
+  s_7ac77bc07b52a5::t_9eee1bb1f14a0c 100-110
+crates/kernel-core/src/lib.rs
+  s_7ac77bc07b52a5::t_804c688953ef3a 38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "4369e38e8de06f41047f531311f5d62942151eb9",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
