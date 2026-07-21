@@ -1,0 +1,28 @@
+# Kelter audit — automated scan summary — HEAD 2e6a326 — 2026-07-21T09:41:40Z
+
+## Naming
+git grep -i hermes: 0 (must be 0)
+agentkernel: only in historical logs/notes (CLAUDE.md, BUILD-EVIDENCE, docs/evidence/*, PHASE-1-RESULTS) — allowed per CLAUDE.md
+
+## cargo audit (RUSTSEC)
+395 crate deps scanned against 1166 advisories → 0 vulnerabilities. (docs/evidence/audit-cargo-audit.log)
+
+## clippy --workspace --all-targets -W clippy::pedantic
+448 warnings (pedantic/style/doc — NO -D errors; baseline -D clippy build is clean). (docs/evidence/audit-clippy-pedantic.log)
+
+## Anti-patterns (crates/*, non-test)
+unsafe: 0 | unwrap: 715 total / 150 non-test (mostly Mutex .lock().unwrap()) | expect: 36/18 | panic-family non-test: 1 real (extensions.rs:320 unreachable!, guard-provably-unreachable) + 4 test-only
+
+## Dependencies
+302 unique transitive crates (cargo tree). Cargo.lock committed. (docs/evidence/audit-cargo-tree.log)
+
+## Tests
+cargo test --workspace: 209 passed across 50 suites, 0 failed (verified over multiple runs)
+
+
+## Manual invariant verification (lead auditor, independent)
+ValidatedAction: private fields + Serialize-not-Deserialize (unforgeable) + sole ctor ActionSchema::validate — action.rs:60-150 ✓
+Replay re-validates journaled decision, fails run on schema drift — engine.rs:2110 ✓
+Learned facts context-only (PolicyContext.memory), still schema-validated — engine.rs:1916-1935 ✓
+WASM sandbox = capability-by-absence (ungranted import → cannot instantiate) — wasmhost/lib.rs:13-108 ✓
+No secrets in tree (only DUMMY_KEY test const + 5 env::var reads); retention gates on terminal — store.rs:24 ✓

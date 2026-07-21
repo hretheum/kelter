@@ -1,0 +1,35 @@
+### ANTI-PATTERN SCAN (regenerated with quoted globs) — HEAD 2e6a326 — Tue Jul 21 09:42:22 UTC 2026
+# NOTE: supersedes the earlier broken run (zsh glob failure produced false zeros).
+
+== counts (crates/ only) ==
+unsafe (non-test):        0
+unwrap total:             715
+unwrap NON-test:          150
+expect total:             36
+expect NON-test:          18
+panic-family non-test:    5
+TODO/FIXME/HACK/XXX:      0
+
+== production panic-family sites (with line) ==
+crates/mcp/src/extensions.rs:320:            Capability::Tools | Capability::Memory => unreachable!(),
+crates/mcp/src/extensions.rs:522:            other => panic!("expected two server extensions, got {other:?}"),
+crates/mcp/src/extensions.rs:541:            other => panic!("expected remote agent, got {other:?}"),
+crates/mcp/src/extensions.rs:561:            other => panic!("expected wasm kind, got {other:?}"),
+crates/mcp/src/extensions.rs:672:            other => panic!("expected wasm kind, got {other:?}"),
+
+== production .expect() sites (non-test) ==
+crates/memory/src/lib.rs:130:        .expect("static schema compiles")
+crates/memory/src/embeddings.rs:51:                .expect("client builds"),
+crates/memory/src/embeddings.rs:132:    let (query_vec, doc_vecs) = vectors.split_first().expect("query + docs embedded");
+crates/a2a/src/lib.rs:247:                .expect("client builds"),
+crates/mcp/src/tools.rs:469:        let seen = guard.get_mut(&path).expect("just inserted");
+crates/wasmhost/src/lib.rs:370:            let mut g = guest.lock().expect("wasm memory guest mutex");
+crates/wasmhost/src/lib.rs:517:        .expect("module loads");
+crates/wasmhost/src/lib.rs:549:        .expect("module loads (compilation is fine; instantiation is gated)");
+crates/model-config/src/lib.rs:156:                .expect("client builds"),
+crates/policy/src/lib.rs:45:        *self.inner.write().expect("oracle lock not poisoned") = next;
+crates/policy/src/lib.rs:49:        self.inner.read().expect("oracle lock not poisoned").clone()
+crates/kernel-core/src/engine.rs:2295:                                let origin = target_origin.expect(
+crates/kernel-core/src/engine.rs:3368:                            .expect("target_origin is Some: the None arm above already refused");
+crates/kernel-core/src/engine.rs:3449:                .expect("in_flight is non-empty (just checked above)");
+crates/kernel-core/src/engine.rs:3662:                .expect("review action present")

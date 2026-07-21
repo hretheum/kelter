@@ -1698,3 +1698,30 @@ web-ui `pnpm build` (tsc + vite) exit 0.
 
 **Still deferred:** remote-progress SSE streaming; the frontend; plan-mode
 interactive + multi-round continuation.
+
+## Audit — complete adversarial code audit (2026-07-21, HEAD 2e6a326)
+
+A full read-only, ten-dimension adversarial audit of the whole codebase.
+Report: `docs/audit/AUDIT-2026-07-21.md`. Method: lead auditor (Opus 4.8) +
+5 independent reviewers on fresh context (to counter same-lineage
+self-praise); raw scans in `docs/evidence/audit-*`.
+
+- **Posture: strong; no CRITICAL.** The `ValidatedAction` invariant is
+  structurally unforgeable (private fields, `Serialize`-not-`Deserialize`,
+  sole constructor `validate`), all 5 execute sites validated, replay
+  re-validates, learned/WASM output context-only, every route authed,
+  `cargo audit` = 0 vulns / 395 deps, `git grep -i hermes` = 0.
+- **1 HIGH (must-fix):** the SQLite production `unfinished_runs`
+  (`storage/src/lib.rs:213`) omits `awaiting_delegation_input`, so an ADR 0026
+  interactive-delegation pause is orphaned across a daemon restart — masked by
+  an in-memory-only test, and contradicting the engine's own contract
+  (`engine.rs:354`) and ADR 0026 / Phase 18's restart-durability claim.
+- **4 MEDIUM:** inline/no-id A2A exactly-once gap; unbounded SSE buffer +
+  unbounded per-step progress notes (ADR 0027, caught in the auditor's own
+  recent code); untested `delegation_sweep`; unhardened/unbounded Quadlet
+  container. **12 LOW + 10 INFO** — see the report's prioritized fix-list.
+- Honesty check: ADR 0027 (off-`PolicyContext`), ADR 0024 (malicious-backend
+  test), ADR 0016 (reversibility) all **held** against the code; the only
+  material overclaim is the Phase 18 restart-durability claim (H-1).
+- Code UNTOUCHED (report-only); fixes are separate follow-ups. Human gate:
+  Eryk reads + decides fixes + pushes.
