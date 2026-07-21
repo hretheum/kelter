@@ -1,0 +1,28 @@
+docs/BUILD-EVIDENCE.md
+  s_7ac77bc07b52a5::t_34ef3de73b8f1b 1713-1714
+docs/evidence/audit-clippy-pedantic.log
+  s_7ac77bc07b52a5::t_b7b9df5a0d446e 1,290,1732-1736,2308,3382,3947,4757
+docs/audit/AUDIT-2026-07-21.md
+  s_7ac77bc07b52a5::t_677652ef742f2d 29
+  s_7ac77bc07b52a5::t_182c2247dc0fe9 57
+docs/evidence/audit-cargo-tree.log
+  s_7ac77bc07b52a5::t_f6c435a7356540 1,36,360,401-402,474,509-510,512,532-533,537-538,605,607-608,627-629,631,633,744,750,758,774,787,789-790,949,951,953,955,957,959,961,963
+docs/evidence/audit-scan-summary.log
+  s_7ac77bc07b52a5::t_17362978a3f876 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "49d6f20ee9f4ef24ce03a69f9a6f4fcbc206cb91",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
