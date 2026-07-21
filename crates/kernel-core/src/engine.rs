@@ -50,21 +50,37 @@ pub struct ExecutionContext {
     /// context without one still journals it durably (see
     /// [`Self::record_progress`]); only the live event is skipped.
     progress: Option<ProgressSink>,
+    /// Progress-call ordinal (ADR 0027) AND per-step cap counter (audit
+    /// finding 9-b hardening) for [`Self::record_progress`]. Lives on the
+    /// context itself, not on [`ProgressSink`], so the cap applies whether or
+    /// not a live sink is attached — a call path with no sink must not be
+    /// able to re-flood the journal under a fixed note key indefinitely
+    /// either.
+    progress_ordinal: AtomicU64,
 }
 
 /// The live half of streamed delegation progress (ADR 0027): where an
 /// [`ExecutionContext::record_progress`] call publishes its advisory
-/// `AgentDelegationProgress` event. Carries a per-context monotonic
-/// `ordinal` so successive progress lines for one step order and dedupe on
-/// the client independently of the ordered event `seq`.
+/// `AgentDelegationProgress` event.
 #[derive(Clone)]
 struct ProgressSink {
     events: broadcast::Sender<RunEventEnvelope>,
     run_id: Uuid,
     step: u32,
     branch: Option<String>,
-    ordinal: Arc<AtomicU64>,
 }
+
+/// Hard cap on advisory progress notes journaled/broadcast per step (audit
+/// finding 9-b): every non-final SSE frame from a streaming delegation
+/// (ADR 0027) calls `record_progress`, with no prior limit on how many times
+/// per step. A fast or hostile streaming peer could flood journal rows for a
+/// single step within the poll window — unlike step-mode's own journal
+/// growth, which `max_steps` bounds, this had no bound at all. Generous
+/// enough that no legitimate task's progress trail is ever truncated in
+/// practice, while still bounding worst-case per-step journal growth. `pub`
+/// so callers (and tests) can assert against it directly rather than
+/// duplicating the number.
+pub const MAX_PROGRESS_NOTES_PER_STEP: u64 = 200;
 
 impl ExecutionContext {
     /// Build a context for one step. The engine calls this with the step's
@@ -83,6 +99,7 @@ impl ExecutionContext {
             notes,
             agent_usage: std::sync::Mutex::new(Vec::new()),
             progress: None,
+            progress_ordinal: AtomicU64::new(0),
         }
     }
 
@@ -100,7 +117,6 @@ impl ExecutionContext {
             run_id: self.run_id,
             step: self.step,
             branch,
-            ordinal: Arc::new(AtomicU64::new(0)),
         });
         self
     }
@@ -117,10 +133,17 @@ impl ExecutionContext {
     /// propagated, so a flaky store cannot fail an otherwise-fine delegation
     /// over an advisory note.
     pub async fn record_progress(&self, agent: &str, task_id: &str, state: &str, note: &str) {
-        let ordinal = match &self.progress {
-            Some(p) => p.ordinal.fetch_add(1, Ordering::Relaxed),
-            None => 0,
-        };
+        let ordinal = self.progress_ordinal.fetch_add(1, Ordering::Relaxed);
+        if ordinal >= MAX_PROGRESS_NOTES_PER_STEP {
+            if ordinal == MAX_PROGRESS_NOTES_PER_STEP {
+                tracing::warn!(
+                    %agent, %task_id, step = self.step, cap = MAX_PROGRESS_NOTES_PER_STEP,
+                    "a2a: streamed progress exceeded the per-step cap — further updates for \
+                     this step are dropped (neither journaled nor broadcast)"
+                );
+            }
+            return;
+        }
         if let Err(e) = self
             .record_note(
                 &format!("a2a.progress.{ordinal}"),

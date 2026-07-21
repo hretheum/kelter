@@ -50,6 +50,12 @@ struct MockState {
     /// cap (audit finding 9-a): the client must fall back to polling rather
     /// than growing `buf` without bound.
     flood_after_task_id: AtomicBool,
+    /// When set, the SSE reply carries far more than
+    /// `MAX_PROGRESS_NOTES_PER_STEP` well-formed WORKING progress frames
+    /// before a final one — exercises the per-step progress-note cap (audit
+    /// finding 9-b): the journal must not grow past the cap even though the
+    /// remote sent more frames than that.
+    flood_progress_frames: AtomicBool,
     endpoint: Mutex<String>,
 }
 
@@ -90,6 +96,17 @@ async fn rpc(State(st): State<Arc<MockState>>, Json(req): Json<Value>) -> Respon
             st.stream_calls.fetch_add(1, Ordering::SeqCst);
             if st.flood_after_task_id.load(Ordering::SeqCst) {
                 return infinite_flood_body();
+            }
+            if st.flood_progress_frames.load(Ordering::SeqCst) {
+                let n = 2 * kernel_core::MAX_PROGRESS_NOTES_PER_STEP as usize;
+                let mut frames = vec![
+                    json!({"result": {"id": "task-cap", "status": {"state": "TASK_STATE_WORKING"}, "artifacts": []}}),
+                ];
+                for i in 0..n {
+                    frames.push(json!({"result": {"taskId": "task-cap", "status": {"state": "TASK_STATE_WORKING"}, "artifact": {"parts": [{"text": format!("progress {i}")}]}}}));
+                }
+                frames.push(json!({"result": {"taskId": "task-cap", "final": true, "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [{"parts": [{"text": "done after flood"}]}]}}));
+                return sse(frames);
             }
             let frames = if st.drop_mid_stream.load(Ordering::SeqCst) {
                 // Task created + one progress frame, then the body ENDS with no
@@ -463,5 +480,48 @@ async fn streamed_delegation_caps_the_reassembly_buffer_and_falls_back_to_pollin
             .contains("via poll"),
         "the completed result came from the poll fallback: {:?}",
         step.result
+    );
+}
+
+/// Regression test for audit finding 9-b (docs/audit/AUDIT-2026-07-21.md):
+/// every non-final SSE frame journals+broadcasts an advisory progress note
+/// with no prior cap on how many times per step. A remote that sends far
+/// more than `MAX_PROGRESS_NOTES_PER_STEP` well-formed progress frames must
+/// still complete normally (the cap only drops PROGRESS notes, never the
+/// terminal frame), and the journal must hold at most the cap's worth of
+/// progress notes — not one per frame the remote chose to send.
+#[tokio::test]
+async fn streamed_delegation_caps_progress_notes_per_step() {
+    let mock = Arc::new(MockState::default());
+    mock.flood_progress_frames.store(true, Ordering::SeqCst);
+    let base = spawn_server(mock.clone()).await;
+    let (source, action) = source_for(&base, true).await;
+    let store: Arc<dyn RunStore> = Arc::new(InMemoryRunStore::new());
+    let k = kernel(&action, source, store.clone());
+
+    let run_id = k.create_run("streamy-progress-flood".into()).await.unwrap();
+    let run = k.execute_run(run_id).await.unwrap();
+
+    // The remote sent 2x the cap in progress frames, THEN a final frame — the
+    // final frame is never gated by the cap (record_progress is only called
+    // for non-final frames), so completion is unaffected.
+    assert_eq!(run.status, RunStatus::Completed);
+    let step = run.steps.iter().find(|s| s.action == action).unwrap();
+    assert!(
+        step.result["output"]
+            .as_str()
+            .unwrap_or("")
+            .contains("done after flood"),
+        "the terminal frame's own output is never gated by the progress cap: {:?}",
+        step.result
+    );
+
+    let journal = store.journal(run_id).await.unwrap();
+    let notes = progress_notes(&journal);
+    assert_eq!(
+        notes.len(),
+        kernel_core::MAX_PROGRESS_NOTES_PER_STEP as usize,
+        "journal must hold at most the cap's worth of progress notes, not one per frame the \
+         remote chose to send (it sent 2x the cap)"
     );
 }

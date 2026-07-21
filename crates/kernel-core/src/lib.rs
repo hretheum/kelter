@@ -35,7 +35,7 @@ pub use engine::{
     DelegationLimits, ExecutionContext, ExecutionError, Kernel, KernelConfig, KernelError,
     PendingDelegation, PendingDelegationInput, PendingSkillActivation, ResilienceConfig, Run,
     RunEvent, RunEventEnvelope, RunMode, RunStatus, StepRecord, A2A_CONTINUATION_INPUT_NOTE,
-    ACTIVATE_SKILL_ACTION, DEACTIVATE_SKILL_ACTION, FINISH_ACTION,
+    ACTIVATE_SKILL_ACTION, DEACTIVATE_SKILL_ACTION, FINISH_ACTION, MAX_PROGRESS_NOTES_PER_STEP,
 };
 pub use journal::{JournalEntry, PendingActivationFold, PendingDelegationFold, Usage};
 pub use learned::{
