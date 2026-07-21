@@ -727,10 +727,27 @@ impl A2aActionSource {
     /// Drop a runtime-registered agent's action (ADR 0023) — the daemon
     /// calls this after `AgentRegistry::remove` succeeds, so a removed
     /// agent's `delegate_to_X` action disappears from `action_schema()`
-    /// immediately.
+    /// immediately. Also prunes that origin's circuit-breaker entry (audit
+    /// finding 9-c/#8) — `circuits` was never cleaned up on deregistration,
+    /// so it leaked across agent churn / token rotations — UNLESS another
+    /// still-registered agent shares the same origin (circuits are keyed by
+    /// origin, not by agent name, so pruning unconditionally could wipe a
+    /// co-located agent's real failure history).
     pub fn deregister_runtime(&self, agent_name: &str) {
         let name = action_name(agent_name);
-        self.agents.write().unwrap().retain(|(n, _)| *n != name);
+        let mut guard = self.agents.write().unwrap();
+        let removed_origin = guard
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, c)| c.allowed_origin().to_string());
+        guard.retain(|(n, _)| *n != name);
+        if let Some(origin) = removed_origin {
+            let still_used = guard.iter().any(|(_, c)| c.allowed_origin() == origin);
+            drop(guard);
+            if !still_used {
+                self.circuits.lock().unwrap().remove(&origin);
+            }
+        }
     }
 
     /// Record one delegation outcome against `origin` (ADR 0023): success
@@ -1397,5 +1414,64 @@ mod tests {
         assert!(is_terminal("TASK_STATE_FAILED"));
         assert!(!is_terminal("TASK_STATE_WORKING"));
         assert!(!is_terminal("TASK_STATE_SUBMITTED"));
+    }
+
+    fn agent(name: &str, origin: &str) -> RemoteAgent {
+        RemoteAgent {
+            name: name.into(),
+            card_url: format!("{origin}/some/path"),
+            token: None,
+        }
+    }
+
+    /// Regression test for audit finding 9-c/#8: `circuits` leaked forever —
+    /// `deregister_runtime` dropped the agent from `agents` but never touched
+    /// its circuit-breaker entry. Prune it on deregistration.
+    #[test]
+    fn deregister_runtime_prunes_the_circuit_entry() {
+        let src = A2aActionSource::new(vec![]).unwrap();
+        src.register_runtime(&agent("solo", "http://127.0.0.1:9001"))
+            .unwrap();
+        // Trip the circuit so there is a real entry to prune.
+        src.record_circuit_outcome("http://127.0.0.1:9001", false);
+        assert!(
+            src.circuits
+                .lock()
+                .unwrap()
+                .contains_key("http://127.0.0.1:9001"),
+            "precondition: a circuit entry exists for the origin"
+        );
+
+        src.deregister_runtime("solo");
+
+        assert!(
+            !src.circuits
+                .lock()
+                .unwrap()
+                .contains_key("http://127.0.0.1:9001"),
+            "the circuit entry must be pruned once no agent uses that origin"
+        );
+    }
+
+    /// A co-located agent (same origin, different name) must keep the origin's
+    /// circuit history — pruning is per-ORIGIN usage, not unconditional.
+    #[test]
+    fn deregister_runtime_keeps_the_circuit_entry_if_another_agent_shares_the_origin() {
+        let src = A2aActionSource::new(vec![]).unwrap();
+        src.register_runtime(&agent("a", "http://127.0.0.1:9002"))
+            .unwrap();
+        src.register_runtime(&agent("b", "http://127.0.0.1:9002"))
+            .unwrap();
+        src.record_circuit_outcome("http://127.0.0.1:9002", false);
+
+        src.deregister_runtime("a");
+
+        assert!(
+            src.circuits
+                .lock()
+                .unwrap()
+                .contains_key("http://127.0.0.1:9002"),
+            "agent 'b' still uses this origin — its circuit history must survive"
+        );
     }
 }
