@@ -98,7 +98,7 @@ async fn rpc(State(st): State<Arc<MockState>>, Json(req): Json<Value>) -> Respon
                 return infinite_flood_body();
             }
             if st.flood_progress_frames.load(Ordering::SeqCst) {
-                let n = 2 * kernel_core::MAX_PROGRESS_NOTES_PER_STEP as usize;
+                let n = 2 * usize::try_from(kernel_core::MAX_PROGRESS_NOTES_PER_STEP).unwrap();
                 let mut frames = vec![
                     json!({"result": {"id": "task-cap", "status": {"state": "TASK_STATE_WORKING"}, "artifacts": []}}),
                 ];
@@ -520,7 +520,7 @@ async fn streamed_delegation_caps_progress_notes_per_step() {
     let notes = progress_notes(&journal);
     assert_eq!(
         notes.len(),
-        kernel_core::MAX_PROGRESS_NOTES_PER_STEP as usize,
+        usize::try_from(kernel_core::MAX_PROGRESS_NOTES_PER_STEP).unwrap(),
         "journal must hold at most the cap's worth of progress notes, not one per frame the \
          remote chose to send (it sent 2x the cap)"
     );

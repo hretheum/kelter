@@ -1459,6 +1459,9 @@ impl Kernel {
         // or — for the circuit-open-skip case — it never dialed but still
         // counts as this run's Nth a2a step once recorded). Every retry/
         // fallback attempt here consumes one more, checked fresh each time.
+        // A step count bounded by `max_steps` (config, a dozen by default) —
+        // never remotely near u32::MAX.
+        #[allow(clippy::cast_possible_truncation)]
         let mut attempted = run
             .steps
             .iter()
@@ -1552,6 +1555,10 @@ impl Kernel {
         // ---- phase 2: sanctioned fallback, in config order -----------------
         if !ok && !aborted {
             if let Some(fallback_list) = self.config.resilience.fallback.get(primary_action) {
+                // `i` is bounded by the config-declared fallback list length
+                // (a handful of entries) — the `(i + 1) as u32` casts below
+                // never truncate in practice.
+                #[allow(clippy::cast_possible_truncation)]
                 for (i, candidate) in fallback_list.iter().enumerate() {
                     if matches!(
                         self.tools.circuit_state(candidate),
@@ -1960,6 +1967,9 @@ impl Kernel {
         let mut last_error: Option<String> = None;
         let mut terminal: Option<(RunStatus, Option<serde_json::Value>, Option<String>)> = None;
 
+        // Bounded by `max_steps` (config, a dozen by default) — never
+        // remotely near u32::MAX.
+        #[allow(clippy::cast_possible_truncation)]
         let first_step = run.steps.len() as u32;
         for step_index in first_step..self.config.max_steps {
             // Journal state for this step (only ever non-empty for the first
@@ -2275,6 +2285,9 @@ impl Kernel {
                             // proposal, never for a replayed one.
                             if is_a2a_action(v.action()) {
                                 let target_origin = self.tools.a2a_origin(v.action());
+                                // Bounded by `max_steps` — never remotely
+                                // near u32::MAX.
+                                #[allow(clippy::cast_possible_truncation)]
                                 let attempted = run
                                     .steps
                                     .iter()
@@ -3166,6 +3179,11 @@ impl Kernel {
         // yet). Seeded from every A2A node this run already has a Receipt
         // OR a dangling Intent for (from a prior crashed session), so a
         // resume does not reset the budget.
+        // `i` (a node's position in the plan) and the final `.count()` are
+        // both bounded by the plan's own node count — a model-proposed DAG,
+        // realistically dozens of nodes at most, never remotely near
+        // u32::MAX.
+        #[allow(clippy::cast_possible_truncation)]
         let mut a2a_attempts: u32 = nodes
             .iter()
             .filter(|(i, n)| {
@@ -3221,6 +3239,9 @@ impl Kernel {
                     continue;
                 }
 
+                // Bounded by the plan's own node count — see the comment on
+                // `a2a_attempts`'s seed above.
+                #[allow(clippy::cast_possible_truncation)]
                 let step = *node_index as u32;
                 let folded = fold_step(&journal, step);
 

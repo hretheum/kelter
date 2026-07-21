@@ -31,3 +31,7 @@ This file orients any Claude/agent working in the repo. Read it first.
   tree; mask them in logs.
 - **Provenance.** `.md` files an agent authors carry `provenance: ai_authored`
   frontmatter (with `provenance_metadata`); untagged files are human-authored.
+  This convention was adopted starting with ADR 0007 — the founding docs
+  (ADRs 0001-0006, `architecture.md`) predate it and are untagged regardless
+  of actual authorship; don't read their absence of frontmatter as a claim
+  (audit finding 6-a, `docs/audit/AUDIT-2026-07-21.md`).

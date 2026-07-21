@@ -321,7 +321,11 @@ impl A2aClient {
         resp: reqwest::Response,
     ) -> Result<T, A2aError> {
         if let Some(len) = resp.content_length() {
-            if len as usize > MAX_RESPONSE_BYTES {
+            // Widen the (small, constant) cap up to u64 rather than narrow
+            // the (attacker-influenced) advertised length down to usize —
+            // avoids any truncation risk on the security-relevant comparison
+            // outright, on every target width.
+            if len > MAX_RESPONSE_BYTES as u64 {
                 return Err(A2aError::Protocol(
                     self.agent.clone(),
                     format!(
@@ -1148,6 +1152,13 @@ impl ActionSource for A2aActionSource {
         // which this function only ever handles anyway). Only read here —
         // never used on the reconnect path below, since a reconnect polls
         // an existing remote task instead of sending a fresh message.
+        // Kernel-injected only (see the doc comment above) — a run's own
+        // depth counter, bounded in practice by the configured `max_depth`
+        // (a handful at most), never model/attacker-supplied here. Contrast
+        // the INBOUND side (`server::message_lineage`), which reads
+        // client-supplied depth and is a separate, disclosed
+        // cooperative-protocol trust boundary.
+        #[allow(clippy::cast_possible_truncation)]
         let lineage_depth = action
             .arguments()
             .get(A2A_DEPTH_ARG)
@@ -1289,6 +1300,10 @@ impl ActionSource for A2aActionSource {
         }
         .await;
 
+        // Bounded by `poll_timeout` (120s default) — millisecond overflow
+        // into u64 would need ~584 million years, so this narrows u128 to a
+        // value that is always representable in practice.
+        #[allow(clippy::cast_possible_truncation)]
         let elapsed_ms = started.elapsed().as_millis() as u64;
         ctx.attribute_agent(client.agent_name(), elapsed_ms);
 
