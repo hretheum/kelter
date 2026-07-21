@@ -1,0 +1,29 @@
+apps/web-ui/package.json
+  s_7ac77bc07b52a5::t_4791f0c1f8396a 9-10
+  s_7ac77bc07b52a5::t_53060fc575d51c 26-27
+apps/web-ui/tsconfig.json
+  s_7ac77bc07b52a5::t_6cc5bd7fb23f2d 18-19
+apps/web-ui/src/lib/events.ts
+  s_7ac77bc07b52a5::t_e47346fe7598b2 434-441
+  s_7ac77bc07b52a5::t_9dd91cb1e3be22 378-393,396-400,407-412
+apps/web-ui/src/lib/events.test.ts
+  s_7ac77bc07b52a5::t_fe0f22494d22ab 1-88
+apps/web-ui/pnpm-lock.yaml
+  s_7ac77bc07b52a5::t_571a3e4d3eec97 48-50,450-452,559-564,582-614,628-631,665-667,677-683,814-820,857-859,864-869,880-886,891-894,946-991,1283-1284,1374-1380,1403-1445,1458-1459,1483-1484,1516-1521,1604-1607,1662-1663,1666-1669,1676-1679,1685-1686,1708-1737
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "50a7dffaa28af1e135a935a6e9bc21e227462c48",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
