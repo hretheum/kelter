@@ -10,6 +10,7 @@ kernel-core.workspace = true
 a2a.workspace = true
 async-trait.workspace = true
 axum.workspace = true
+parking_lot.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync"] }
 serde.workspace = true
 serde_json.workspace = true

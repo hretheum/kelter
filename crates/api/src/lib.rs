@@ -530,11 +530,17 @@ const AUTH_WINDOW: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 struct AuthLimiter {
-    failures: std::sync::Mutex<VecDeque<Instant>>,
+    // `parking_lot::Mutex` (audit finding 4-a/#16): a `std::sync::Mutex` here
+    // POISONS if a thread panics while holding it — and this lock sits on the
+    // request hot path, so one panic-under-lock would turn EVERY subsequent
+    // auth check into a panic (`.lock().unwrap()`), a self-DoS far worse than
+    // the brute-force slowdown this guards against. parking_lot's Mutex does
+    // not poison (and `.lock()` returns the guard directly, no unwrap).
+    failures: parking_lot::Mutex<VecDeque<Instant>>,
 }
 
 impl AuthLimiter {
-    fn prune(&self, dq: &mut VecDeque<Instant>) {
+    fn prune(dq: &mut VecDeque<Instant>) {
         let now = Instant::now();
         while let Some(&front) = dq.front() {
             if now.duration_since(front) > AUTH_WINDOW {
@@ -545,17 +551,17 @@ impl AuthLimiter {
         }
     }
     fn is_locked(&self) -> bool {
-        let mut dq = self.failures.lock().unwrap();
-        self.prune(&mut dq);
+        let mut dq = self.failures.lock();
+        Self::prune(&mut dq);
         dq.len() >= AUTH_MAX_FAILURES
     }
     fn record_failure(&self) {
-        let mut dq = self.failures.lock().unwrap();
-        self.prune(&mut dq);
+        let mut dq = self.failures.lock();
+        Self::prune(&mut dq);
         dq.push_back(Instant::now());
     }
     fn record_success(&self) {
-        self.failures.lock().unwrap().clear();
+        self.failures.lock().clear();
     }
 }
 
@@ -1577,5 +1583,41 @@ async fn static_asset(uri: Uri) -> Response {
         )
             .into_response(),
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod auth_limiter_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// Regression test for audit finding 4-a/#16: the auth limiter's lock must
+    /// NOT poison on a panic-under-lock. A `std::sync::Mutex` here would leave
+    /// the lock poisoned after any panic while held, so the next
+    /// `.lock().unwrap()` on the request hot path would itself panic — a
+    /// self-DoS. `parking_lot::Mutex` never poisons: after the panicking
+    /// thread unwinds (dropping the guard), the limiter is immediately usable
+    /// again.
+    #[test]
+    fn auth_limiter_survives_a_panic_while_holding_the_lock() {
+        let limiter = Arc::new(AuthLimiter::default());
+        let l2 = limiter.clone();
+        let joined = std::thread::spawn(move || {
+            let _held = l2.failures.lock();
+            panic!("boom while holding the auth-limiter lock");
+        })
+        .join();
+        assert!(
+            joined.is_err(),
+            "the thread must have panicked under the lock"
+        );
+
+        // With a poisoning std Mutex this next call would panic; parking_lot
+        // makes it just work.
+        limiter.record_failure();
+        assert!(
+            !limiter.is_locked(),
+            "one failure is below the lock threshold"
+        );
     }
 }
