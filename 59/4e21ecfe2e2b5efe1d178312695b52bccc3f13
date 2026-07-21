@@ -1,0 +1,25 @@
+crates/a2a/src/registry.rs
+  s_7ac77bc07b52a5::t_fc71693d323b96 61-72
+  s_7ac77bc07b52a5::t_d3409edd6fc086 217-218,228,237-253
+  s_7ac77bc07b52a5::t_dcac36a85239e0 287-297
+  s_7ac77bc07b52a5::t_d90722bd73e3a0 310-402
+  s_7ac77bc07b52a5::t_83661210b3c14b 100,106-116,118,120,122-146
+  s_7ac77bc07b52a5::t_5e4dfc307ae0d6 263-278
+  s_7ac77bc07b52a5::t_3a3b2b9f8b315e 403-405
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "594e21ecfe2e2b5efe1d178312695b52bccc3f13",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
