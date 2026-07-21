@@ -1,0 +1,32 @@
+crates/a2a/tests/a2a_client_test.rs
+  s_7ac77bc07b52a5::t_fc373e8e27880d 46-51,54
+  s_7ac77bc07b52a5::t_bfef1f2e12d8f2 474-505
+  s_7ac77bc07b52a5::t_2e60ef5929d11f 32-34
+crates/a2a/src/lib.rs
+  s_7ac77bc07b52a5::t_760e49f2c38349 438,448
+  s_7ac77bc07b52a5::t_f8d526c622e4c5 359,368
+  s_7ac77bc07b52a5::t_74ce93d8cc13f2 313-353
+  s_7ac77bc07b52a5::t_9ee706e503f6a8 62-69
+crates/mcp/src/tools.rs
+  s_7ac77bc07b52a5::t_58df64f69111f0 639-642
+  s_7ac77bc07b52a5::t_35dd00dcc2ff58 603-638,643-654
+  s_7ac77bc07b52a5::t_2f4b605a214afd 434-457
+  s_7ac77bc07b52a5::t_f26511d7044ced 471-482,507-513,521-525
+  s_7ac77bc07b52a5::t_2c4f600767c9f1 470
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "24befb7697847567d0467469bcac2ee28bf06a69",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
