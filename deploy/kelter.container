@@ -28,6 +28,36 @@ LogOpt=max-file=3
 # stricter podman builds.
 EnvironmentFile=%h/.config/kelter/env
 
+# Container hardening (audit finding 10-a, docs/audit/AUDIT-2026-07-21.md):
+# the unit previously had no memory ceiling, no privilege-escalation
+# hardening, and no health check wired to the daemon's own /healthz route —
+# ironic against the WASM memory backend's in-process 64 MiB cap (ADR 0024)
+# while the whole container was unbounded, and directly compounds the
+# unbounded-buffer classes of bug this same fix pass hardened elsewhere (a
+# hostile/broken remote peer's worst case was memory growth, not a hang —
+# but a real memory ceiling is defense-in-depth regardless of source).
+#
+# Reasonable-but-adjustable for a single-tenant homelab deployment, not
+# derived from a load measurement — same honest framing as the delegation
+# limits' defaults (ADR 0022/0023). Raise it if a real workload needs more.
+Memory=512m
+# The daemon runs as a non-root user already (Dockerfile `USER kelter`) and
+# never needs to gain privileges at runtime — no setuid tools, no capability
+# changes.
+NoNewPrivileges=true
+# Same probe the image's own HEALTHCHECK already uses (see the repo root
+# Dockerfile) — mirrored here so systemd (not just `podman ps`) sees it:
+# HealthOnFailure=kill turns a repeatedly-unresponsive-but-still-running
+# daemon (a hang) into a killed process, which THEN trips Restart=on-failure
+# below — closing the gap where Restart=on-failure alone only reacts to a
+# non-zero exit, never to an unresponsive process that never exits.
+HealthCmd=curl -fsS http://127.0.0.1:7466/healthz || exit 1
+HealthInterval=30s
+HealthTimeout=3s
+HealthRetries=3
+HealthStartPeriod=10s
+HealthOnFailure=kill
+
 [Service]
 Restart=on-failure
 
