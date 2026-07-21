@@ -1726,3 +1726,59 @@ self-praise); raw scans in `docs/evidence/audit-*`.
   material overclaim is the Phase 18 restart-durability claim (H-1).
 - Code UNTOUCHED (report-only); fixes are separate follow-ups. Human gate:
   Eryk reads + decides fixes + pushes.
+
+## Fixes — audit remediation pass 1: durability + unbounded memory (2026-07-21)
+
+Fixed the "do first" cluster from `docs/audit/AUDIT-2026-07-21.md` §6:
+durability correctness + memory-bounding, each its own commit with its own
+test, red-green verified (fix temporarily reverted, confirmed the test
+fails, restored, confirmed green).
+
+- **H-1 (HIGH, `a82a46d`).** SQLite `unfinished_runs` was missing
+  `awaiting_delegation_input` from its `status IN (...)` list, silently
+  orphaning an ADR 0026 interactive-delegation pause across a daemon
+  restart on the production backend (masked by an in-memory-only test).
+  Fixed + regression test exercising the real SQLite query against every
+  `RunStatus` variant + an ADR 0026 errata note.
+- **9-a (MEDIUM, `24856d4`).** The SSE reassembly buffer in
+  `stream_to_terminal` (ADR 0027) had no size cap — a streaming peer that
+  never sends a separator could grow it without bound. Capped at 1 MiB,
+  falls back to polling past that. Red-green proved with a genuinely
+  infinite mock stream (10s outer timeout).
+- **9-b (MEDIUM, `4369e38`).** Advisory progress notes (ADR 0027) had no
+  per-step cap. Added `MAX_PROGRESS_NOTES_PER_STEP` (200); a flood test
+  proves the journal holds exactly the cap's worth, not one per frame sent.
+- **3-a (MEDIUM, `bbba250`).** An inline (Task-less) A2A completion
+  journaled nothing before returning, so a crash before the engine's
+  Receipt landed would re-dial (double-execute the remote task, since
+  `idempotency_key` is never transmitted on the wire). Added
+  `NOTE_INLINE_COMPLETE`, mirroring `NOTE_TASK_ID`'s reconnect-not-redial
+  pattern.
+- **3-c (LOW, `69be1a2`).** `a2a_attempts` could double-count a single node
+  across a two-crash resume (safe direction — over-refuse, never
+  over-admit — but could spuriously fail a plan). Guarded the resume-arm
+  increment; a real two-crash simulation (hung dispatch abandoned via
+  timeout, then a fresh session) proves a budget-tight sibling is no longer
+  spuriously refused.
+- **10-a (MEDIUM, `ac6deb2`).** `deploy/kelter.container` had no memory
+  ceiling, no privilege hardening, no health check. Added
+  `Memory=512m`/`NoNewPrivileges=true`/`HealthCmd`+`HealthOnFailure=kill`
+  (native Quadlet `[Container]` keys, verified against the official
+  podman-systemd.unit(5) docs). Static validation
+  (`scripts/validate-quadlet.sh`) passes; real generator dry-run is not
+  available on this Mac dev machine (no systemd, no standalone quadlet
+  binary, and `podman quadlet install` requires a never-provisioned podman
+  machine VM — starting one from scratch was judged disproportionate for
+  validating one config file) — disclosed, not faked; remains the K12/human
+  step.
+- Prerequisite chore (`49d6f20`): the prior audit commit had leaked local
+  absolute paths (containing this repo's own pre-rename directory name)
+  into evidence logs, tripping the codename grep — scrubbed before this
+  pass began.
+
+**Proof:** every fix has its own red-green-verified regression test.
+`cargo test --workspace` **exit 0, 50 suites, 215 tests, 0 failures**;
+`cargo clippy --workspace --all-targets` clean (default lints); `cargo fmt
+--check` clean; codename grep over the tracked tree = 0. Not pushed (human
+gate). Items H-1/9-a/9-b/3-a/3-c/10-a from the audit's prioritized fix-list
+are now closed; the rest of that list remains open.
