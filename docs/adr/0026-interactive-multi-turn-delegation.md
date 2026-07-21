@@ -50,6 +50,19 @@ authorization already happened (P2+P3 passed, the dial was made) — this is a
 *separate* pause from `AwaitingDelegationDecision`, which gates whether to
 dial at all.
 
+> **Errata (2026-07-21, audit finding H-1):** the claim above — "a restart
+> re-surfaces it... and never orphans it" — held for the `RunStore` trait
+> contract and for `InMemoryRunStore`, but the production `SqliteRunStore`'s
+> `unfinished_runs` query's `status IN (...)` list had drifted and did NOT
+> include `awaiting_delegation_input`, so on the real (SQLite) backend a
+> paused interactive delegation WAS silently orphaned across a restart. Found
+> by the 2026-07-21 adversarial audit (`docs/audit/AUDIT-2026-07-21.md`,
+> finding H-1) and fixed the same day: `crates/storage/src/lib.rs`'s query now
+> includes the status, guarded by a new SQLite-backed regression test
+> (`unfinished_runs_includes_every_non_terminal_status_sqlite`) that exercises
+> every `RunStatus` variant against the real query string, not just the
+> in-memory reference store. The claim above is accurate as of that fix.
+
 **Resume reconnects, never re-dials.** A human's continuation arrives via
 `POST /api/v1/runs/{id}/delegation-input {input}` →
 `Kernel::provide_delegation_input`, which journals the input as a `Note` keyed

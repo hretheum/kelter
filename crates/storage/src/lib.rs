@@ -210,7 +210,7 @@ impl RunStore for SqliteRunStore {
         let conn = self.db.conn.lock().await;
         let mut stmt = conn
             .prepare(
-                "SELECT id FROM runs WHERE status IN ('pending', 'running', 'awaiting_skill_decision', 'awaiting_delegation_decision')
+                "SELECT id FROM runs WHERE status IN ('pending', 'running', 'awaiting_skill_decision', 'awaiting_delegation_decision', 'awaiting_delegation_input')
                  ORDER BY created_at ASC",
             )
             .map_err(backend_err)?;
@@ -564,6 +564,48 @@ mod tests {
         store.put(r).await.unwrap();
         assert!(store.unfinished_runs().await.unwrap().is_empty());
         assert_eq!(store.list().await.unwrap().len(), 1);
+    }
+
+    /// Regression test for audit finding H-1 (docs/audit/AUDIT-2026-07-21.md):
+    /// the SQLite `unfinished_runs` query's `status IN (...)` list had drifted
+    /// from `RunStatus`'s actual non-terminal set — `awaiting_delegation_input`
+    /// (ADR 0026) was missing, silently orphaning a paused interactive
+    /// delegation across a daemon restart. `InMemoryRunStore` (kernel-core's
+    /// reference store, matches every non-terminal variant structurally via
+    /// `matches!`) never exhibited this because it can't drift the same way —
+    /// this test exercises the REAL SqliteRunStore query string against every
+    /// `RunStatus` variant, so a future status added to the enum without a
+    /// matching SQL literal fails loudly here instead of only in production.
+    #[tokio::test]
+    async fn unfinished_runs_includes_every_non_terminal_status_sqlite() {
+        let store = SqliteRunStore::new(Db::open_in_memory().unwrap());
+        let non_terminal = [
+            RunStatus::Pending,
+            RunStatus::Running,
+            RunStatus::AwaitingSkillDecision,
+            RunStatus::AwaitingDelegationDecision,
+            RunStatus::AwaitingDelegationInput,
+        ];
+        let mut expected: Vec<Uuid> = Vec::new();
+        for status in non_terminal {
+            let r = run(status);
+            expected.push(r.id);
+            store.put(r).await.unwrap();
+        }
+        // Terminal statuses must NOT appear in unfinished_runs.
+        for status in [RunStatus::Completed, RunStatus::Failed, RunStatus::Canceled] {
+            store.put(run(status)).await.unwrap();
+        }
+
+        let mut got = store.unfinished_runs().await.unwrap();
+        got.sort();
+        expected.sort();
+        assert_eq!(
+            got, expected,
+            "every non-terminal RunStatus (incl. awaiting_delegation_input, ADR 0026) must \
+             survive a restart via unfinished_runs — a status missing here orphans a paused \
+             run on the production SQLite store (audit H-1)"
+        );
     }
 
     #[tokio::test]
