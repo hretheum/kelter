@@ -199,6 +199,34 @@ async fn timeout_sweeper_denies_and_resumes() {
         0,
         "a denied delegation never dials the remote agent"
     );
+
+    // De-flake diagnosis (this test's own history): an earlier draft asserted
+    // `run.steps` contained a step for the denied delegation, which failed —
+    // NOT a flaky async-write race, but a TEST-BUG asserting a non-invariant.
+    // A denied step-mode delegation NEVER executes, so it is deliberately not
+    // a `StepRecord` (kernel-core/src/engine.rs: a `Deny` on resume only sets
+    // `last_error` and journals no `Decision`). The REAL, durable record of
+    // the denial is the journaled `AgentDelegationDecided{Deny}` — written
+    // synchronously by `decide_delegation` (both `append_journal` and `put`
+    // are awaited) BEFORE the sweep returns. Pin both facts so the invariant
+    // can't silently drift again:
+    assert!(
+        !run.steps.iter().any(|s| s.action == action_id),
+        "a denied delegation is not a recorded execution step (it never ran)"
+    );
+    let journal = kernel.store().journal(run_id).await.unwrap();
+    assert!(
+        journal.iter().any(|e| matches!(
+            e,
+            kernel_core::JournalEntry::AgentDelegationDecided {
+                agent, principal, decision, ..
+            } if agent == &action_id
+                && principal == "system:timeout"
+                && matches!(decision, kernel_core::AgentDelegationDecision::Deny)
+        )),
+        "the denial is DURABLY journaled (AgentDelegationDecided{{Deny, system:timeout}}) \
+         before the sweep returns — the real reversibility-safe record: {journal:?}"
+    );
 }
 
 #[tokio::test]

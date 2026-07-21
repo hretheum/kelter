@@ -1929,3 +1929,59 @@ tracked tree = 0.
 Not pushed (human gate). Deferred (disclosed): Hindsight-as-store adapter,
 cross-user ACL/multi-region, TLS-to-Postgres (rustls connector), ANN index
 (permanent non-goal under reversibility).
+
+## De-flake — timeout_sweeper_denies_and_resumes: diagnosis + audit (2026-07-21)
+
+**Diagnosis = (a) test-bug, NOT (b) a sweeper race.** An earlier draft of
+`crates/daemon/tests/delegation_sweep_test.rs` asserted that `run.steps`
+contained a step for the denied delegation; that assertion failed. The de-flake
+task's crux was to decide whether that was a flaky async-write race in the
+sweeper (durability defect) or a wrong assertion. Evidence, from the code:
+
+- The denial IS written synchronously and durably BEFORE the sweep returns:
+  `Kernel::decide_delegation` (`crates/kernel-core/src/engine.rs:1263+`) awaits
+  BOTH `append_journal(AgentDelegationDecided{Deny, "system:timeout"})` AND
+  `put(run)` before returning; the sweeper only calls it and returns the id.
+  No async/unflushed window → no race.
+- A denied step-mode delegation is DELIBERATELY not a `StepRecord`: on resume,
+  a `Deny` decision only sets `last_error` and journals no `Decision`
+  (`engine.rs:2050-2056`) — the delegation never executes, so there is no
+  execution step to record. The failed assertion asserted a non-invariant.
+
+So it was a deterministic wrong assertion (removed in fix3, commit `dd508cc`)
+that — via cargo's fail-fast on the first failing test binary — MASKED the full
+`cargo test --workspace` count, which is what read as "flaky under load". Not a
+durability finding.
+
+**Fix (strengthen, not just remove).** The test now asserts the CORRECT
+invariant the removed one got wrong: (1) the denied delegation is NOT a
+recorded step, and (2) the denial IS durably journaled as
+`AgentDelegationDecided{Deny, system:timeout}` before the sweep returns. The
+test is fully deterministic — it passes an explicit `now` to the sweeper (no
+wall-clock, no `sleep`).
+
+**De-flake proof under load (money-shot).** `cargo test --workspace` run **8×
+back-to-back under contention** (disk at 98%): all **235 passed, 0 failures**
+every run — full count, no masking. The sweep binary alone: **20/20**. (Logs
+from this session.)
+
+**Audit of other timing-dependent tests** (grep for `sleep`/`timeout`/wall-clock):
+- BOUNDED POLL (deterministic, fine): `api_test.rs:150,307,387,579`,
+  `multiagent_durable_resume_test.rs:221` — `sleep` paces a `for … { get; if
+  done break; sleep }` loop with a ~1s budget for a mock-fast run.
+- INTENTIONAL ORDERING DELAY (part of the test design, fine): `parallel_plan_test.rs:125`,
+  `plan_delegation_ask_test.rs:146` — `TimedTools` inject a chosen delay to
+  force a specific concurrent-admission interleaving.
+- WALL-CLOCK COOLDOWN (fine): `delegation_resilience_test.rs:461` — `sleep(cooldown
+  + 100ms)` waits out a real circuit-breaker cooldown with a margin.
+- FLAGGED (timing-based "prove-a-negative", pre-existing, not de-flaked):
+  `api_test.rs:638` (sleep 100ms to let a "hang forever" run start before
+  cancel) and `api_test.rs:654` (sleep 100ms then assert the canceled state
+  "never flips back"). These are inherently timing-based — proving "nothing
+  else happens" needs a wait — and fully de-flaking them would require
+  test-only sync hooks into the daemon's spawn/abort path (disproportionate;
+  they pass 8× under load). Recorded as a finding, not patched, per the
+  no-arbitrary-sleep-shortcut rule (a bigger sleep would still be flaky).
+
+No sweeper/durability fix was needed (diagnosis (a)). `cargo clippy -D` /
+`fmt` clean; `git grep -i` codename = 0. Not pushed (human gate).
