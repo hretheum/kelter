@@ -29,6 +29,9 @@ struct MockState {
     /// Reply to `SendMessage` with a bare inline `message` instead of a
     /// `task` — the Task-less completion path (audit finding 3-a).
     inline: bool,
+    /// Return an Agent Card whose body exceeds the response cap (audit finding
+    /// 2-c/#17) — the client must refuse it, not buffer it into OOM.
+    oversized_card: bool,
     /// The endpoint URL the card advertises. Set once the port is known;
     /// an explicit value (SSRF tests) overrides self-pointing.
     endpoint: std::sync::Mutex<String>,
@@ -40,9 +43,15 @@ struct MockState {
 
 async fn card(State(st): State<Arc<MockState>>) -> Json<Value> {
     let endpoint = st.endpoint.lock().unwrap().clone();
+    let description = if st.oversized_card {
+        // > 8 MiB response cap — the client must trip the cap mid-stream.
+        "x".repeat(9 * 1024 * 1024)
+    } else {
+        "echoes".to_string()
+    };
     Json(json!({
         "name": "Toy Agent",
-        "description": "echoes",
+        "description": description,
         "supportedInterfaces": [
             {"url": endpoint, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
         ],
@@ -460,5 +469,37 @@ async fn resume_reconnects_to_journaled_inline_completion_without_redelegating()
         state.send_calls.load(Ordering::SeqCst),
         0,
         "resume must NOT re-delegate — zero SendMessage calls expected"
+    );
+}
+
+/// Regression test for audit finding 2-c/#17: a hostile agent returning an
+/// oversized response body must be refused (the response cap), not buffered
+/// into an OOM. Exercised via the Agent Card fetch (the first read on any
+/// dial), which resolves through the same read_json_capped helper as RPC.
+#[tokio::test]
+async fn oversized_response_body_is_refused_not_buffered() {
+    let state = Arc::new(MockState {
+        oversized_card: true,
+        ..Default::default()
+    });
+    let base = spawn_server(state).await;
+
+    let src = A2aActionSource::new(vec![RemoteAgent {
+        name: "toy".into(),
+        card_url: base,
+        token: None,
+    }])
+    .unwrap();
+    let schema = src
+        .action_schema(kernel_core::Latitude::Wide)
+        .await
+        .unwrap();
+    let store: Arc<dyn RunStore> = Arc::new(InMemoryRunStore::new());
+    let ctx = ctx_with_notes(store, &[]);
+    let action = delegate_action(&schema, "x");
+    let err = src.execute(&action, &ctx).await.unwrap_err();
+    assert!(
+        err.to_string().contains("cap"),
+        "oversized body must be refused by the response cap, got: {err}"
     );
 }

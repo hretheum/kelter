@@ -431,6 +431,30 @@ mod tests {
 /// the next process reloads the key from the file.
 pub type LedgerIndex = Arc<Mutex<HashMap<PathBuf, HashSet<String>>>>;
 
+/// Cap on the in-memory dedupe set per ledger file (audit finding 9-d/#17):
+/// the set grew one entry per distinct idempotency key ever appended, so over
+/// a long-lived daemon serving many runs against one shared ledger it grew
+/// without bound. Capped here — but NEVER at the cost of exactly-once: past
+/// the cap the set stops growing and a dedupe MISS falls back to the
+/// authoritative file scan (the same O(n) check the index was an optimization
+/// over), so a duplicate key past the cap is still caught. 100k keys is far
+/// beyond any real run (a run appends a handful), so the fallback path is
+/// effectively never taken; it exists only to keep correctness intact if it
+/// ever is.
+const MAX_LEDGER_KEYS: usize = 100_000;
+
+/// True if `path`'s ledger already contains a line keyed by `key` (the
+/// durable, authoritative dedupe check — see [`MAX_LEDGER_KEYS`]).
+async fn ledger_file_has_key(path: &std::path::Path, key: &str) -> Result<bool, ToolError> {
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let existing = tokio::fs::read_to_string(path).await?;
+    Ok(existing
+        .lines()
+        .any(|line| line.split('\t').next() == Some(key)))
+}
+
 /// Tool D: append an entry to a ledger file — a REAL side effect (appending
 /// twice is observable), used to prove exactly-once resume. The idempotency
 /// contract: the appended line carries the key, and a second call with the
@@ -443,6 +467,19 @@ pub async fn append_ledger(
     ledger: &str,
     idempotency_key: Option<&str>,
     index: &LedgerIndex,
+) -> Result<serde_json::Value, ToolError> {
+    append_ledger_capped(ws, entry, ledger, idempotency_key, index, MAX_LEDGER_KEYS).await
+}
+
+/// The cap-parameterized core of [`append_ledger`], split out so a test can
+/// drive the past-cap fallback path without appending 100k real entries.
+async fn append_ledger_capped(
+    ws: &Workspace,
+    entry: &str,
+    ledger: &str,
+    idempotency_key: Option<&str>,
+    index: &LedgerIndex,
+    max_keys: usize,
 ) -> Result<serde_json::Value, ToolError> {
     let path = ws.resolve(ledger)?;
     if let Some(parent) = path.parent() {
@@ -467,7 +504,13 @@ pub async fn append_ledger(
             guard.insert(path.clone(), seen);
         }
         let seen = guard.get_mut(&path).expect("just inserted");
-        if seen.contains(key) {
+        // Dedupe check: the in-memory set is authoritative UNLESS it is at the
+        // cap (audit 9-d/#17) and this is a miss — in which case a key may have
+        // been written but not retained in the (bounded) set, so fall back to
+        // the durable file scan. Exactly-once is never sacrificed for the cap.
+        let known = seen.contains(key)
+            || (seen.len() >= max_keys && ledger_file_has_key(&path, key).await?);
+        if known {
             return Ok(serde_json::json!({
                 "deduped": true,
                 "idempotency_key": key,
@@ -475,7 +518,11 @@ pub async fn append_ledger(
             }));
         }
         write_ledger_line(&path, &format!("{key}\t{entry}\n")).await?;
-        seen.insert(key.to_string());
+        // Only retain in the bounded cache while under the cap; past it the set
+        // stops growing and correctness rides the file-scan fallback above.
+        if seen.len() < max_keys {
+            seen.insert(key.to_string());
+        }
         return Ok(serde_json::json!({
             "appended": true,
             "entry": entry,
@@ -552,5 +599,57 @@ mod ledger_tests {
         assert_eq!(r["deduped"], true);
         let content = std::fs::read_to_string(ws.root().join("ledger.txt")).unwrap();
         assert_eq!(content.lines().count(), 1);
+    }
+
+    /// Regression test for audit finding 9-d/#17: the in-memory dedupe set is
+    /// bounded (`MAX_LEDGER_KEYS`), and past the cap exactly-once still holds
+    /// via the file-scan fallback. Driven with a tiny cap (4) so we don't have
+    /// to write 100k lines.
+    #[tokio::test]
+    async fn ledger_key_set_is_capped_but_dedupe_still_holds_past_the_cap() {
+        let ws = temp_ws();
+        let idx = LedgerIndex::default();
+        let cap = 4;
+
+        // Append 10 distinct keys — all should append (10 lines), but the
+        // in-memory set must never exceed the cap.
+        for i in 0..10 {
+            let r = append_ledger_capped(&ws, "e", "ledger.txt", Some(&format!("k{i}")), &idx, cap)
+                .await
+                .unwrap();
+            assert_eq!(r["appended"], true, "k{i} should append");
+        }
+        {
+            let guard = idx.lock().await;
+            let set = guard.get(&ws.resolve("ledger.txt").unwrap()).unwrap();
+            assert!(set.len() <= cap, "set grew past the cap: {}", set.len());
+        }
+        let lines = std::fs::read_to_string(ws.root().join("ledger.txt"))
+            .unwrap()
+            .lines()
+            .count();
+        assert_eq!(lines, 10, "each distinct key appended once");
+
+        // Re-append a key that was EVICTED from the bounded set (k9 was written
+        // while the set was already full → not retained) — must still dedupe
+        // via the file-scan fallback, NOT write a duplicate line.
+        let r = append_ledger_capped(&ws, "e", "ledger.txt", Some("k9"), &idx, cap)
+            .await
+            .unwrap();
+        assert_eq!(
+            r["deduped"], true,
+            "an evicted-but-file-present key must dedupe"
+        );
+        // And a key that IS still in the bounded set dedupes too.
+        let r = append_ledger_capped(&ws, "e", "ledger.txt", Some("k0"), &idx, cap)
+            .await
+            .unwrap();
+        assert_eq!(r["deduped"], true);
+
+        let lines = std::fs::read_to_string(ws.root().join("ledger.txt"))
+            .unwrap()
+            .lines()
+            .count();
+        assert_eq!(lines, 10, "no duplicate lines written past the cap");
     }
 }

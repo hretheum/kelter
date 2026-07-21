@@ -59,6 +59,14 @@ const NOTE_CONTINUATION_SENT: &str = "a2a_continuation_sent";
 /// the SAME output instead of re-dialing.
 const NOTE_INLINE_COMPLETE: &str = "a2a_inline_complete";
 
+/// Cap on any single non-streaming JSON response body the client buffers
+/// (audit finding 2-c/#17): `reqwest`'s `.json()` reads the whole body into
+/// memory with no bound, so a registered-but-hostile agent could return a
+/// giant Agent Card or RPC reply and OOM the daemon. 8 MiB is orders of
+/// magnitude above any real card or task response, so it never trips a
+/// legitimate peer. Enforced by [`A2aClient::read_json_capped`].
+const MAX_RESPONSE_BYTES: usize = 8 << 20; // 8 MiB
+
 /// Cap on the SSE reassembly buffer (ADR 0027 hardening, audit finding 9-a):
 /// `stream_to_terminal`'s `buf` grows with every chunk until a complete event
 /// (`\n\n`-terminated) is found. A streaming peer that never sends a
@@ -302,12 +310,53 @@ impl A2aClient {
         &self.allowed_origin
     }
 
+    /// Read a response body as JSON with a hard size cap (audit 2-c/#17):
+    /// reject early on an advertised `Content-Length` over the cap, then
+    /// stream the body accumulating into a buffer that is never allowed to
+    /// grow past [`MAX_RESPONSE_BYTES`] — so a hostile peer cannot OOM the
+    /// daemon by returning an unbounded body, whether or not it advertises a
+    /// length. Replaces `reqwest`'s unbounded `.json()`.
+    async fn read_json_capped<T: serde::de::DeserializeOwned>(
+        &self,
+        resp: reqwest::Response,
+    ) -> Result<T, A2aError> {
+        if let Some(len) = resp.content_length() {
+            if len as usize > MAX_RESPONSE_BYTES {
+                return Err(A2aError::Protocol(
+                    self.agent.clone(),
+                    format!(
+                        "response body advertises {len} bytes, over the {MAX_RESPONSE_BYTES}-byte cap"
+                    ),
+                ));
+            }
+        }
+        let mut stream = resp.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| A2aError::Http {
+                agent: self.agent.clone(),
+                source: e,
+            })?;
+            if buf.len() + chunk.len() > MAX_RESPONSE_BYTES {
+                return Err(A2aError::Protocol(
+                    self.agent.clone(),
+                    format!(
+                        "response body exceeded the {MAX_RESPONSE_BYTES}-byte cap — refusing to buffer more"
+                    ),
+                ));
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&buf)
+            .map_err(|e| A2aError::Protocol(self.agent.clone(), format!("malformed JSON: {e}")))
+    }
+
     /// Resolve the Agent Card and pick the JSONRPC interface — refusing any
     /// endpoint outside the declared origin.
     async fn endpoint(&self) -> Result<&str, A2aError> {
         self.endpoint
             .get_or_try_init(|| async {
-                let card: AgentCard = self
+                let resp = self
                     .with_headers(self.http.get(&self.card_url))
                     .send()
                     .await
@@ -315,13 +364,8 @@ impl A2aClient {
                     .map_err(|e| A2aError::Http {
                         agent: self.agent.clone(),
                         source: e,
-                    })?
-                    .json()
-                    .await
-                    .map_err(|e| A2aError::Http {
-                        agent: self.agent.clone(),
-                        source: e,
                     })?;
+                let card: AgentCard = self.read_json_capped(resp).await?;
 
                 let interface = card
                     .supported_interfaces
@@ -391,7 +435,7 @@ impl A2aClient {
             "method": method,
             "params": params,
         });
-        let response: serde_json::Value = self
+        let resp = self
             .with_headers(self.http.post(&endpoint))
             .json(&body)
             .send()
@@ -400,13 +444,8 @@ impl A2aClient {
             .map_err(|e| A2aError::Http {
                 agent: self.agent.clone(),
                 source: e,
-            })?
-            .json()
-            .await
-            .map_err(|e| A2aError::Http {
-                agent: self.agent.clone(),
-                source: e,
             })?;
+        let response: serde_json::Value = self.read_json_capped(resp).await?;
 
         if let Some(err) = response.get("error") {
             return Err(A2aError::Rpc(
