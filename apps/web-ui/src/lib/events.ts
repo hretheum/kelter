@@ -344,9 +344,6 @@ export function trustOfLaneAgent(action: string, agents: AgentView[]): string | 
 type Listener = () => void;
 
 const buckets = new Map<string, AxisState>();
-/* Out-of-order guard: per-run pending envelopes with seq gaps are rare (one
- * broadcast channel), but sorting-by-seq on insert keeps the axis correct. */
-const pending = new Map<string, RunEventEnvelope[]>();
 const listeners = new Map<string, Set<Listener>>();
 const globalListeners = new Set<(env: RunEventEnvelope) => void>();
 
@@ -378,33 +375,42 @@ export function onAnyEvent(l: (env: RunEventEnvelope) => void): () => void {
   return () => globalListeners.delete(l);
 }
 
-/* Feed a live WS envelope: bucket by run_id, order by seq, fold, notify. */
+/* Feed a live WS envelope: dedupe by seq, fold, notify.
+ *
+ * Forward-only by design (audit finding 3-b/#12). There is NO out-of-order
+ * reorder buffer, and there must not be one: the kernel's per-run events go
+ * out on a single broadcast channel that delivers them in seq order, and JS
+ * ingest is single-threaded — so a live burst never arrives reordered. The
+ * only real seq "gaps" come from events a client MISSED while disconnected;
+ * those go to the durable journal and are re-supplied by the D-1 replay
+ * (`ingestReplay`, keyed by step index), never re-sent live. A buffer that
+ * blocked on a gap waiting for the missing seq would therefore DEADLOCK on
+ * exactly that legitimate case (the missing seqs are never coming over the
+ * wire) — so the earlier `pending`/`rest` reorder buffer was not only dead
+ * code (`rest` was never populated) but would have been wrong to "fix" into a
+ * blocking one. Ordering within the axis is anchored by step index in
+ * `applyEvent`, not by seq; seq is used ONLY to dedupe re-delivered events
+ * (the resume path re-emits from seq 1). */
 export function ingestEnvelope(env: RunEventEnvelope): void {
   const axis = axisFor(env.run_id);
-  // Streamed delegation progress (ADR 0027) rides seq 0 — it is advisory and
-  // OFF the ordered stream, so it must bypass the seq gate below (which would
-  // otherwise drop every progress event once real events have advanced
-  // lastSeq) and must NOT advance lastSeq itself. applyEvent dedupes by
-  // ordinal, so re-delivery is harmless.
+  // Streamed delegation progress (ADR 0027) rides seq 0 — advisory and OFF the
+  // ordered stream, so it bypasses the dedupe gate (which would otherwise drop
+  // every progress event once real events advanced lastSeq) and must NOT
+  // advance lastSeq. applyEvent dedupes progress by ordinal, so re-delivery is
+  // harmless.
   if (env.event.type === "agent_delegation_progress") {
     applyEvent(axis, env.event);
     notify(env.run_id);
     globalListeners.forEach((l) => l(env));
     return;
   }
-  const queue = pending.get(env.run_id) ?? [];
-  queue.push(env);
-  queue.sort((a, b) => a.seq - b.seq);
-  // Apply everything not yet applied, in seq order. Duplicates (replayed
-  // after reconnect) are skipped by seq; folding is keyed so re-application
-  // would be harmless anyway.
-  const rest: RunEventEnvelope[] = [];
-  for (const e of queue) {
-    if (e.seq <= axis.lastSeq) continue;
-    axis.lastSeq = e.seq;
-    applyEvent(axis, e.event);
+  // Dedupe already-applied seqs (resume re-emits from 1); apply anything newer
+  // immediately — a forward jump is a legitimate post-reconnect gap the replay
+  // has already filled, never something to wait on.
+  if (env.seq > axis.lastSeq) {
+    axis.lastSeq = env.seq;
+    applyEvent(axis, env.event);
   }
-  pending.set(env.run_id, rest);
   notify(env.run_id);
   globalListeners.forEach((l) => l(env));
 }
@@ -425,5 +431,12 @@ export function ingestReplay(
 /* Drop a bucket (e.g. after pruning); safe if absent. */
 export function dropAxis(runId: string): void {
   buckets.delete(runId);
-  pending.delete(runId);
+}
+
+/* Test-only: reset the module-global bucket store so each test starts clean
+ * (the axis store is a module singleton). Not used by the app. */
+export function __resetAxesForTest(): void {
+  buckets.clear();
+  listeners.clear();
+  globalListeners.clear();
 }
