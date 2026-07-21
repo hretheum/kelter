@@ -1830,3 +1830,50 @@ test` 4/4 and `pnpm build` (tsc -b && vite build) exit 0 (production build
 excludes the new vitest files, unchanged); codename grep over the tracked
 tree = 0. Default auth flow unchanged (valid token authenticates, bad token
 401s, brute-force still 429s). Not pushed (human gate).
+
+## Fixes — audit remediation pass 3: mechanical/test/hygiene cluster (2026-07-21)
+
+The well-specified, low-stakes cluster from `docs/audit/AUDIT-2026-07-21.md`
+§6, each with its own commit.
+
+- **#5 delegation_sweep_test.rs (5-a, `dd508cc`).** The ask-timeout
+  delegation resumer had no test at any level. Added a twin of
+  skill_sweep_test.rs on the real a2a/delegation-governance mock-agent
+  harness: sweep must not act before the timeout, force-denies + reports the
+  id past it, never dials the remote agent either way; a Completed run is
+  never mistaken for a timed-out ask.
+- **#8 prune circuits on deregister (9-c, `0821e8b`).** `circuits` leaked
+  across agent churn. Pruned on deregistration, but only when no OTHER
+  still-registered agent shares the origin (circuits are keyed by origin,
+  not agent name).
+- **#13 dedupe deps (7-a/7-b, `fdeef4a`, partial).** tokio-tungstenite
+  aligned to axum's version (0.24→0.29, a test-only dev-dep) — cargo tree now
+  shows one version. reqwest (0.12 vs 0.13) NOT touched: opentelemetry-http
+  0.32.0 hard-requires reqwest "0.13.1", a semver-major mismatch with the
+  workspace's "0.12" — unifying needs either a workspace-wide reqwest 0.13
+  bump (touching SSRF-pinning code) or an OTel exporter-transport swap, both
+  correctness/security-adjacent. Escalated to Fable.
+- **#18 clippy cast_possible_truncation + INFO hygiene (4-c, `ddcc9a7`,
+  partial).** 14 sites made explicit (widened comparisons or #[allow] +
+  bound comment) with zero behaviour change — all step/attempt/node-index
+  counts bounded by config, or kernel-injected/bounded values. Caught and
+  fixed a real mistake along the way: an #[allow] placed mid-method-chain
+  isn't valid syntax and broke the a2a build — moved to the statement level,
+  verified before continuing. One INFO item done (a provenance-frontmatter
+  clarifying note in CLAUDE.md, docs-only). **Escalated, not guessed:**
+  3 cast sites where truncation touches a security/correctness boundary
+  (`server.rs:128` — untrusted inbound depth; `wasmhost/lib.rs:161,390` —
+  signed-cast on WASM guest input length, no confirmed upstream size cap);
+  and 3 further INFO items that turned out not to be mechanical on
+  inspection (1-a reserved-arg rejection touches the core `validate()` floor;
+  1-b CompositeActionSource caching interacts with ADR 0023's documented
+  hot-reload guarantee; 8-c a WS-lagged sentinel is a new wire-protocol
+  addition needing backend+frontend coordination).
+
+**Proof:** `cargo test --workspace` **exit 0, 228 tests, 0 failures**;
+`cargo clippy --workspace --all-targets` clean (default AND
+-W cast_possible_truncation, except the 3 escalated sites); `cargo fmt
+--check` clean; web-ui `pnpm build` exit 0 (untouched by this pass); codename
+grep = 0. Not pushed (human gate). Escalations for Fable: reqwest/tungstenite
+dedupe's harder half, 3 cast sites, 3 INFO items — see this section for
+exact reasoning on each.
