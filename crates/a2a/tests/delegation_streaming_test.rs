@@ -22,6 +22,7 @@ use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures::stream::{self, StreamExt};
 use serde_json::{json, Value};
 
 use a2a::{action_name, A2aActionSource, RemoteAgent};
@@ -43,6 +44,12 @@ struct MockState {
     /// When set, the SSE reply carries the task id + one progress frame but NO
     /// final frame, forcing the client to fall back to `GetTask`.
     drop_mid_stream: AtomicBool,
+    /// When set, the SSE reply carries one valid task-id-bearing event, then a
+    /// multi-MiB run of bytes with NO `\n\n` separator — a hostile/broken
+    /// peer that never terminates an event. Exercises the reassembly-buffer
+    /// cap (audit finding 9-a): the client must fall back to polling rather
+    /// than growing `buf` without bound.
+    flood_after_task_id: AtomicBool,
     endpoint: Mutex<String>,
 }
 
@@ -81,6 +88,9 @@ async fn rpc(State(st): State<Arc<MockState>>, Json(req): Json<Value>) -> Respon
     match method {
         "SendStreamingMessage" => {
             st.stream_calls.fetch_add(1, Ordering::SeqCst);
+            if st.flood_after_task_id.load(Ordering::SeqCst) {
+                return infinite_flood_body();
+            }
             let frames = if st.drop_mid_stream.load(Ordering::SeqCst) {
                 // Task created + one progress frame, then the body ENDS with no
                 // final frame — the client must poll `GetTask` to finish.
@@ -120,6 +130,25 @@ async fn rpc(State(st): State<Arc<MockState>>, Json(req): Json<Value>) -> Respon
         }))
         .into_response(),
     }
+}
+
+/// A genuinely INFINITE SSE body: one valid task-id-bearing event, then an
+/// endless run of bytes with no `\n\n` separator, ever. Proves the
+/// reassembly-buffer cap does the work (not incidental natural end-of-stream)
+/// — without the cap, a client reading this would never see `Ok(None)` and
+/// would only stop at the 120s poll deadline; the test's own tight outer
+/// timeout is what makes this a real red-green proof.
+fn infinite_flood_body() -> Response {
+    let first = format!(
+        "data: {}\n\n",
+        json!({"result": {"id": "task-s", "status": {"state": "TASK_STATE_WORKING"}, "artifacts": []}})
+    );
+    let head = stream::once(async move { Ok::<_, std::io::Error>(first.into_bytes()) });
+    let tail = stream::repeat_with(|| Ok::<_, std::io::Error>(vec![b'x'; 65_536]));
+    Response::builder()
+        .header("content-type", "text/event-stream")
+        .body(Body::from_stream(head.chain(tail)))
+        .unwrap()
 }
 
 async fn spawn_server(state: Arc<MockState>) -> String {
@@ -379,5 +408,60 @@ async fn with_streaming_false_forces_the_poll_path_on_a_streaming_card() {
     assert!(
         progress_notes(&journal).is_empty(),
         "the poll path emits no streamed progress"
+    );
+}
+
+/// Regression test for audit finding 9-a (docs/audit/AUDIT-2026-07-21.md):
+/// `stream_to_terminal`'s SSE reassembly buffer had no size cap, so a
+/// streaming peer that never sends a `\n\n` event separator could grow it
+/// without bound (OOM), and a client reading it would never see the stream
+/// end. `infinite_flood_body` is a genuinely never-ending, ever-separator-
+/// less body — WITHOUT the cap, this would hang until the 120s poll
+/// deadline; the tight 10s outer timeout below is what makes this a real
+/// red-green proof of the cap firing, not an artifact of natural EOF.
+#[tokio::test]
+async fn streamed_delegation_caps_the_reassembly_buffer_and_falls_back_to_polling() {
+    let mock = Arc::new(MockState::default());
+    mock.flood_after_task_id.store(true, Ordering::SeqCst);
+    let base = spawn_server(mock.clone()).await;
+    let (source, action) = source_for(&base, true).await;
+    let store: Arc<dyn RunStore> = Arc::new(InMemoryRunStore::new());
+    let k = kernel(&action, source, store.clone());
+
+    let run_id = k.create_run("streamy-flood".into()).await.unwrap();
+    let run = tokio::time::timeout(std::time::Duration::from_secs(10), k.execute_run(run_id))
+        .await
+        .expect(
+            "the reassembly-buffer cap must trip well within 10s — an unbounded buffer would \
+             hang until the 120s poll deadline instead",
+        )
+        .unwrap();
+
+    // The flood tripped the reassembly-buffer cap; the client fell back to
+    // polling the task id it already learned (and journaled) from the first
+    // valid event — never re-dialing, never hanging on an unbounded buffer.
+    assert_eq!(run.status, RunStatus::Completed);
+    assert_eq!(
+        mock.stream_calls.load(Ordering::SeqCst),
+        1,
+        "streamed dial happened once"
+    );
+    assert_eq!(
+        mock.send_calls.load(Ordering::SeqCst),
+        0,
+        "fallback polls the existing task — it never re-dials a fresh one"
+    );
+    assert!(
+        mock.get_calls.load(Ordering::SeqCst) >= 1,
+        "fell back to GetTask polling once the buffer cap tripped"
+    );
+    let step = run.steps.iter().find(|s| s.action == action).unwrap();
+    assert!(
+        step.result["output"]
+            .as_str()
+            .unwrap_or("")
+            .contains("via poll"),
+        "the completed result came from the poll fallback: {:?}",
+        step.result
     );
 }

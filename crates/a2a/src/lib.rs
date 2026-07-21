@@ -46,6 +46,15 @@ const NOTE_TASK_ID: &str = "a2a_task_id";
 /// `NOTE_TASK_ID` provides.
 const NOTE_CONTINUATION_SENT: &str = "a2a_continuation_sent";
 
+/// Cap on the SSE reassembly buffer (ADR 0027 hardening, audit finding 9-a):
+/// `stream_to_terminal`'s `buf` grows with every chunk until a complete event
+/// (`\n\n`-terminated) is found. A streaming peer that never sends a
+/// separator would otherwise grow it without bound — an OOM vector gated only
+/// on the peer being registered/trusted enough to dial, not on it being
+/// well-behaved. Once the UNDRAINED tail exceeds this, the dial falls back to
+/// polling exactly like any other mid-stream failure — never grows further.
+const MAX_SSE_BUFFER_BYTES: usize = 1 << 20; // 1 MiB
+
 pub mod gate;
 pub mod registry;
 pub mod server;
@@ -876,6 +885,29 @@ impl A2aActionSource {
                     ctx.record_progress(client.agent_name(), id, &last_state, &note)
                         .await;
                 }
+            }
+
+            // Reassembly-buffer cap (audit 9-a): the drain loop above already
+            // extracted every COMPLETE event this chunk contributed to; what
+            // remains in `buf` is only an undrained tail waiting on a future
+            // `\n\n`. If that tail alone exceeds the cap, the peer is either
+            // hostile or broken — fall back to polling rather than growing
+            // `buf` further. Checked strictly AFTER draining, so a burst of
+            // many small complete events never trips this spuriously.
+            if buf.len() > MAX_SSE_BUFFER_BYTES {
+                return self
+                    .stream_fallback(
+                        client,
+                        &task_id,
+                        A2aError::Protocol(
+                            client.agent.clone(),
+                            format!(
+                                "SSE reassembly buffer exceeded {MAX_SSE_BUFFER_BYTES} bytes \
+                                 without a complete event — refusing to grow further"
+                            ),
+                        ),
+                    )
+                    .await;
             }
         }
     }
