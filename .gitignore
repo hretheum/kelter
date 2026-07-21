@@ -43,3 +43,4 @@ models/
 # (design/07 D-7) — the api crate embeds apps/web-ui/dist via RustEmbed.
 apps/web-ui/dist/
 apps/web-ui/tsconfig.tsbuildinfo
+*.ign
