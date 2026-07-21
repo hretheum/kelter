@@ -1,0 +1,71 @@
+docs/BUILD-EVIDENCE.md
+  s_7ac77bc07b52a5::t_dbb63b2047dd0b 1653-1698
+crates/a2a/tests/delegation_streaming_test.rs
+  s_7ac77bc07b52a5::t_713707ac6eff42 170-174,224-228,254-257,269-271,290-293,319-323,372-375
+  s_7ac77bc07b52a5::t_d6ed61082e41d3 1-169,175-223,229-253,258-268,272-289,294-318,324-371,376-383
+Cargo.toml
+  s_7ac77bc07b52a5::t_4b686d40be0e5e 49
+apps/web-ui/src/features/runs/StepCard.tsx
+  s_7ac77bc07b52a5::t_2ea899e2bd0220 38-45
+  s_7ac77bc07b52a5::t_4dac37c8537d1d 141-168
+crates/daemon/src/main.rs
+  s_7ac77bc07b52a5::t_d2aed11b013870 671-672
+docs/adr/0027-streamed-delegation-progress.md
+  s_7ac77bc07b52a5::t_667788fcbc1958 58-64
+  s_7ac77bc07b52a5::t_fcf05ad14b77d4 1-57,65-125
+apps/web-ui/src/lib/api.ts
+  s_7ac77bc07b52a5::t_6a89df5ddbde2a 195-207
+docs/evidence/agent-progress-streaming.log
+  s_7ac77bc07b52a5::t_0026a9a1d23d47 1-20
+crates/a2a/src/lib.rs
+  s_7ac77bc07b52a5::t_e0cb59601bda2a 254
+  s_7ac77bc07b52a5::t_713707ac6eff42 796-799,833-840,851-854,951-954
+  s_7ac77bc07b52a5::t_ddb6d8c255c26a 111-124
+  s_7ac77bc07b52a5::t_fcdb12af1e3f66 207-211
+  s_7ac77bc07b52a5::t_1f69052aa30654 1107-1117
+  s_7ac77bc07b52a5::t_72659ade2cb324 633,728-795,800-832,841-850,855-950,955-990
+  s_7ac77bc07b52a5::t_1ad58dc8596e13 30
+  s_7ac77bc07b52a5::t_2e8a2ecdfda7e8 489-550
+  s_7ac77bc07b52a5::t_288f11fe5a7ecb 322,327
+  s_7ac77bc07b52a5::t_d79efddb3b3f6d 623,627-632
+  s_7ac77bc07b52a5::t_68f2fa4e99d9e6 602-607
+  s_7ac77bc07b52a5::t_d7b666b06c3ba6 634
+crates/daemon/src/config.rs
+  s_7ac77bc07b52a5::t_bfb7a4749475bc 161-167
+  s_7ac77bc07b52a5::t_c13297058b460b 183
+crates/kernel-core/src/engine.rs
+  s_7ac77bc07b52a5::t_5352661e7a8032 5
+  s_7ac77bc07b52a5::t_4d269f4bcddb76 2698-2703
+  s_7ac77bc07b52a5::t_b514fc9dcd23a1 3650
+  s_7ac77bc07b52a5::t_aa5ead33cfd4ca 85-153
+  s_7ac77bc07b52a5::t_f971b8971ca51c 3802-3806
+  s_7ac77bc07b52a5::t_a96aea251cfc38 3434
+  s_7ac77bc07b52a5::t_a642b65f12b308 1706-1710
+  s_7ac77bc07b52a5::t_e3baa77e77f4a4 47-66
+  s_7ac77bc07b52a5::t_5e3eb19a0ddbd5 602-620
+apps/web-ui/src/lib/events.ts
+  s_7ac77bc07b52a5::t_990351d3673e1d 104
+  s_7ac77bc07b52a5::t_aed5fae3673b85 384-394
+  s_7ac77bc07b52a5::t_683649f5be0065 32-36
+  s_7ac77bc07b52a5::t_7bb8f0fd25e17a 204-219
+crates/a2a/Cargo.toml
+  s_7ac77bc07b52a5::t_877a1205b4bc0d 11
+Cargo.lock
+  s_7ac77bc07b52a5::t_3e94b37022ce40 11,2325,2332,3563-3575
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "2e6a326fff7fe33d32ae7bdf61ddfd81a655166b",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
