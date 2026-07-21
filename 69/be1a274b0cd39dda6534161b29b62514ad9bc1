@@ -1,0 +1,25 @@
+crates/kernel-core/src/engine.rs
+  s_7ac77bc07b52a5::t_1d472e70b8c8c2 3297-3307
+  s_7ac77bc07b52a5::t_6a4287dc1c5840 3308-3310,3314-3316
+crates/kernel-core/tests/plan_delegation_ask_test.rs
+  s_7ac77bc07b52a5::t_512fd455f99619 142-144
+  s_7ac77bc07b52a5::t_06ce2648291051 431-541
+  s_7ac77bc07b52a5::t_99f6ab019dfe1c 60-65,76,79-85,103-121,125
+  s_7ac77bc07b52a5::t_63667353a3ac25 129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "69be1a274b0cd39dda6534161b29b62514ad9bc1",
+  "prompts": {},
+  "sessions": {
+    "s_7ac77bc07b52a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b43759e0-48c2-4706-b59d-5697ae6a607e",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
