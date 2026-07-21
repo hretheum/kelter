@@ -198,6 +198,48 @@ async fn repeated_bad_auth_is_rate_limited() {
 }
 
 #[tokio::test]
+async fn valid_token_is_served_even_during_a_bad_auth_flood() {
+    // Regression test for audit finding 4-b/#10: a valid credential must NEVER
+    // be locked out by failed attempts (the self-DoS the old is-locked-first
+    // gate caused). Flood with bad tokens to trip the lockout, then confirm a
+    // bad token is throttled (429) BUT the valid token is still served (200).
+    let (addr, token) = spawn_server().await;
+    let client = reqwest::Client::new();
+    for _ in 0..15 {
+        let _ = client
+            .get(format!("http://{addr}/api/v1/runs"))
+            .bearer_auth("wrong")
+            .send()
+            .await
+            .unwrap();
+    }
+    // Unauthenticated requests are throttled during the flood.
+    let bad = client
+        .get(format!("http://{addr}/api/v1/runs"))
+        .bearer_auth("wrong")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bad.status(),
+        429,
+        "anonymous requests are throttled during the flood"
+    );
+    // The VALID token is served regardless — never self-DoS'd by the flood.
+    let good = client
+        .get(format!("http://{addr}/api/v1/runs"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        good.status(),
+        200,
+        "a valid credential must never be locked out by failed attempts"
+    );
+}
+
+#[tokio::test]
 async fn a2a_rpc_rejects_anonymous() {
     let (addr, _) = spawn_server().await;
     let client = reqwest::Client::new();

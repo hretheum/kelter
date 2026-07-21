@@ -560,21 +560,45 @@ impl AuthLimiter {
         Self::prune(&mut dq);
         dq.push_back(Instant::now());
     }
-    fn record_success(&self) {
-        self.failures.lock().clear();
-    }
 }
 
-/// Central auth gate (REST + A2A + WS): the rate limiter, then the bearer
-/// check. `Ok(principal)` on success (the authenticated identity — "default"
-/// for the single-token flow), `Err(response)` on rejection (`429` locked out
-/// or `401` bad/missing token).
+/// Central auth gate (REST + A2A + WS): the bearer check, with a brute-force
+/// slowdown on FAILED attempts only. `Ok(principal)` on success (the
+/// authenticated identity — "default" for the single-token flow),
+/// `Err(response)` on rejection (`401` bad/missing token, or `429` once
+/// anonymous failures cross the threshold).
+///
+/// Re-keyed lockout (audit finding 4-b/#10): the credential is validated
+/// FIRST, and a request bearing a VALID token is ALWAYS served — never gated
+/// by the failure window. So no volume of failed attempts (an attacker's, or
+/// a client's own) can ever lock out a legitimate token-holder: the lockout
+/// is keyed on "this request failed auth", not on a global counter shared
+/// with valid clients. That is exactly "one client cannot self-DoS others."
+/// A success never clears the window either (it prunes by time only), so one
+/// client's success cannot reset another's slowdown.
+///
+/// Per-source-IP bucketing was considered and deliberately NOT added: with
+/// the valid-token bypass the window only ever throttles UNAUTHENTICATED
+/// requests — all of which are, by definition, would-be attackers with no
+/// valid credential — so distinguishing one anonymous source from another has
+/// no security value here, while threading `ConnectInfo` through every
+/// handler and serve site (including the `axum_server` TLS path) would be
+/// disproportionate for the single-token local/tailnet deployment. Throttling
+/// anonymous failures collectively is the intended behaviour.
 #[allow(clippy::result_large_err)]
 fn auth_gate(
     state: &ApiState,
     headers: &HeaderMap,
     query_token: Option<&str>,
 ) -> Result<String, Response> {
+    // A valid credential is served unconditionally — the failure window can
+    // never touch it.
+    if let Some(principal) = principal_of(state, headers, query_token) {
+        return Ok(principal);
+    }
+    // Unauthenticated: record the failure and, past the threshold, answer 429
+    // (brute-force slowdown) instead of 401.
+    state.limiter.record_failure();
     if state.limiter.is_locked() {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
@@ -583,16 +607,7 @@ fn auth_gate(
         )
             .into_response());
     }
-    match principal_of(state, headers, query_token) {
-        Some(principal) => {
-            state.limiter.record_success();
-            Ok(principal)
-        }
-        None => {
-            state.limiter.record_failure();
-            Err(unauthorized())
-        }
-    }
+    Err(unauthorized())
 }
 
 // ---- runs ----------------------------------------------------------------
