@@ -294,7 +294,7 @@ block a launch; the core is complete.
   a learned plan re-validated like any plan, reversible per ADR 0016), and WASM
   for the memory / agent / policy capabilities plus the component model and a
   real network host-fn.
-- **Governed shared-memory backend (Postgres + pgvector) — being built.** A
+- **Governed shared-memory backend (Postgres + pgvector) — Done (ADR 0028; validated 7/7 on real Postgres: concurrency, A→B sharing, provenance + zero-residue forget, poisoned-fact-never-an-action).** A
   concurrent-safe shared memory backend behind the existing memory seam (ADR
   0005/0008/0024), so two independent kernels (desktop + a server) can share
   memory + learned facts — with Kelter's governance intact (provenance-tagged,
@@ -304,6 +304,12 @@ block a launch; the core is complete.
   reversible/governed thesis). Opt-in; local SQLite stays the default; enables
   the two-independent-kernels sharing path (thin-client sharing already works
   via ADR 0004).
+- **Run output UI — prose summary + artifact panel (queued, next).** Render a
+  run's result as a readable prose summary instead of raw JSON, and surface the
+  files a run produces (e.g. an `.md` report) in a side artifact panel — opened
+  by default, markdown-rendered, with copy + download (like Claude's artifacts).
+  Includes safely exposing a run's produced files: bearer-auth'd and
+  path-traversal-safe.
 - **Plan-mode delegation ask + resilience (deferred from ADR 0023).** In plan
   mode the delegation `AskHuman` outcome currently degrades to a refusal — safe
   (the trust gate is never bypassed, only the interactive deny/allow-once/
@@ -314,11 +320,10 @@ block a launch; the core is complete.
   A future round, not a launch blocker.
 - **Multi-agent, further (see `docs/multi-agent-expansion-plan.md`).** P1–P4 of
   that plan shipped as Phases 14–15 (parallel fan-out + governed limits; agent
-  trust/policy/ask + resilience). Remaining: **P5** — interactive multi-turn
-  delegation (a delegation that pauses awaiting the remote agent, reusing the
-  paused-awaiting-decision machinery from the ask flow) and streaming a remote
-  agent's progress into the timeline (today a delegated sub-task is opaque until
-  it completes, shown as an indeterminate lane). Fast-follows, not blockers.
+  trust/policy/ask + resilience). **P5 also shipped:** interactive multi-turn
+  delegation (a delegation that pauses awaiting the remote agent — durable
+  across restart, cancellable; ADR 0026) and streamed remote-delegation progress
+  into the timeline with a bounded reassembly buffer + poll fallback (ADR 0027).
 - **Additive / lower-stakes.** A2A SSE streaming, webhooks and per-tool skills;
   multi-profile model configs; an embeddings retrieval-quality harness (the
   adapter is done — this is the eval plus a dedicated embedding server).
