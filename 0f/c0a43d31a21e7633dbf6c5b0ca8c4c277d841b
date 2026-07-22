@@ -1,0 +1,42 @@
+crates/policy/src/prompt.rs
+  s_ea2a4dfe192703::t_aee0acf7f5f709 91-94,97-99
+crates/kernel-core/src/engine.rs
+  s_ea2a4dfe192703::t_bc61518e665443 2373-2382
+  s_ea2a4dfe192703::t_4bb5797c391cff 2187-2205,2207-2212,2214-2218
+  s_ea2a4dfe192703::t_3a545490a17504 2352-2359,2363-2367
+  s_ea2a4dfe192703::t_89197175feb1b6 2287-2291
+crates/mcp/src/code_tools.rs
+  s_ea2a4dfe192703::t_73fde18a6a85b8 658-667,672-677
+  s_ea2a4dfe192703::t_f4fb1104aab065 641-657
+  s_ea2a4dfe192703::t_524cfe45cfacdd 343-370
+  s_ea2a4dfe192703::t_40304508c4854e 668-671
+  s_ea2a4dfe192703::t_8c3aff4ec3257f 470-474,476,483-491
+  s_ea2a4dfe192703::t_1f1d358b491b33 457-469,475,477-482,492-500
+  s_ea2a4dfe192703::t_470ba4a34ace35 640
+crates/kernel-core/tests/agentic_loop_step_zero_test.rs
+  s_ea2a4dfe192703::t_4729913dc3afa6 1-5,7-17,27-29,33-34,70-73,84-91,99-108,111,114-118,125,128,145,153-158,171-179,188-190,192,197-198,204-211,213-227,229-234,236-245,247-249,251-266,274-276,278,281-283,287-294,296-307,310-335,342-397
+  s_ea2a4dfe192703::t_384087a1e57f1c 268,270,336-341,398-401
+crates/kernel-core/tests/a2_epoch_window_test.rs
+  s_ea2a4dfe192703::t_384087a1e57f1c 1-151
+docs/adr/0031-state-epoch-duplicate-rule.md
+  s_ea2a4dfe192703::t_2eaab4d65e8c76 1-80
+  s_ea2a4dfe192703::t_f9c1dab74153f6 81-86
+docs/BUILD-EVIDENCE.md
+  s_ea2a4dfe192703::t_e830e7df089964 2208-2253
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "0fc0a43d31a21e7633dbf6c5b0ca8c4c277d841b",
+  "prompts": {},
+  "sessions": {
+    "s_ea2a4dfe192703": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9cbdcf0b-ef35-4873-b2c8-816d042979c1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
