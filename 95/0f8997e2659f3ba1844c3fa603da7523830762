@@ -1,0 +1,20 @@
+.github/workflows/publish-image.yml
+  s_af0e8d445a0a59::t_7a4545173c8661 78-83,89,97-102
+  s_af0e8d445a0a59::t_d78f6e7f3b03de 1-77,84-88,90-96,103-104
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "950f8997e2659f3ba1844c3fa603da7523830762",
+  "prompts": {},
+  "sessions": {
+    "s_af0e8d445a0a59": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "46832159-e10a-4072-bbe0-7b856432d754",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
