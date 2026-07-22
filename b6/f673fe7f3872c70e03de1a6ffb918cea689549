@@ -1,0 +1,99 @@
+config.example.toml
+  s_ea2a4dfe192703::t_6165fdcfdf63b3 65
+  s_ea2a4dfe192703::t_6a7f18a439b7d7 12,15-19,66-78
+docs/BUILD-EVIDENCE.md
+  s_ea2a4dfe192703::t_796a2d255802c8 2207
+  s_ea2a4dfe192703::t_723871b9629949 2156-2206
+crates/policy/src/local.rs
+  s_ea2a4dfe192703::t_8d9eedda9f1861 92
+  s_ea2a4dfe192703::t_82e482ebb993ca 1-10,14-15,20-22,26,32,53-54,60-91,93-106,111-118,121,123,136-137,143,148,150-152,179,182-191,201-341
+crates/kernel-core/tests/agentic_loop_step_zero_test.rs
+  s_ea2a4dfe192703::t_1c542aa6477999 1-214
+crates/a2a/src/server.rs
+  s_ea2a4dfe192703::t_a590d149f9a3e6 226
+crates/kernel-core/src/store.rs
+  s_ea2a4dfe192703::t_1647205f573994 230
+crates/policy/src/lib.rs
+  s_ea2a4dfe192703::t_f8e576042c6fc9 148,156-175
+  s_ea2a4dfe192703::t_79209a384e90d1 197
+  s_ea2a4dfe192703::t_3c19c1fc7f9db2 134,216-218,232-234
+  s_ea2a4dfe192703::t_e22b6f39c47428 22,27-45
+  s_ea2a4dfe192703::t_1a347512ce593e 99-100,108-124
+  s_ea2a4dfe192703::t_b13ac7bd5b8ddf 46
+crates/mcp/src/code_tools.rs
+  s_ea2a4dfe192703::t_3ddc4058650458 1-87,95-203,209-216,218-271,281-289,293-348,356,360-456,462-519,524-533,539-557,570-571,577-591
+  s_ea2a4dfe192703::t_453ef8258fa8be 272-280
+  s_ea2a4dfe192703::t_8d9eedda9f1861 88-94,204-208,217,290-292,349-355,357-359,457-461,520-523,534-538,558-569,572-576
+crates/mcp/src/server.rs
+  s_ea2a4dfe192703::t_ba1a17dc5a491a 131-391
+crates/daemon/src/config.rs
+  s_ea2a4dfe192703::t_e6778cc768f168 401-451
+  s_ea2a4dfe192703::t_af7419f3442280 461
+crates/kernel-core/tests/step_result_redaction_test.rs
+  s_ea2a4dfe192703::t_8d9eedda9f1861 107-110
+  s_ea2a4dfe192703::t_21398f06d70d10 1-106,111-120
+crates/daemon/src/main.rs
+  s_ea2a4dfe192703::t_c05bc54435ff7b 482-522
+crates/api/src/lib.rs
+  s_ea2a4dfe192703::t_8d9eedda9f1861 690-694
+  s_ea2a4dfe192703::t_c5b27172fd69fb 660-662,665-667
+  s_ea2a4dfe192703::t_6b154f5fcfab68 681-689
+  s_ea2a4dfe192703::t_b4fbfba9265a6f 668
+crates/kernel-core/src/redact.rs
+  s_ea2a4dfe192703::t_6b3bf6faaeaf59 37-57
+crates/policy/src/openrouter.rs
+  s_ea2a4dfe192703::t_2f0450918bda7f 19,28
+  s_ea2a4dfe192703::t_c7502ead41af80 79-86
+  s_ea2a4dfe192703::t_7c32afe963fa7d 130,135,140
+  s_ea2a4dfe192703::t_e4090f8100693d 101
+  s_ea2a4dfe192703::t_f6f9ba6ee48b8b 78
+crates/mcp/src/lib.rs
+  s_ea2a4dfe192703::t_d6aa923435ad32 7
+crates/model-config/src/lib.rs
+  s_ea2a4dfe192703::t_b80f1542d093e7 215-217,222-224,357-359,370-372
+crates/mcp/src/tools.rs
+  s_ea2a4dfe192703::t_5f3004c75de23e 72-74,88-104
+  s_ea2a4dfe192703::t_2c78461bcb9808 421-451
+  s_ea2a4dfe192703::t_4d26ee1f45bfe0 105-106
+crates/mcp/Cargo.toml
+  s_ea2a4dfe192703::t_8404588de30a0d 17-19
+  s_ea2a4dfe192703::t_8fb77ba30532ef 16
+crates/mcp/src/client.rs
+  s_ea2a4dfe192703::t_c12c55705f514a 56-73
+crates/storage/src/lib.rs
+  s_ea2a4dfe192703::t_a590d149f9a3e6 524
+crates/kernel-core/src/engine.rs
+  s_ea2a4dfe192703::t_7b48cd9a4995ec 2919-2922
+  s_ea2a4dfe192703::t_79b31dd6c04f49 437-442
+  s_ea2a4dfe192703::t_71b214319999a3 2866-2869
+  s_ea2a4dfe192703::t_846635df7815ef 1826-1828,1830,1832
+  s_ea2a4dfe192703::t_8ac526d572c970 1171-1181,1195
+  s_ea2a4dfe192703::t_00ec8ee7ef01f9 1226
+  s_ea2a4dfe192703::t_71f35d1bcbe63c 2056-2059,2062,3028
+  s_ea2a4dfe192703::t_e0170826d1f1e2 1196-1205
+  s_ea2a4dfe192703::t_2d4e180eb2b62d 4306-4307,4309-4313
+crates/policy/src/prompt.rs
+  s_ea2a4dfe192703::t_417380db70dc1e 50,52-58
+  s_ea2a4dfe192703::t_ed1fe1be026d6c 79-82
+SECURITY.md
+  s_ea2a4dfe192703::t_6165fdcfdf63b3 28-49
+crates/mcp/src/bin/code_server.rs
+  s_ea2a4dfe192703::t_b4a60268e94ba4 6,10-30,37-38,40,43,46-48
+  s_ea2a4dfe192703::t_8404588de30a0d 1-5,7-9,31-36,39,41-42,44-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "b6f673fe7f3872c70e03de1a6ffb918cea689549",
+  "prompts": {},
+  "sessions": {
+    "s_ea2a4dfe192703": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9cbdcf0b-ef35-4873-b2c8-816d042979c1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
