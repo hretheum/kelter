@@ -1,0 +1,52 @@
+crates/kernel-core/src/engine.rs
+  s_ea2a4dfe192703::t_2ec5bf79fea460 767
+  s_ea2a4dfe192703::t_97253d49ca8990 3920,3922,3933,3935
+  s_ea2a4dfe192703::t_bf7aec013f1786 3190-3208,3210-3222,3228-3237,3239-3264,3268-3315,3317-3429,3431-3450,3455-3467,3470,3472-3473,3477-3480,3484-3531,3536-3549,3551-3554,3556-3587,3589,3591-3595,3597-3615,3621-3635,3640-3652,3654-3823,3828-3836,3841-3842,3847-3856,3858-3877,3881-3919,3923,3925-3931,3934,3938-3994,3997-4003,4009-4031
+  s_ea2a4dfe192703::t_31f43a66b82def 3430,3451-3454,3468-3469,3471,3474-3476,3481
+  s_ea2a4dfe192703::t_068b53ddace71b 781-811
+  s_ea2a4dfe192703::t_089925a8ba73d6 699
+  s_ea2a4dfe192703::t_dcb28ed305120e 761-766,768-780
+  s_ea2a4dfe192703::t_97499d903f069e 3995-3996,4004-4008,4032-4034
+  s_ea2a4dfe192703::t_e6016520bd8b7e 3094-3101,3103-3106,3109-3117,3119-3130,3139-3143,3145,3147-3159,3161-3187,3189,3223-3227,3238,3266
+  s_ea2a4dfe192703::t_76f47ccc691f48 683-685
+crates/daemon/src/config.rs
+  s_ea2a4dfe192703::t_1e85d7a9415a69 365-372,381-382
+docs/architecture.md
+  s_ea2a4dfe192703::t_2390bb1fa1601b 184-190
+crates/daemon/src/main.rs
+  s_ea2a4dfe192703::t_9020dbaa54700d 1008-1011
+docs/adr/0030-plan-mode-resilience.md
+  s_ea2a4dfe192703::t_01ac949ff9b4a6 129-133
+  s_ea2a4dfe192703::t_985bdece1b1395 1-128
+crates/kernel-core/src/lib.rs
+  s_ea2a4dfe192703::t_44673d002e7cc9 36-37
+  s_ea2a4dfe192703::t_bf7aec013f1786 38-39
+docs/BUILD-EVIDENCE.md
+  s_ea2a4dfe192703::t_0cbbc87017a087 2121-2130,2135-2136,2150-2155
+  s_ea2a4dfe192703::t_2abf9d4673a06b 2046-2120,2131-2134,2137-2149
+docs/adr/0010-plan-mode.md
+  s_ea2a4dfe192703::t_a461e4b1011724 80-84
+crates/kernel-core/tests/plan_resilience_test.rs
+  s_ea2a4dfe192703::t_bf7aec013f1786 243-248,299-302,342-345,356-360,383-386,529-532
+  s_ea2a4dfe192703::t_4d6710ce4a8f82 1-242,249-298,303-341,346-355,361-382,387-528,533-633
+config.example.toml
+  s_ea2a4dfe192703::t_6b4372a9d4891b 45-47
+crates/daemon/tests/plan_replan_durable_resume_test.rs
+  s_ea2a4dfe192703::t_b181c3fafe068b 1-221
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ac091fce6b2364a84aa23af66cc7d015005a55ea",
+  "prompts": {},
+  "sessions": {
+    "s_ea2a4dfe192703": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9cbdcf0b-ef35-4873-b2c8-816d042979c1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
