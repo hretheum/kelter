@@ -285,6 +285,24 @@ export interface ModelTestResult {
   detail: string;
 }
 
+/* Run-produced files (ADR 0029, GET /runs/{id}/files[/{name}]): the files a
+ * run's own journal says it wrote into the tools workspace. */
+export interface RunFileInfo {
+  name: string;
+  bytes: number;
+}
+
+export interface RunFilesList {
+  run_id: string;
+  files: RunFileInfo[];
+}
+
+export interface RunFileContent {
+  name: string;
+  bytes: number;
+  content: string;
+}
+
 /* Journal replay (D-1, GET /runs/{id}/events). Entries are the kernel's
  * JournalEntry, kind-tagged. */
 export interface JournalReplay {

@@ -18,6 +18,9 @@ import {
   type ModelConfigView,
   type Run,
   type RunEventEnvelope,
+  type RunFileContent,
+  type RunFilesList,
+  type RunFileInfo,
   type SkillActivationDecision,
   type SkillInstallReport,
   type SkillsPolicyUpdate,
@@ -59,6 +62,11 @@ export interface AppState {
   /* ADR 0023 Part 3: flips off on 404/405 from any /api/v1/agents route —
    * independent of delegationAuthSupported, mirrors skillsManagementSupported. */
   agentsManagementSupported: boolean;
+  /* ADR 0029: flips off on 404/405 from the run-files routes — hides the
+   * artifact panel entirely on a daemon without them. NOTE: a 404 for one
+   * run's files can also mean "run pruned"; treating it as capability-off is
+   * the safe degrade either way (the panel is optional context, design/03 R-2). */
+  runFilesSupported: boolean;
   /* Registered agents, for the a2a lane trust badge (ADR 0023) — loaded
    * fail-silent alongside `tools`, same optional-context convention (design/03
    * R-2): a lane renders without a badge rather than blocking on this. */
@@ -81,6 +89,7 @@ let state: AppState = {
   skillsManagementSupported: true,
   delegationAuthSupported: true,
   agentsManagementSupported: true,
+  runFilesSupported: true,
   agents: [],
   tools: [],
 };
@@ -348,6 +357,27 @@ export async function provideDelegationInput(runId: string, input: string): Prom
     if (err.status === 404 || err.status === 405) set({ delegationAuthSupported: false });
     throw e;
   }
+}
+
+/* Run-produced files (ADR 0029). 404/405 → capability off (older daemon or a
+ * pruned run — either way the artifact panel hides rather than erroring),
+ * mirroring the cancel/replay degrade convention. */
+export async function fetchRunFiles(runId: string): Promise<RunFileInfo[]> {
+  try {
+    const res = await api<RunFilesList>(`/api/v1/runs/${runId}/files`);
+    return res.files;
+  } catch (e) {
+    const err = e as ApiError;
+    if (err.status === 404 || err.status === 405) set({ runFilesSupported: false });
+    throw e;
+  }
+}
+
+export async function fetchRunFile(runId: string, name: string): Promise<RunFileContent> {
+  /* Encode each segment, keep `/` separators — the backend re-checks the
+   * decoded path against the run's journal allowlist either way. */
+  const path = name.split("/").map(encodeURIComponent).join("/");
+  return api<RunFileContent>(`/api/v1/runs/${runId}/files/${path}`);
 }
 
 // ---- agent trust/policy management (ADR 0023 Part 3) -----------------------

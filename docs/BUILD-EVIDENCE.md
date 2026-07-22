@@ -1985,3 +1985,61 @@ from this session.)
 
 No sweeper/durability fix was needed (diagnosis (a)). `cargo clippy -D` /
 `fmt` clean; `git grep -i` codename = 0. Not pushed (human gate).
+
+## Phase 21 — prose run output + artifact files panel (ADR 0029)
+
+**What.** Two run-view fixes matching the redesign's intent: (1) the result
+panel renders the terminal output as PROSE (the `finish` contract's `summary`,
+or `message`/`text`/`result` for foreign shapes) with any remaining payload
+behind a collapsed "Raw output" disclosure — never a raw JSON dump up front,
+never a crash on odd shapes (`outputView`, unit-tested against strings,
+objects, arrays, numbers, prose-less shapes and circular structures); (2) the
+files a run produced surface in a side ARTIFACT panel — open by default, first
+file preselected, markdown rendered (react-markdown: renders to React
+elements, no innerHTML, raw HTML in a produced file is not executed), Copy +
+Download, quiet empty state, hidden entirely on a daemon without the endpoint
+(the existing 404→capability-off degrade convention).
+
+**Backend.** `GET /api/v1/runs/{id}/files` (+ `/{*name}` content), bearer-
+gated, wired as an optional router capability (`api::RunFilesService` via
+`router_full`/`build_app_full`; absent → 404, the skills/agents convention).
+The tools workspace is SHARED across runs, so the scope is derived from the
+run's own durable journal: only file names a successful `Receipt` of THIS run
+recorded (`saved_as`/`output`/`ledger`) are visible — never a directory
+listing. Path safety reuses the tool-side `Workspace::resolve` escape-refusal
+(reject `..` and absolute → 400) plus canonicalize-and-containment (symlink
+escape → refused), a 2 MiB cap (413) and UTF-8-only (415).
+
+**Security money-shot (live daemon, this session).** Against a real completed
+run on `127.0.0.1:7466`:
+
+```
+anon list:    401        traversal (..%2Fconfig.toml):        400
+anon content: 401        absolute (%2Fetc%2Fpasswd):          400
+content 200:  200        deep (a%2F..%2F..%2F..%2Fetc%2Fpasswd): 400
+```
+
+Proven in-suite by `crates/api/tests/run_files_test.rs` (4 tests): anonymous
+and wrong-token → 401 on both routes; percent-encoded traversal/absolute →
+400; a co-resident workspace file another run produced → 404 indistinguishable
+from nonexistence; the produced file → 200 with exact content; unwired
+service → 404. Unit tests in `run_files.rs` additionally cover failed-receipt
+grants-nothing and the symlink-escape refusal.
+
+**UI money-shots (real run, OpenRouter claude-sonnet-5, 4 steps, $0.042 —
+`read_source → extract_structure → write_report → finish` over a local
+markdown file).** The result face shows the prose summary with the artifact
+panel open beside it, markdown-rendered with working tabs/copy/download:
+
+- `docs/evidence/web-ui-result-prose-artifacts.png` — prose result + panel
+  open by default on the first produced file.
+- `docs/evidence/web-ui-artifact-report-md.png` — the produced `report.md`
+  tab selected, rendered as markdown.
+
+**Suite.** `cargo test --workspace` 245/245 (was 235; +6 unit +4 API
+contract), `clippy -D warnings` + `fmt` clean, web-ui `vitest` 11/11 and
+`pnpm build` clean (also fixed the latent TS 5.9 strictness so a FRESH
+`tsc -b --force` passes: dropped the deprecated `baseUrl` in favor of a
+relative `paths` mapping, added the standard `src/vite-env.d.ts` so the CSS
+side-effect import type-checks). `git grep -i` codename = 0. Not pushed
+(human gate).

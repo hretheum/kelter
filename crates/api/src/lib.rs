@@ -22,6 +22,9 @@ use uuid::Uuid;
 
 use kernel_core::Kernel;
 
+mod run_files;
+pub use run_files::{RunFileInfo, RunFilesError, RunFilesService, MAX_ARTIFACT_BYTES};
+
 // ---- model config control (Phase 8.5) ------------------------------------
 
 /// The current model config, safe to return to a client — **never** the API
@@ -272,6 +275,10 @@ pub struct ApiState {
     /// when absent — every `/api/v1/agents*` route then reports 404, the
     /// SAME capability-flag convention as `skills`.
     agents: Option<Arc<dyn AgentsController>>,
+    /// Run-produced-files service (ADR 0029); `None` when absent — the
+    /// `/api/v1/runs/{id}/files*` routes report 404, the SAME
+    /// capability-flag convention as `skills`/`agents`.
+    files: Option<Arc<RunFilesService>>,
 }
 
 pub fn router(kernel: Arc<Kernel>, token: String) -> Router {
@@ -314,13 +321,28 @@ pub fn router_with_principals_and_skills(
 }
 
 /// [`router_with_principals_and_skills`] plus an optional agents controller
-/// (ADR 0023 Part 3) — the daemon's real-wiring path.
+/// (ADR 0023 Part 3). No files service — the `/runs/{id}/files*` routes
+/// report 404. Use [`router_full`] to wire one in.
 pub fn router_with_principals_and_skills_and_agents(
     kernel: Arc<Kernel>,
     principals: Principals,
     config: Option<Arc<dyn ModelConfigController>>,
     skills: Option<Arc<dyn SkillsController>>,
     agents: Option<Arc<dyn AgentsController>>,
+) -> Router {
+    router_full(kernel, principals, config, skills, agents, None)
+}
+
+/// Everything: principals + every optional capability, including the
+/// run-produced-files service (ADR 0029) — the daemon's real-wiring path.
+#[allow(clippy::too_many_arguments)]
+pub fn router_full(
+    kernel: Arc<Kernel>,
+    principals: Principals,
+    config: Option<Arc<dyn ModelConfigController>>,
+    skills: Option<Arc<dyn SkillsController>>,
+    agents: Option<Arc<dyn AgentsController>>,
+    files: Option<Arc<RunFilesService>>,
 ) -> Router {
     let state = ApiState {
         kernel,
@@ -330,6 +352,7 @@ pub fn router_with_principals_and_skills_and_agents(
         config,
         skills,
         agents,
+        files,
     };
     Router::new()
         .route("/healthz", get(health))
@@ -339,6 +362,12 @@ pub fn router_with_principals_and_skills_and_agents(
         // journal replay for the historical execution axis, and cancel.
         .route("/api/v1/runs/{id}/events", get(get_run_events))
         .route("/api/v1/runs/{id}/cancel", post(cancel_run))
+        // Run-produced files (ADR 0029): list + read the files a run's own
+        // journal says it wrote — never a workspace directory listing, never
+        // an arbitrary filesystem path. Bearer. 404 when no files service is
+        // wired (the skills/agents capability-flag convention).
+        .route("/api/v1/runs/{id}/files", get(list_run_files))
+        .route("/api/v1/runs/{id}/files/{*name}", get(get_run_file))
         // Interactive skill activation (ADR 0021, design/07 D-9): a human's
         // deny/allow_once/allow_always decision on a paused run's pending
         // `activate_skill` ask-request. Bearer.
@@ -446,7 +475,7 @@ pub fn build_app_with_skills(
 }
 
 /// [`build_app_with_skills`] plus an optional agents controller (ADR 0023
-/// Part 3) — the real daemon-wiring path.
+/// Part 3). No files service — use [`build_app_full`] to wire one in.
 pub fn build_app_with_skills_and_agents(
     kernel: Arc<Kernel>,
     principals: Principals,
@@ -455,6 +484,19 @@ pub fn build_app_with_skills_and_agents(
     agents: Option<Arc<dyn AgentsController>>,
 ) -> Router {
     router_with_principals_and_skills_and_agents(kernel, principals, config, skills, agents)
+}
+
+/// Every optional capability, including the run-produced-files service (ADR
+/// 0029) — the real daemon-wiring path.
+pub fn build_app_full(
+    kernel: Arc<Kernel>,
+    principals: Principals,
+    config: Option<Arc<dyn ModelConfigController>>,
+    skills: Option<Arc<dyn SkillsController>>,
+    agents: Option<Arc<dyn AgentsController>>,
+    files: Option<Arc<RunFilesService>>,
+) -> Router {
+    router_full(kernel, principals, config, skills, agents, files)
 }
 
 pub async fn serve_with_principals(
@@ -790,6 +832,91 @@ async fn cancel_run(
             (StatusCode::NOT_FOUND, "run not found").into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Shared preamble of the two run-files handlers (ADR 0029): auth, the
+/// 404-when-absent capability convention, run existence, then the run's
+/// journal. `Ok` carries the service + journal; `Err` is the ready response.
+async fn run_files_preamble(
+    state: &ApiState,
+    headers: &HeaderMap,
+    id: Uuid,
+) -> Result<(Arc<RunFilesService>, Vec<kernel_core::JournalEntry>), Response> {
+    auth_gate(state, headers, None)?;
+    let Some(files) = state.files.clone() else {
+        return Err((StatusCode::NOT_FOUND, "run files not supported").into_response());
+    };
+    match state.kernel.store().get(id).await {
+        Ok(_) => {}
+        Err(kernel_core::StoreError::NotFound(_)) => {
+            return Err((StatusCode::NOT_FOUND, "run not found").into_response())
+        }
+        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()),
+    }
+    match state.kernel.store().journal(id).await {
+        Ok(journal) => Ok((files, journal)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()),
+    }
+}
+
+/// GET /api/v1/runs/{id}/files (ADR 0029): the files this run's journal says
+/// it produced and that still exist in the workspace — name + size only.
+async fn list_run_files(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let (files, journal) = match run_files_preamble(&state, &headers, id).await {
+        Ok(ok) => ok,
+        Err(rejection) => return rejection,
+    };
+    Json(serde_json::json!({ "run_id": id, "files": files.list(&journal) })).into_response()
+}
+
+/// GET /api/v1/runs/{id}/files/{*name} (ADR 0029): one produced file's UTF-8
+/// content, as JSON (the client renders/copies/downloads it; JSON keeps the
+/// bearer-auth fetch path identical to every other endpoint). The name must
+/// be in the run's journal-derived allowlist; `..`/absolute names are refused
+/// outright and an unlisted name is a 404 indistinguishable from a file that
+/// never existed (no workspace probing).
+async fn get_run_file(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path((id, name)): Path<(Uuid, String)>,
+) -> Response {
+    let (files, journal) = match run_files_preamble(&state, &headers, id).await {
+        Ok(ok) => ok,
+        Err(rejection) => return rejection,
+    };
+    match files.read(&journal, &name) {
+        Ok(content) => Json(serde_json::json!({
+            "name": name,
+            "bytes": content.len(),
+            "content": content,
+        }))
+        .into_response(),
+        Err(RunFilesError::Refused) => (
+            StatusCode::BAD_REQUEST,
+            "invalid path: workspace-relative names only",
+        )
+            .into_response(),
+        Err(RunFilesError::NotFound) => {
+            (StatusCode::NOT_FOUND, "no such file for this run").into_response()
+        }
+        Err(RunFilesError::TooLarge) => (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "file exceeds the serving cap",
+        )
+            .into_response(),
+        Err(RunFilesError::NotText) => (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "file is not valid UTF-8 text",
+        )
+            .into_response(),
+        Err(RunFilesError::Io(e)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
     }
 }
 

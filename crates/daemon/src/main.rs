@@ -1200,12 +1200,19 @@ async fn main() -> anyhow::Result<()> {
 
     // Opt-in TLS termination (Phase 11, ADR 0018): serve HTTPS with a config
     // cert; default stays plain (a tailnet provides transport security).
-    let app = api::build_app_with_skills_and_agents(
+    // Run-produced files (ADR 0029): read-side view of the shared tools
+    // workspace, scoped per run by its journal — powers the UI artifact panel.
+    let run_files = Arc::new(
+        api::RunFilesService::new(&workspace_abs)
+            .context("cannot initialize the run-files service on the tools workspace")?,
+    );
+    let app = api::build_app_full(
         kernel,
         principals,
         Some(controller),
         skills_ctrl,
         Some(agents_ctrl),
+        Some(run_files),
     );
     let serve = async {
         match &cfg.tls {
