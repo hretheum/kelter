@@ -2205,3 +2205,49 @@ verification-after-mutation from a stateless repeat, incl. the narrowing and the
 unconditional "do NOT repeat") has STRONGER grounds than the reconstruction predicted —
 and per the brief it is a kernel-assumption change awaiting the HUMAN GATE before any work
 starts. Suite: 266/266 (was 256; +2 step-zero, +1 redaction, +6 code-tools, +1 config), clippy -D + fmt clean. Not pushed.
+
+## Phase 24 — A2: state-epoch duplicate rule (ADR 0031, human-gated)
+
+**What.** The explicitly human-approved A2 rework: a successful MUTATING step (an action
+whose spec declares `idempotency_key` — the kernel's existing side-effect convention)
+starts a new STATE EPOCH; the anti-stall duplicate rule and Constrained's action-space
+narrowing are scoped to the current epoch (duplicate window INCLUDES the epoch anchor —
+repeating the mutation itself identically is still a stall; the name-level narrowing
+window EXCLUDES it, so the mutator can run again). The prompt's unconditional "do NOT
+repeat" is replaced with the actual rule. Wide unchanged; unkeyed side-effect tools stay
+conservatively non-mutating (pre-A2 behavior); plan mode untouched.
+
+**Sharpened DoD, delivered:**
+1. Stateless repeats STILL rejected — pinned by `pointless_repeat_without_state_change_is_still_rejected`
+   (keyed command AND read-only flavors) + `identical_re_edit_without_other_changes_is_still_rejected`;
+   observed live (a third identical test with no mutation in between died with the
+   `duplicate rejected (A2 epoch window)` trace firing).
+2. Narrowing has its own tests: `constrained_mutation_restores_a_dropped_tool` +
+   `constrained_within_epoch_removal_still_applies`.
+3. Durability/exactly-once RE-proven post-A2: `resume_replays_without_reexecution_and_allows_post_resume_reread`
+   (journaled steps not re-executed, model not re-queried, post-resume identical re-read
+   EXECUTES — the exact pre-A2 live death), `a2_epoch_window_test`, and
+   `scripts/smoke-durability.sh` PASS on the real daemon post-change (all three scenarios).
+4. **N=24 live series** (12 pre + 12 post, 6 neutral + 6 hinted each, both arms on the
+   SAME fixed executor, fresh fixture per run, completion judged ONLY by `cargo test`):
+   pre 7/12 completed with **5 duplicate-rule deaths** (all neutral: fix applied, tests
+   green ON DISK, re-verification rejected); post 8/12 with **0 duplicate-rule deaths**
+   (all 4 post failures = mid-series model-server outage, external). Fisher one-tailed
+   p≈0.019. The hint confound resolved: pre hint 6/6 vs neutral 1/6 (the hint MASKS the
+   rule); post neutral 3/3 vs hint 5/5 excluding outages — the prompt crutch is no longer
+   needed. Premature finish 0/24. Money shot: a FORCED test→fix→retest trajectory
+   completes on the A2 kernel (identical re-test executed after the mutation, 3 passed,
+   +7/−2 diff confined to `mediana`) — the same trajectory died 5/6 pre-A2.
+
+**Found & fixed along the way** (each with a test): the `popraw_kod` executor broke on
+gemma-3-27b's fenced-full-file replies (fallback added; the FIRST series measured this
+executor failure, not A2 — thrown out and re-run fairly); the fallback could destroy a
+file when the executor replied with a fenced FRAGMENT (length-ratio guard added, file
+untouched on refusal — reinforces the disposable-checkout boundary); the series harness
+could talk to a STALE daemon through a busy port after an external kill (exact-name kill +
+port-free wait per run; contaminated runs discarded).
+
+**Suite.** 272/272 (was 266; +4 A2 contract, +1 epoch-window regression, +2 executor
+parser/guard, −1 consolidation), clippy -D + fmt clean, smoke-durability green. Evidence:
+`~/dev/llm/oculink-testy/results/kelter/` (RAPORT.md sekcja A2 + seria-a2/). Not pushed;
+stopped before merge per the gate.

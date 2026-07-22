@@ -88,9 +88,15 @@ pub fn user_prompt_with_limit(context: &PolicyContext, step_result_limit: usize)
             .filter(|s| s.ok)
             .map(|s| s.action.as_str())
             .collect();
+        // A2: no unconditional "do NOT repeat" — the kernel's rule is
+        // epoch-scoped (an exact repeat is rejected only when NO
+        // state-changing step ran in between), so the prompt states exactly
+        // that instead of forbidding legitimate re-verification.
         if !done.is_empty() {
             out.push_str(&format!(
-                "\nAlready completed successfully (do NOT repeat): {}.\n",
+                "\nAlready completed successfully: {}. An exact repeat of an earlier step is \
+                 rejected unless a state-changing action ran in between; verifying again after \
+                 a change is fine.\n",
                 done.join(", ")
             ));
         }

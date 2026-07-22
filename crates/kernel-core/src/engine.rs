@@ -2184,11 +2184,38 @@ impl Kernel {
 
             // 1. Build the action space: tools + the kernel-owned finish action.
             let mut schema = self.tools.action_schema(latitude).await?;
+            // A2 (duplicate-rule refinement): a MUTATING action — one whose
+            // spec declares `idempotency_key` support, the kernel's own
+            // side-effect convention — starts a new STATE EPOCH. Repeats are
+            // judged within the current epoch only: verification after a
+            // change is legitimate; a repeat with no state change in between
+            // is a stall. Classified from the FULL schema, BEFORE the
+            // narrowing below removes anything. An unkeyed side-effect tool
+            // is conservatively treated as non-mutating — its repeats stay
+            // rejected, exactly the pre-A2 behavior.
+            let mutating_actions: std::collections::HashSet<String> = schema
+                .actions
+                .iter()
+                .filter(|a| a.supports_idempotency_key())
+                .map(|a| a.name.clone())
+                .collect();
+            let epoch_start = run
+                .steps
+                .iter()
+                .rposition(|s| s.ok && mutating_actions.contains(&s.action));
             // Constrained latitude = harder decomposition: drop tools that
-            // already succeeded so a weak engine cannot stall on one tool.
+            // already succeeded — but only IN THE CURRENT EPOCH (A2): a
+            // mutation brings dropped tools back into the space, so an
+            // edit→verify loop stays possible. The name-level window
+            // EXCLUDES the mutation itself (or the mutating tool could
+            // never run twice); its exact-argument repeat is still caught
+            // by the duplicate rule below, whose window INCLUDES it.
             if latitude.narrow_action_space() {
-                let done: std::collections::HashSet<&str> = run
-                    .steps
+                let window = match epoch_start {
+                    Some(i) => &run.steps[i + 1..],
+                    None => &run.steps[..],
+                };
+                let done: std::collections::HashSet<&str> = window
                     .iter()
                     .filter(|s| s.ok)
                     .map(|s| s.action.as_str())
@@ -2257,8 +2284,11 @@ impl Kernel {
                         latitude,
                         guidance: latitude.inject_guidance().then(|| {
                             "Work in small steps: one tool per step. Re-read the task and prior \
-                             steps, pick exactly one NEXT action — never one that already \
-                             succeeded — and finish only when the task's output has been produced."
+                             steps and pick exactly one NEXT action. Avoid repeating a step that \
+                             already succeeded unless a state-changing action ran in between \
+                             (verifying after a change is fine; an identical repeat with no \
+                             change is rejected). Finish only when the task's output has been \
+                             produced."
                                 .to_string()
                         }),
                         active_skills: run.active_skills.clone(),
@@ -2319,18 +2349,37 @@ impl Kernel {
                     .in_scope(|| schema.validate(proposed));
                     match validation {
                         Ok(v) => {
-                            // Deterministic anti-stall rule: outside Wide
-                            // latitude, an exact repeat of any earlier step is
-                            // rejected with feedback, not re-executed.
+                            // Deterministic anti-stall rule, A2-refined:
+                            // outside Wide latitude an exact repeat is
+                            // rejected ONLY within the current state epoch —
+                            // from the last successful mutating step
+                            // (INCLUSIVE: repeating the mutation itself with
+                            // identical arguments is still a stall) to now.
+                            // A repeat with a state change in between is
+                            // legitimate verification and executes normally.
                             let duplicate_of = latitude
                                 .reject_duplicates()
                                 .then(|| {
-                                    run.steps.iter().find(|s| {
+                                    let window = match epoch_start {
+                                        Some(i) => &run.steps[i..],
+                                        None => &run.steps[..],
+                                    };
+                                    window.iter().find(|s| {
                                         s.action == v.action() && &s.arguments == v.arguments()
                                     })
                                 })
                                 .flatten();
                             if let Some(prior) = duplicate_of {
+                                tracing::info!(
+                                    %run_id,
+                                    step = step_index,
+                                    action = %v.action(),
+                                    epoch_start = ?epoch_start,
+                                    prior_step = prior.index,
+                                    prior_ok = prior.ok,
+                                    mutating = ?mutating_actions,
+                                    "duplicate rejected (A2 epoch window)"
+                                );
                                 let reason = if prior.ok {
                                     format!(
                                         "action '{}' with these exact arguments already \
