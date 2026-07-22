@@ -24,6 +24,12 @@ RUN apt-get update \
     && useradd -r -m -d /data kelter
 COPY --from=builder /src/target/release/kelter /usr/local/bin/kelter
 COPY --from=builder /src/target/release/tools-server /usr/local/bin/tools-server
+# Crate `mcp` deklaruje CZTERY binarki, nie dwie. Bez memory-server demon nie startuje
+# w ogole ("failed to start the builtin memory extension"), a bez code-server nie ma
+# narzedzi do agentic codingu. Zweryfikowane na K12 2026-07-22.
+COPY --from=builder /src/target/release/ledger-server /usr/local/bin/ledger-server
+COPY --from=builder /src/target/release/code-server /usr/local/bin/code-server
+COPY --from=builder /src/target/release/memory-server /usr/local/bin/memory-server
 USER kelter
 WORKDIR /data
 EXPOSE 7466
