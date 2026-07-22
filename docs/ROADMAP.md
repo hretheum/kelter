@@ -304,20 +304,19 @@ block a launch; the core is complete.
   reversible/governed thesis). Opt-in; local SQLite stays the default; enables
   the two-independent-kernels sharing path (thin-client sharing already works
   via ADR 0004).
-- **Run output UI — prose summary + artifact panel (queued, next).** Render a
-  run's result as a readable prose summary instead of raw JSON, and surface the
-  files a run produces (e.g. an `.md` report) in a side artifact panel — opened
-  by default, markdown-rendered, with copy + download (like Claude's artifacts).
-  Includes safely exposing a run's produced files: bearer-auth'd and
-  path-traversal-safe.
-- **Plan-mode delegation ask + resilience (deferred from ADR 0023).** In plan
-  mode the delegation `AskHuman` outcome currently degrades to a refusal — safe
-  (the trust gate is never bypassed, only the interactive deny/allow-once/
-  allow-always pause is absent), and plan-mode retry/fallback is unbuilt. Both
-  wait on the concurrent admission loop's single-writer budget counter becoming
-  cross-task-shareable, and will likely land together with interactive
-  multi-turn delegation (below), since both need the same paused-awaiting state.
-  A future round, not a launch blocker.
+- **Run output UI — prose summary + artifact panel — Done (ADR 0029).** The
+  run result renders as a readable prose summary (not raw JSON, graceful for
+  unknown shapes), and files a run produces (e.g. an `.md` report) surface in a
+  side artifact panel — opened by default, markdown-rendered (react-markdown, no
+  innerHTML), with copy + download. Produced files are exposed **journal-scoped**
+  (only names from the run's own receipts, never a workspace listing), behind
+  bearer auth and path-traversal-safe (validated live + in tests).
+- **Plan-mode delegation ask — Done (ADR 0025); plan-mode resilience — residual.**
+  The plan-mode `AskHuman` gap is closed: it now pauses (drain-then-pause)
+  instead of degrading to a refusal, with interactive deny / allow-once /
+  allow-always (allow-once for this run only; allow-always elevates trust
+  persistently) — shipped and tested. Remaining residual: plan-mode
+  retry/fallback (a re-plan on failure) — a small future round, not a blocker.
 - **Multi-agent, further (see `docs/multi-agent-expansion-plan.md`).** P1–P4 of
   that plan shipped as Phases 14–15 (parallel fan-out + governed limits; agent
   trust/policy/ask + resilience). **P5 also shipped:** interactive multi-turn
@@ -330,8 +329,10 @@ block a launch; the core is complete.
 - **Cosmetic.** ADR-0013 provenance (`claude-opus-4-8` → `claude-fable-5`); the
   self-learning provenance-list evidence sample.
 - **Human / hardware / paid.** Real code-signing + notarization (Apple Developer
-  ID cert), the `.dmg` build (needs a macOS GUI session), K12 deployment (on
-  hardware arrival), and any live API / dedicated-embedding-server run.
+  ID cert) — note the unsigned `.app`/`.dmg` build is now one command
+  (`scripts/build-dmg.sh`, hdiutil-based, no GUI/AppleScript needed). K12
+  deployment (on hardware arrival), and any live API / dedicated-embedding-server
+  run.
 
 ## Beyond
 

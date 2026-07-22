@@ -44,3 +44,6 @@ models/
 apps/web-ui/dist/
 apps/web-ui/tsconfig.tsbuildinfo
 *.ign
+
+# built desktop bundles (scripts/build-dmg.sh)
+/dist/
