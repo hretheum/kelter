@@ -3,7 +3,7 @@ provenance: ai_authored
 provenance_metadata:
   agent: claude-opus-4-8
   session_date: 2026-07-21
-  human_validated: false
+  human_validated: true
   session_context: "P5 M4 — streamed remote-delegation progress: an authorized delegation whose remote advertises capabilities.streaming is dialed with SendStreamingMessage and its SSE reply consumed frame by frame; intermediate updates surface as advisory, journaled, attributed progress on the timeline, never as validated actions; a mid-stream failure falls back to polling the already-created task"
 ---
 

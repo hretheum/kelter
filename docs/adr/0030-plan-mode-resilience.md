@@ -3,7 +3,7 @@ provenance: ai_authored
 provenance_metadata:
   agent: claude-fable-5
   session_date: 2026-07-22
-  human_validated: false
+  human_validated: true
   session_context: "Plan-mode resilience: bounded per-node retry for transient failures + bounded adaptive re-planning (a failed plan is repaired by a model-proposed REVISED plan through the same propose_plan validation, journaled as a new plan generation), with exactly-once and deterministic crash-resume preserved."
 ---
 

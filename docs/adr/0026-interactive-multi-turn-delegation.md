@@ -3,7 +3,7 @@ provenance: ai_authored
 provenance_metadata:
   agent: claude-fable-5
   session_date: 2026-07-21
-  human_validated: false
+  human_validated: true
   session_context: "P5 — interactive multi-turn delegation: an authorized delegation whose remote task enters input-required pauses the run durably (AwaitingDelegationInput) and resumes on a human's continuation, reconnecting to the same remote task; governed and durable across a restart"
 ---
 

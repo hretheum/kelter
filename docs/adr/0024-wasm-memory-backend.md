@@ -3,7 +3,7 @@ provenance: ai_authored
 provenance_metadata:
   agent: claude-fable-5
   session_date: 2026-07-20
-  human_validated: false
+  human_validated: true
   session_context: "WASM as a governed extension for the memory capability — promoting the compiled-in MemoryProvider (ADR 0005) to a WASM-sandboxed, manifest-declared, runtime-registered backend (ADR 0011 + ADR 0008), preserving the self-learning invariant (ADR 0016)"
 ---
 

@@ -3,7 +3,7 @@ provenance: ai_authored
 provenance_metadata:
   agent: claude-fable-5
   session_date: 2026-07-21
-  human_validated: false
+  human_validated: true
   session_context: "P5 enabler — closing the ADR 0023 plan-mode delegation-ask gap: the concurrent admission loop (ADR 0022) drains in-flight siblings then durably pauses on AskHuman, with the per-run delegation budget staying single-writer-atomic and journal-durable across the pause and a restart"
 ---
 
