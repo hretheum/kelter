@@ -14,6 +14,10 @@ name = "ledger-server"
 path = "src/bin/ledger_server.rs"
 
 [[bin]]
+name = "code-server"
+path = "src/bin/code_server.rs"
+
+[[bin]]
 name = "memory-server"
 path = "src/bin/memory_server.rs"
 

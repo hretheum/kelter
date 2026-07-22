@@ -398,6 +398,57 @@ pub struct ToolsConfig {
     /// `kelter-extension.toml` manifest). Extensions register at startup —
     /// no recompilation (ADR 0006).
     pub extension_dirs: Vec<String>,
+    /// Agentic-coding tool surface (A1/C4/C5, opt-in): when present, the
+    /// bundled code-server is spawned against `root`. SECURITY: this hands
+    /// the model command execution (allowlisted, in-root) with the daemon's
+    /// full OS authority — point it ONLY at a disposable checkout/fixture
+    /// until the E-gate review, and prefer `bundled_tools = false` alongside
+    /// so the planner's action space is purely the coding loop.
+    pub coding: Option<CodingSection>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct CodingSection {
+    /// The repository/fixture directory the agent works on. Reads, writes
+    /// and command cwd are all confined to this root (E2-style symlink
+    /// containment included).
+    pub root: String,
+    /// A1 measurement toggle: `false` (default) = separated roles — the
+    /// planner's ONLY route to changing code is `popraw_kod(sciezka,
+    /// instrukcja)`, applied by a tool-side executor-model call. `true` =
+    /// merged roles — the planner writes content directly via
+    /// `zastosuj_patch` (the measured-worse "before" configuration).
+    pub merged_roles: bool,
+    /// Executor model endpoint for `popraw_kod`; defaults to the
+    /// `[policy]` base_url (same server, same model — the measured win is
+    /// the role split, not a second model).
+    pub executor_url: Option<String>,
+    /// Executor model name (informational for llama-server).
+    pub executor_model: Option<String>,
+    /// Executor edit budget (B2 applies to edits too).
+    pub executor_max_tokens: u32,
+    /// Commands the model may run via `uruchom_komende`.
+    pub allow: Vec<String>,
+    /// Per-command wall-clock limit.
+    pub timeout_secs: u64,
+    /// C5: how many error blocks the tool-side summary keeps.
+    pub summary_errors: usize,
+}
+
+impl Default for CodingSection {
+    fn default() -> Self {
+        Self {
+            root: String::new(),
+            merged_roles: false,
+            executor_url: None,
+            executor_model: None,
+            executor_max_tokens: 2048,
+            allow: vec!["cargo".into(), "git".into()],
+            timeout_secs: 180,
+            summary_errors: 5,
+        }
+    }
 }
 
 impl Default for ToolsConfig {
@@ -407,6 +458,7 @@ impl Default for ToolsConfig {
             bundled_tools: true,
             servers: Vec::new(),
             extension_dirs: vec!["./extensions".into()],
+            coding: None,
         }
     }
 }

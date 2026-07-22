@@ -128,6 +128,267 @@ impl ToolServer {
     }
 }
 
+// ---- code tools (A1/C4/C5, oculink agentic-coding) ------------------------
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CzytajPlikParams {
+    /// Ścieżka względem katalogu kodu.
+    pub sciezka: String,
+    /// Pierwsza linia do pokazania (1-based, jak w komunikatach kompilatora).
+    pub od_linii: Option<usize>,
+    /// Maksymalna liczba linii (domyślnie 400).
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PoprawKodParams {
+    /// Ścieżka pliku do zmiany, względem katalogu kodu.
+    pub sciezka: String,
+    /// Słowny opis zmiany do wykonania (co i dlaczego, nie treść pliku).
+    pub instrukcja: String,
+    /// Set by the runtime on resume; a repeated call with the same key
+    /// returns the stored result without re-editing.
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ZastosujPatchParams {
+    /// Ścieżka pliku do zmiany, względem katalogu kodu.
+    pub sciezka: String,
+    /// Dokładny istniejący fragment (musi wystąpić dokładnie raz).
+    pub stary: String,
+    /// Fragment zastępujący.
+    pub nowy: String,
+    /// Set by the runtime on resume; same-key replay is a no-op.
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UruchomKomendeParams {
+    /// Polecenie z listy dozwolonych (np. "cargo", "git").
+    pub polecenie: String,
+    /// Argumenty polecenia.
+    pub argumenty: Option<Vec<String>>,
+    /// Katalog roboczy względem katalogu kodu (domyślnie jego korzeń).
+    pub cwd: Option<String>,
+    /// Set by the runtime on resume; same-key replay returns the stored
+    /// result without re-running the command.
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GitParams {
+    /// Opcjonalna ścieżka/plik zawężający wynik.
+    pub sciezka: Option<String>,
+}
+
+/// Shared state + config of both code-server variants.
+#[derive(Clone)]
+pub struct CodeToolsCore {
+    root: crate::code_tools::CodeRoot,
+    executor: Option<crate::code_tools::ExecutorConfig>,
+    allowed: Vec<String>,
+    timeout_secs: u64,
+    max_errors: usize,
+}
+
+impl CodeToolsCore {
+    pub fn new(
+        root: impl Into<std::path::PathBuf>,
+        executor: Option<crate::code_tools::ExecutorConfig>,
+        allowed: Vec<String>,
+        timeout_secs: u64,
+        max_errors: usize,
+    ) -> std::io::Result<Self> {
+        Ok(Self {
+            root: crate::code_tools::CodeRoot::new(root)?,
+            executor,
+            allowed,
+            timeout_secs,
+            max_errors,
+        })
+    }
+
+    async fn czytaj(&self, p: CzytajPlikParams) -> CallToolResult {
+        match crate::code_tools::czytaj_plik(&self.root, &p.sciezka, p.od_linii, p.limit) {
+            Ok(v) => ok(v),
+            Err(e) => fail(e),
+        }
+    }
+
+    async fn komenda(&self, p: UruchomKomendeParams) -> CallToolResult {
+        match crate::code_tools::uruchom_komende(
+            &self.root,
+            &p.polecenie,
+            &p.argumenty.unwrap_or_default(),
+            p.cwd.as_deref(),
+            p.idempotency_key.as_deref(),
+            &self.allowed,
+            self.timeout_secs,
+            self.max_errors,
+        )
+        .await
+        {
+            Ok(v) => ok(v),
+            Err(e) => fail(e),
+        }
+    }
+
+    async fn git(&self, sub: &str, extra: Option<String>) -> CallToolResult {
+        let mut args = vec![sub.to_string()];
+        if sub == "diff" {
+            args.push("--stat".into());
+            args.push("-p".into());
+        }
+        if let Some(s) = extra {
+            args.push(s);
+        }
+        match crate::code_tools::uruchom_komende(
+            &self.root,
+            "git",
+            &args,
+            None,
+            None,
+            &["git".to_string()],
+            self.timeout_secs,
+            self.max_errors,
+        )
+        .await
+        {
+            Ok(v) => ok(v),
+            Err(e) => fail(e),
+        }
+    }
+}
+
+/// The separated-roles code server (A1, the DEFAULT): the planner has NO
+/// tool that writes file content — the only route to changing code is
+/// `popraw_kod(sciezka, instrukcja)`, executed by a tool-side model call.
+#[derive(Clone)]
+pub struct CodeServer {
+    core: CodeToolsCore,
+}
+
+impl CodeServer {
+    pub fn new(core: CodeToolsCore) -> Self {
+        Self { core }
+    }
+}
+
+#[tool_router(server_handler)]
+impl CodeServer {
+    #[tool(
+        description = "Przeczytaj plik z katalogu kodu; zwraca NUMEROWANE linie (od_linii/limit zawężają okno)."
+    )]
+    async fn czytaj_plik(&self, Parameters(p): Parameters<CzytajPlikParams>) -> CallToolResult {
+        self.core.czytaj(p).await
+    }
+
+    #[tool(
+        description = "Zleć zmianę kodu w pliku, opisaną słownie — jedyna droga do edycji. Wykonawca zastosuje zmianę; potem zweryfikuj testami."
+    )]
+    async fn popraw_kod(&self, Parameters(p): Parameters<PoprawKodParams>) -> CallToolResult {
+        let Some(executor) = &self.core.executor else {
+            return fail("popraw_kod wymaga skonfigurowanego wykonawcy (executor_url)");
+        };
+        match crate::code_tools::popraw_kod(
+            &self.core.root,
+            executor,
+            &p.sciezka,
+            &p.instrukcja,
+            p.idempotency_key.as_deref(),
+        )
+        .await
+        {
+            Ok(v) => ok(v),
+            Err(e) => fail(e),
+        }
+    }
+
+    #[tool(
+        description = "Uruchom dozwolone polecenie (np. cargo test) w katalogu kodu; zwraca kod wyjścia i streszczenie błędów, pełny log w pliku."
+    )]
+    async fn uruchom_komende(
+        &self,
+        Parameters(p): Parameters<UruchomKomendeParams>,
+    ) -> CallToolResult {
+        self.core.komenda(p).await
+    }
+
+    #[tool(description = "git status w katalogu kodu.")]
+    async fn git_status(&self, Parameters(p): Parameters<GitParams>) -> CallToolResult {
+        self.core.git("status", p.sciezka).await
+    }
+
+    #[tool(description = "git diff (z patchem) w katalogu kodu.")]
+    async fn git_diff(&self, Parameters(p): Parameters<GitParams>) -> CallToolResult {
+        self.core.git("diff", p.sciezka).await
+    }
+}
+
+/// The merged-roles code server — the "before A1" configuration, kept for
+/// measurement: the planner writes file content DIRECTLY via
+/// `zastosuj_patch` (no executor). Opt-in (`--merged-roles`).
+#[derive(Clone)]
+pub struct CodeServerMerged {
+    core: CodeToolsCore,
+}
+
+impl CodeServerMerged {
+    pub fn new(core: CodeToolsCore) -> Self {
+        Self { core }
+    }
+}
+
+#[tool_router(server_handler)]
+impl CodeServerMerged {
+    #[tool(
+        description = "Przeczytaj plik z katalogu kodu; zwraca NUMEROWANE linie (od_linii/limit zawężają okno)."
+    )]
+    async fn czytaj_plik(&self, Parameters(p): Parameters<CzytajPlikParams>) -> CallToolResult {
+        self.core.czytaj(p).await
+    }
+
+    #[tool(
+        description = "Zamień w pliku dokładny fragment 'stary' (musi wystąpić dokładnie raz) na 'nowy'."
+    )]
+    async fn zastosuj_patch(
+        &self,
+        Parameters(p): Parameters<ZastosujPatchParams>,
+    ) -> CallToolResult {
+        match crate::code_tools::zastosuj_patch(
+            &self.core.root,
+            &p.sciezka,
+            &p.stary,
+            &p.nowy,
+            p.idempotency_key.as_deref(),
+        ) {
+            Ok(v) => ok(v),
+            Err(e) => fail(e),
+        }
+    }
+
+    #[tool(
+        description = "Uruchom dozwolone polecenie (np. cargo test) w katalogu kodu; zwraca kod wyjścia i streszczenie błędów, pełny log w pliku."
+    )]
+    async fn uruchom_komende(
+        &self,
+        Parameters(p): Parameters<UruchomKomendeParams>,
+    ) -> CallToolResult {
+        self.core.komenda(p).await
+    }
+
+    #[tool(description = "git status w katalogu kodu.")]
+    async fn git_status(&self, Parameters(p): Parameters<GitParams>) -> CallToolResult {
+        self.core.git("status", p.sciezka).await
+    }
+
+    #[tool(description = "git diff (z patchem) w katalogu kodu.")]
+    async fn git_diff(&self, Parameters(p): Parameters<GitParams>) -> CallToolResult {
+        self.core.git("diff", p.sciezka).await
+    }
+}
+
 /// A minimal server exposing ONLY the ledger tool — used by the durability
 /// smoke to give a small local model a two-action space (append_ledger +
 /// finish) so kill-and-resume runs are deterministic.

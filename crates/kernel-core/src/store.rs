@@ -227,6 +227,7 @@ mod tests {
             pending_delegation_input: None,
             a2a_depth: 0,
             a2a_ancestry: Vec::new(),
+            max_steps: None,
         }
     }
 

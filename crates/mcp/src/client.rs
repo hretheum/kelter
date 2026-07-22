@@ -53,6 +53,24 @@ impl ServerSpec {
             env: Vec::new(),
         })
     }
+
+    /// The bundled code-tools server (A1/C4/C5), expected next to the
+    /// current executable. `args` come pre-built by the daemon from
+    /// `[tools.coding]`.
+    pub fn bundled_code_server(args: Vec<String>) -> std::io::Result<Self> {
+        let exe = std::env::current_exe()?;
+        let dir = exe.parent().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "executable has no parent dir")
+        })?;
+        let candidate = dir.join("code-server");
+        Ok(Self {
+            name: "code-tools".into(),
+            command: candidate.to_string_lossy().into_owned(),
+            args,
+            cwd: None,
+            env: Vec::new(),
+        })
+    }
 }
 
 type Client = RunningService<RoleClient, ()>;

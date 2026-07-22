@@ -16,6 +16,7 @@ use kernel_core::{
 };
 
 use crate::prompt;
+use crate::AdapterTuning;
 
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api";
 
@@ -24,6 +25,7 @@ pub struct OpenRouterAdapter {
     base_url: String,
     model: String,
     api_key: String,
+    tuning: AdapterTuning,
 }
 
 #[derive(Deserialize)]
@@ -74,6 +76,15 @@ impl OpenRouterAdapter {
         model: impl Into<String>,
         api_key: impl Into<String>,
     ) -> Self {
+        Self::with_tuning(base_url, model, api_key, AdapterTuning::default())
+    }
+
+    pub fn with_tuning(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        api_key: impl Into<String>,
+        tuning: AdapterTuning,
+    ) -> Self {
         Self {
             client: reqwest::Client::new(),
             // The request path below appends `/v1/chat/completions`. OpenRouter's
@@ -87,6 +98,7 @@ impl OpenRouterAdapter {
             },
             model: model.into(),
             api_key: api_key.into(),
+            tuning,
         }
     }
 
@@ -115,16 +127,17 @@ impl PolicyOracle for OpenRouterAdapter {
         context: &PolicyContext,
         schema: &ActionSchema,
     ) -> Result<Proposal, PolicyError> {
+        let limit = self.tuning.step_result_limit.unwrap_or(600);
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
                 {"role": "system", "content": prompt::system_prompt_native(schema, context)},
-                {"role": "user", "content": prompt::user_prompt(context)},
+                {"role": "user", "content": prompt::user_prompt_with_limit(context, limit)},
             ],
             "tools": Self::tools_payload(schema),
             "tool_choice": "auto",
             "temperature": 0.0,
-            "max_tokens": 1024,
+            "max_tokens": self.tuning.max_tokens.unwrap_or(1024),
         });
 
         let res = self

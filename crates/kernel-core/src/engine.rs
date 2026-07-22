@@ -434,6 +434,12 @@ pub struct Run {
     /// when `status == AwaitingDelegationInput` (ADR 0026). `None` otherwise.
     #[serde(default)]
     pub pending_delegation_input: Option<PendingDelegationInput>,
+    /// Per-run step-budget override (B4): `Some(n)` bounds THIS run at `n`
+    /// steps instead of the daemon-wide `KernelConfig::max_steps`, so one
+    /// daemon serves both short and long tasks. Fixed at run creation;
+    /// `None` (every pre-existing run) = the global default.
+    #[serde(default)]
+    pub max_steps: Option<u32>,
     /// Chain depth reached by THIS run via inbound A2A delegation (ADR
     /// 0022): 0 for a run started directly (CLI/API/local), N for a run
     /// that arrived as the Nth hop of an A2A delegation chain. Fixed at run
@@ -1162,7 +1168,17 @@ impl Kernel {
 
     /// Create a pending run without executing it yet.
     pub async fn create_run(&self, task: String) -> Result<Uuid, KernelError> {
-        self.create_run_with_lineage(task, 0, Vec::new()).await
+        self.create_run_full(task, 0, Vec::new(), None).await
+    }
+
+    /// [`Self::create_run`] with a per-run step-budget override (B4).
+    /// `None` = the daemon-wide `KernelConfig::max_steps`.
+    pub async fn create_run_bounded(
+        &self,
+        task: String,
+        max_steps: Option<u32>,
+    ) -> Result<Uuid, KernelError> {
+        self.create_run_full(task, 0, Vec::new(), max_steps).await
     }
 
     /// Create a pending run seeded with A2A delegation lineage (ADR 0022):
@@ -1176,6 +1192,17 @@ impl Kernel {
         task: String,
         a2a_depth: u32,
         a2a_ancestry: Vec<String>,
+    ) -> Result<Uuid, KernelError> {
+        self.create_run_full(task, a2a_depth, a2a_ancestry, None)
+            .await
+    }
+
+    async fn create_run_full(
+        &self,
+        task: String,
+        a2a_depth: u32,
+        a2a_ancestry: Vec<String>,
+        max_steps: Option<u32>,
     ) -> Result<Uuid, KernelError> {
         let run = Run {
             id: Uuid::new_v4(),
@@ -1196,6 +1223,7 @@ impl Kernel {
             pending_delegation_input: None,
             a2a_depth,
             a2a_ancestry,
+            max_steps,
         };
         let id = run.id;
         self.store.put(run).await?;
@@ -1795,10 +1823,13 @@ impl Kernel {
         .with_progress(self.events.clone(), None);
         let outcome = self.tools.execute(&exec_action, &exec_ctx).await;
         let attributions = exec_ctx.agent_usage.into_inner().unwrap_or_default();
+        // E3: mask secret-shaped runs BEFORE the result is recorded — a tool
+        // that read a `.env`/`Bearer` value must not persist it into the
+        // durable StepRecord/Receipt (SQLite) and every later prompt.
         match outcome {
-            Ok(v) => (v, true, attributions),
+            Ok(v) => (crate::redact::scrub_json(&v), true, attributions),
             Err(e) => (
-                serde_json::json!({ "error": e.to_string() }),
+                serde_json::json!({ "error": crate::redact::scrub_secrets(&e.to_string()) }),
                 false,
                 attributions,
             ),
@@ -2022,11 +2053,13 @@ impl Kernel {
         let mut last_error: Option<String> = None;
         let mut terminal: Option<(RunStatus, Option<serde_json::Value>, Option<String>)> = None;
 
-        // Bounded by `max_steps` (config, a dozen by default) — never
-        // remotely near u32::MAX.
+        // Bounded by `max_steps` — the per-run override (B4) when the run
+        // carries one, else the daemon-wide config; a dozen by default —
+        // never remotely near u32::MAX.
+        let step_budget = run.max_steps.unwrap_or(self.config.max_steps);
         #[allow(clippy::cast_possible_truncation)]
         let first_step = run.steps.len() as u32;
-        for step_index in first_step..self.config.max_steps {
+        for step_index in first_step..step_budget {
             // Journal state for this step (only ever non-empty for the first
             // iteration after a resume).
             let mut folded = fold_step(&journal, step_index);
@@ -2830,7 +2863,10 @@ impl Kernel {
                         .instrument(tool_span)
                         .await
                     {
-                        Ok(v) => (v, true),
+                        // E3: mask secret-shaped runs before the result
+                        // becomes the durable StepRecord/Receipt and, via
+                        // `run.steps`, every later prompt.
+                        Ok(v) => (crate::redact::scrub_json(&v), true),
                         // Interactive delegation (ADR 0026): the remote task
                         // entered `input-required`. This is NOT a failure —
                         // pause the run durably to collect the human's
@@ -2880,7 +2916,10 @@ impl Kernel {
                             return Ok(run);
                         }
                         Err(e) => {
-                            let msg = e.to_string();
+                            // E3: error text can carry a secret too (an HTTP
+                            // body echoing an auth header) — scrub both the
+                            // recorded result and the prompt-facing error.
+                            let msg = crate::redact::scrub_secrets(&e.to_string());
                             last_error = Some(format!(
                                 "tool '{}' failed: {msg}. Adjust and continue.",
                                 validated.action()
@@ -2986,8 +3025,7 @@ impl Kernel {
             RunStatus::Failed,
             None,
             Some(format!(
-                "step budget exhausted ({} steps) without finish",
-                self.config.max_steps
+                "step budget exhausted ({step_budget} steps) without finish"
             )),
         ));
 
@@ -4265,9 +4303,14 @@ async fn dispatch_plan_node_execution(
     // the right fan-out swimlane.
     let exec_ctx = ExecutionContext::new(run_id, step, store.clone(), folded.notes.clone())
         .with_progress(events, Some(node.id.clone()));
+    // E3: mask secret-shaped runs before the result becomes a durable
+    // Receipt/StepRecord — same seam as step mode.
     let (result, ok) = match tools.execute(&exec_action, &exec_ctx).await {
-        Ok(v) => (v, true),
-        Err(e) => (serde_json::json!({ "error": e.to_string() }), false),
+        Ok(v) => (crate::redact::scrub_json(&v), true),
+        Err(e) => (
+            serde_json::json!({ "error": crate::redact::scrub_secrets(&e.to_string()) }),
+            false,
+        ),
     };
 
     crash_point("after_execute", validated.action());

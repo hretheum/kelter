@@ -2153,3 +2153,55 @@ propose a failing-then-fixed plan is inherently nondeterministic; the
 mechanism is instead proven by deterministic kernel-level tests plus the
 two-session SQLite crash-resume above (real store, real process-boundary
 semantics).
+
+## Phase 23 — agentic coding on local models: tools + config + security (oculink brief)
+
+**What.** The oculink `prompt-kelter-agentic-coding` brief, executed against the live
+runtime with a mandatory step-zero verification. Evidence pack (raw run JSON + journals +
+logs + decision/uncertainty ledgers) lives OUTSIDE this repo by design:
+`~/dev/llm/oculink-testy/results/kelter/` (RAPORT.md is the entry point).
+
+**Step zero (the reconstruction's predicted failure) — CONFIRMED, twice over.**
+Deterministically on the live kernel (`agentic_loop_step_zero_test.rs`): at Standard
+latitude an exact re-run of `uruchom_testy` after an intervening edit dies on the
+anti-stall duplicate rule; at Constrained (the `local:` default) it is WORSE than
+predicted — a once-succeeded tool is REMOVED from the action space (`narrow_action_space`).
+Live (gemma-3-27b via llama-server, `/v1/models`-verified): three independent loop deaths,
+all by the duplicate rule — identical test re-run at step 1 (merged roles), re-verification
+after a failed fix (separated roles), and re-reading the file after crash-resume.
+
+**Shipped (all opt-in / behavior-preserving by default):**
+- A1+C4: bundled `code-server` (`[tools.coding]`) — separated roles by default
+  (`czytaj_plik` numbered lines, `popraw_kod` as the ONLY route to editing code, executor =
+  the same model/server; `uruchom_komende` allowlisted+root-confined; `git_status/git_diff`);
+  `merged_roles = true` is the measured-worse baseline kept for comparison. Zero kernel
+  changes. Writing tools are exactly-once via durable `idempotency_key` markers.
+- C5: tool-side test-output summarization (first N error blocks + result line; full log to
+  `.kelter/logs/`, readable via `czytaj_plik`).
+- B1–B4: `[policy] thinking` (Qwen `chat_template_kwargs.enable_thinking`) + reasoning-only
+  diagnosis, `[policy] max_tokens`, `[policy] step_result_limit`, per-run `max_steps` on
+  `POST /runs` (ceiling 500, persisted — survives resume).
+- C1: third adapter `local-native:<model>` (llama.cpp native `tools`; default latitude
+  Standard, deliberately — Constrained's narrowing kills iterative loops).
+- E1–E4: symlink write-escape CLOSED (canonicalize deepest existing ancestor + containment,
+  in both `Workspace::resolve` and `CodeRoot::resolve`, tests incl. symlinked file+dir);
+  secret redaction now covers `StepRecord.result` + journal `Receipt`s (scrub at the
+  execution seams, test proves no secret reaches SQLite/prompts); unrestricted report-tool
+  read + unenforced `network=false` documented loudly (SECURITY.md, config.example) instead
+  of pretended.
+
+**Live measurement (fix-a-failing-test loop, rust_mediana fixture, gemma-3-27b).** Merged
+roles: 0/2 completed (both duplicate-rule deaths). Separated roles (A1): 2/3 completed with
+tests EMPIRICALLY green (`cargo test: ok. 3 passed` — the compiler's verdict, never the
+model's claim); the 1 failure was a needed re-verification dying on the duplicate rule.
+Premature finish: 0/6 occurrences (tracked as its own category). Kill-and-resume mid-run:
+the daemon resumed from the journal, replayed 2 completed steps without re-executing them
+(1 idempotency marker, no double patch), model not re-queried — ADR 0007 intact; the
+resumed loop then died proposing an identical re-read (the duplicate rule again).
+
+**Honest conclusion + gate.** A1 recovers the loop only for the
+read→delegate→verify-once shape; ANY needed re-verification still dies. A2 (distinguish
+verification-after-mutation from a stateless repeat, incl. the narrowing and the prompt's
+unconditional "do NOT repeat") has STRONGER grounds than the reconstruction predicted —
+and per the brief it is a kernel-assumption change awaiting the HUMAN GATE before any work
+starts. Suite: 266/266 (was 256; +2 step-zero, +1 redaction, +6 code-tools, +1 config), clippy -D + fmt clean. Not pushed.

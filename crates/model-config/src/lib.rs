@@ -212,10 +212,16 @@ impl ModelConfigController for DaemonModelConfig {
     async fn set(&self, update: ModelConfigUpdate) -> Result<ModelConfigView, String> {
         // Build the new adapter (resolving the key from env/secret file) —
         // this validates the engine string and the key requirement.
+        // Adapter tuning (B1-B3) carries over from the running config — a
+        // UI model swap changes the engine, not the operator's tuning.
+        let tuning_src = self.state.lock().await.clone();
         let mut cfg = PolicyConfig {
             engine: update.engine.trim().to_string(),
             base_url: update.base_url.filter(|u| !u.trim().is_empty()),
             latitude: None,
+            max_tokens: tuning_src.max_tokens,
+            thinking: tuning_src.thinking,
+            step_result_limit: tuning_src.step_result_limit,
             api_key: resolve_key(&self.dir),
         };
         // SSRF guard (audit finding 2-a/#9): a `set` that points model egress
@@ -348,6 +354,9 @@ mod tests {
             engine: "local:test".into(),
             base_url: Some("http://127.0.0.1:8080".into()),
             latitude: None,
+            max_tokens: None,
+            thinking: None,
+            step_result_limit: None,
             api_key: None,
         })
         .unwrap();
@@ -358,6 +367,9 @@ mod tests {
                 engine: "local:test".into(),
                 base_url: Some("http://127.0.0.1:8080".into()),
                 latitude: None,
+                max_tokens: None,
+                thinking: None,
+                step_result_limit: None,
                 api_key: None,
             },
             allowlist,

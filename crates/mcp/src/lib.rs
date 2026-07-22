@@ -4,6 +4,7 @@
 //! Zero custom plugin API — every tool is an MCP server (ADR 0002).
 
 pub mod client;
+pub mod code_tools;
 pub mod extensions;
 pub mod memory_client;
 pub mod memory_server;

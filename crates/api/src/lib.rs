@@ -657,7 +657,14 @@ fn auth_gate(
 #[derive(Deserialize)]
 struct CreateRun {
     task: String,
+    /// Per-run step-budget override (B4); omitted = the daemon default.
+    #[serde(default)]
+    max_steps: Option<u32>,
 }
+
+/// Hard ceiling on the per-run override — a client cannot buy an unbounded
+/// run; long jobs get a bigger budget, not an infinite one.
+const MAX_STEPS_CEILING: u32 = 500;
 
 async fn create_run(
     State(state): State<ApiState>,
@@ -671,7 +678,20 @@ async fn create_run(
     if req.task.trim().is_empty() {
         return (StatusCode::UNPROCESSABLE_ENTITY, "task must not be empty").into_response();
     }
-    match state.kernel.create_run(req.task).await {
+    if let Some(n) = req.max_steps {
+        if n == 0 || n > MAX_STEPS_CEILING {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("max_steps must be between 1 and {MAX_STEPS_CEILING}"),
+            )
+                .into_response();
+        }
+    }
+    match state
+        .kernel
+        .create_run_bounded(req.task, req.max_steps)
+        .await
+    {
         Ok(run_id) => {
             // Attribute the caller (Phase 11, ADR 0018): which principal
             // created this run — durable in the journal, "default" for the

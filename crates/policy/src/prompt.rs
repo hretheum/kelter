@@ -47,7 +47,15 @@ fn push_actions_and_guidance(out: &mut String, schema: &ActionSchema, context: &
 }
 
 /// User-side message: the task plus everything that has happened so far.
+/// Step results truncated at the historical default (600 chars).
 pub fn user_prompt(context: &PolicyContext) -> String {
+    user_prompt_with_limit(context, 600)
+}
+
+/// [`user_prompt`] with a configurable per-step-result truncation limit
+/// (B3): 600 chars is too small for a compiler error, so coding setups
+/// raise it via `[policy] step_result_limit`.
+pub fn user_prompt_with_limit(context: &PolicyContext, step_result_limit: usize) -> String {
     let mut out = format!("Task: {}\n", context.task);
 
     if !context.memory.is_empty() {
@@ -68,7 +76,10 @@ pub fn user_prompt(context: &PolicyContext) -> String {
                 s.action,
                 serde_json::to_string(&s.arguments).unwrap_or_default(),
                 if s.ok { "ok" } else { "FAILED" },
-                truncate(&serde_json::to_string(&s.result).unwrap_or_default(), 600),
+                truncate(
+                    &serde_json::to_string(&s.result).unwrap_or_default(),
+                    step_result_limit
+                ),
             ));
         }
         let done: Vec<&str> = context

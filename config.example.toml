@@ -9,8 +9,14 @@ bind = "127.0.0.1:7466"
 [policy]
 engine = "local:qwen2.5-0.5b-instruct"
 # engine = "openrouter:anthropic/claude-sonnet-5"   # ← the one-line swap (key from OPENROUTER_API_KEY env)
+# engine = "local-native:gpt-oss-20b" # llama.cpp with native `tools` instead of GBNF (C1)
 # base_url = "http://127.0.0.1:8080"  # llama.cpp server (default shown)
 # latitude = "constrained"            # constrained | standard | wide (default derives from adapter)
+#   NOTE for iterative (coding) loops: "constrained" REMOVES a once-succeeded tool from the
+#   action space and duplicate proposals are rejected outside "wide" — use "standard".
+# max_tokens = 2048          # B2: completion budget per proposal (default 512 local / 1024 native)
+# thinking = false           # B1: disable thinking mode (REQUIRED for Qwen under GBNF)
+# step_result_limit = 1500   # B3: per-step result truncation in the prompt (default 600)
 
 [storage]
 backend = "sqlite"     # "sqlite" (durable — runs/journal/memory survive restarts) | "memory"
@@ -56,3 +62,17 @@ extension_dirs = ["./extensions"]
 # name = "my-tools"
 # command = "/path/to/mcp-server"
 # args = ["--flag"]
+
+# Agentic-coding tool surface (opt-in; A1/C4/C5). SECURITY: gives the model allowlisted
+# command execution inside `root` with the daemon's FULL OS authority — point it only at a
+# disposable checkout/fixture. Reads+writes+cwd are confined to `root` (symlink-safe).
+# [tools.coding]
+# root = "/path/to/disposable/checkout"
+# merged_roles = false        # false (default) = A1 separated roles: the planner's only route
+#                             # to changing code is popraw_kod(sciezka, instrukcja); true =
+#                             # zastosuj_patch directly (the measured-worse baseline)
+# executor_url = ""           # popraw_kod's executor model; default = [policy] base_url
+# executor_max_tokens = 2048
+# allow = ["cargo", "git"]    # commands the model may run via uruchom_komende
+# timeout_secs = 180
+# summary_errors = 5          # C5: error blocks kept in the tool-side summary

@@ -69,7 +69,9 @@ impl Workspace {
         Ok(candidate)
     }
 
-    /// Resolve a workspace-relative path for WRITING, refusing escapes.
+    /// Resolve a workspace-relative path for WRITING, refusing escapes —
+    /// both lexical (`..`, absolute) and physical (E2: a symlink planted
+    /// inside the workspace must not route the write outside it).
     pub fn resolve(&self, rel: &str) -> Result<PathBuf, ToolError> {
         if rel.trim().is_empty() {
             return Err(ToolError::Invalid("empty path".into()));
@@ -81,6 +83,25 @@ impl Workspace {
             .any(|c| matches!(c, std::path::Component::ParentDir))
             || Path::new(rel).is_absolute()
         {
+            return Err(ToolError::PathEscape(rel.to_string()));
+        }
+        // E2 (symlink containment): canonicalize the target — or, for a
+        // not-yet-existing target, its deepest EXISTING ancestor — and
+        // require the REAL path to stay under the (canonical) root. A
+        // symlinked file or directory component pointing outside the
+        // workspace resolves outside the root and is refused; only the
+        // root directory itself was canonicalized before this fix.
+        let mut probe = candidate.clone();
+        let real = loop {
+            match probe.canonicalize() {
+                Ok(real) => break real,
+                Err(_) => match probe.parent() {
+                    Some(parent) => probe = parent.to_path_buf(),
+                    None => return Err(ToolError::PathEscape(rel.to_string())),
+                },
+            }
+        };
+        if !real.starts_with(&self.root) {
             return Err(ToolError::PathEscape(rel.to_string()));
         }
         Ok(candidate)
@@ -395,6 +416,37 @@ mod tests {
         assert!(extract_structure(&ws, "missing.md", "out.json")
             .await
             .is_err());
+    }
+
+    /// E2: a symlink planted INSIDE the workspace must not route a write
+    /// outside it — neither as the target file nor as a directory component.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workspace_rejects_symlink_write_escapes() {
+        let ws = temp_ws();
+        let outside_dir = std::env::temp_dir().join(format!("ak-out-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        let outside_file = outside_dir.join("victim.txt");
+        std::fs::write(&outside_file, "untouched").unwrap();
+
+        // Symlinked FILE target.
+        std::os::unix::fs::symlink(&outside_file, ws.root().join("link.md")).unwrap();
+        assert!(matches!(
+            ws.resolve("link.md"),
+            Err(ToolError::PathEscape(_))
+        ));
+
+        // Symlinked DIRECTORY component.
+        std::os::unix::fs::symlink(&outside_dir, ws.root().join("subdir")).unwrap();
+        assert!(matches!(
+            ws.resolve("subdir/report.md"),
+            Err(ToolError::PathEscape(_))
+        ));
+
+        // A legitimate nested path (nothing symlinked) still resolves.
+        assert!(ws.resolve("nested/report.md").is_ok());
+        // And the outside file was never written through.
+        assert_eq!(std::fs::read_to_string(&outside_file).unwrap(), "untouched");
     }
 
     #[tokio::test]

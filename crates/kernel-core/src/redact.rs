@@ -34,6 +34,27 @@ pub fn scrub_secrets(text: &str) -> String {
     out
 }
 
+/// Scrub likely secrets out of every string value in a JSON tree (E3): tool
+/// results become `StepRecord.result` and journal `Receipt`s — durable in
+/// SQLite and rendered into every later prompt — so a read `.env`/`Bearer`
+/// value must be masked BEFORE it is recorded, not only at the log seam.
+/// Keys and structure are preserved; only string values are rewritten, and
+/// only when they carry a secret-shaped run.
+pub fn scrub_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(s) => serde_json::Value::String(scrub_secrets(s)),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(scrub_json).collect())
+        }
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), scrub_json(v)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 fn find_secret_start(text: &str) -> Option<usize> {
     // Case-insensitive "bearer " or a "sk-"/"key-" prefix.
     let lower = text.to_ascii_lowercase();

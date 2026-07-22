@@ -479,6 +479,47 @@ async fn main() -> anyhow::Result<()> {
             mcp::ServerSpec::bundled_tools_server(&cfg.tools.workspace)?,
         );
     }
+    // Agentic-coding tool surface (A1/C4/C5): opt-in via [tools.coding].
+    if let Some(coding) = &cfg.tools.coding {
+        if coding.root.trim().is_empty() {
+            anyhow::bail!("[tools.coding] requires a non-empty `root`");
+        }
+        let executor_url = coding.executor_url.clone().unwrap_or_else(|| {
+            cfg.policy
+                .base_url
+                .clone()
+                .unwrap_or_else(|| policy::LOCAL_DEFAULT_BASE_URL.to_string())
+        });
+        let mut args = vec![
+            "--root".to_string(),
+            coding.root.clone(),
+            "--executor-url".to_string(),
+            executor_url,
+            "--executor-max-tokens".to_string(),
+            coding.executor_max_tokens.to_string(),
+            "--allow".to_string(),
+            coding.allow.join(","),
+            "--timeout-secs".to_string(),
+            coding.timeout_secs.to_string(),
+            "--summary-errors".to_string(),
+            coding.summary_errors.to_string(),
+        ];
+        if let Some(model) = &coding.executor_model {
+            args.push("--executor-model".to_string());
+            args.push(model.clone());
+        }
+        if coding.merged_roles {
+            args.push("--merged-roles".to_string());
+        }
+        tracing::warn!(
+            root = %coding.root,
+            merged_roles = coding.merged_roles,
+            "coding tools ENABLED: the model can run allowlisted commands ({}) inside the root \
+             with the daemon's OS authority — keep the root disposable",
+            coding.allow.join(", ")
+        );
+        servers.push(mcp::ServerSpec::bundled_code_server(args)?);
+    }
 
     // Capability registry: manifest-declared extensions, routed by the
     // capability they provide (ADR 0008). Invalid manifests fail loudly.
