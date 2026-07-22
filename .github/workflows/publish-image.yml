@@ -1,0 +1,104 @@
+# Publikacja obrazu kontenera do GHCR.
+#
+# OSOBNY workflow, celowo nie dopisany do ci.yml: tamten ma w komentarzu
+# "Build only — no registry push. Publishing is a human decision." — i słusznie.
+# Ten workflow jest URUCHAMIANY RĘCZNIE (workflow_dispatch) albo tagiem, więc
+# publikacja pozostaje świadomą decyzją, a nie skutkiem ubocznym każdego pusha.
+#
+# PO CO: K12 (Fedora CoreOS) ma tylko POBIERAĆ gotowe obrazy — bez źródeł,
+# bez toolchainu Rusta, bez kompilacji. Budowanie na Macu odpada: Mac jest arm64,
+# K12 amd64, a build Rusta pod emulacją to godziny.
+name: publish-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      arm64:
+        description: "Zbudować także arm64 (podwaja czas; K12 potrzebuje tylko amd64)"
+        type: boolean
+        default: false
+      latest:
+        description: "Otagować także jako :latest"
+        type: boolean
+        default: true
+  push:
+    tags: ["v*"]
+
+env:
+  REJESTR: ghcr.io
+  OBRAZ: ${{ github.repository }}
+
+jobs:
+  publish:
+    name: buduj i publikuj do GHCR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # QEMU tylko gdy budujemy arm64 — bez tego krok jest zbędnym kosztem.
+      - uses: docker/setup-qemu-action@v3
+        if: ${{ inputs.arm64 || startsWith(github.ref, 'refs/tags/') }}
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REJESTR }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tagi: ZAWSZE krótki SHA (jednoznaczny, odtwarzalny), opcjonalnie :latest.
+      # Wdrożenie na K12 powinno wskazywać SHA — "latest" nie mówi, co właściwie
+      # działa, a przy agencie wykonującym kod to istotne.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REJESTR }}/${{ env.OBRAZ }}
+          tags: |
+            type=sha,format=short
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ inputs.latest || startsWith(github.ref, 'refs/tags/') }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ (inputs.arm64 || startsWith(github.ref, 'refs/tags/')) && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Cache w rejestrze — build Rusta z ~415 zaleznosciami jest kosztowny,
+          # a bez cache kazde uruchomienie zaczyna od zera.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Podsumowanie dla wdrożenia
+        # Wartosci przekazane przez env, NIE przez interpolacje w skrypcie powloki:
+        # ${{ }} wstawiane wprost do `run:` jest wektorem wstrzykniecia polecen, gdy
+        # zrodlem jest cokolwiek sterowanego z zewnatrz (tu: nazwa tagu z github.ref).
+        env:
+          TAGI: ${{ steps.meta.outputs.tags }}
+          PELNA_NAZWA: ${{ env.REJESTR }}/${{ env.OBRAZ }}
+        run: |
+          {
+            echo "## Obraz opublikowany"
+            echo ""
+            echo '```'
+            printf '%s\n' "$TAGI"
+            echo '```'
+            echo ""
+            echo "### Pobranie na K12"
+            echo ""
+            echo "Repozytorium jest PRYWATNE, więc pakiet w GHCR też — K12 musi się uwierzytelnić:"
+            echo ""
+            echo '```bash'
+            echo '# jednorazowo: token z uprawnieniem read:packages'
+            echo 'echo $GHCR_TOKEN | podman login ghcr.io -u hretheum --password-stdin'
+            echo ""
+            echo '# pobranie KONKRETNEJ wersji (nie :latest — przy agencie wykonującym'
+            echo '# kod trzeba wiedzieć, co dokładnie działa)'
+            printf 'podman pull %s:sha-<krótki-sha>\n' "$PELNA_NAZWA"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
