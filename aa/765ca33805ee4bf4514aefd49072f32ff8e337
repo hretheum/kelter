@@ -1,0 +1,64 @@
+crates/api/src/run_files.rs
+  s_ea2a4dfe192703::t_7341da34f94cc3 120
+  s_ea2a4dfe192703::t_ed4dc7823a9501 1-119,121-273
+apps/web-ui/package.json
+  s_ea2a4dfe192703::t_1a6088fda23d86 17
+crates/api/tests/run_files_test.rs
+  s_ea2a4dfe192703::t_736464acce81d7 1-47,53-200,204-276
+  s_ea2a4dfe192703::t_7341da34f94cc3 48-52,201-203
+apps/web-ui/src/features/runs/Result.tsx
+  s_ea2a4dfe192703::t_866ccaaabb8c4b 64-69,72-77
+  s_ea2a4dfe192703::t_bf78d21c4046de 78-118,120-129,131-135,137-141,143-167
+  s_ea2a4dfe192703::t_db41696d01a5ab 168,170
+  s_ea2a4dfe192703::t_a1ca7600dadd97 11-12,15
+apps/web-ui/src/vite-env.d.ts
+  s_ea2a4dfe192703::t_7b82a74de412c1 1
+crates/api/src/lib.rs
+  s_ea2a4dfe192703::t_87dd3cf9143efe 25-27
+  s_ea2a4dfe192703::t_a9789fda4fed8e 278-281
+  s_ea2a4dfe192703::t_13be25a7ba88ac 365-370
+  s_ea2a4dfe192703::t_2e3b198bd95da0 478,489-499
+  s_ea2a4dfe192703::t_7341da34f94cc3 846,899-903,907-911
+  s_ea2a4dfe192703::t_f6a31b30363229 324-325,332-345,355
+  s_ea2a4dfe192703::t_e035d50db72070 500,838-845,847-898,904-906,912-922
+  s_ea2a4dfe192703::t_5b23d717158478 501
+apps/web-ui/src/store/app.ts
+  s_ea2a4dfe192703::t_e0ba661f7a4ca1 65-69
+  s_ea2a4dfe192703::t_ccb4019d2f0bf7 21-23
+  s_ea2a4dfe192703::t_0b2f5d6a08b91c 92
+  s_ea2a4dfe192703::t_26b6eb3e3bb3ad 362-382
+apps/web-ui/src/lib/result.ts
+  s_ea2a4dfe192703::t_786923a7ef2b24 1-59
+docs/BUILD-EVIDENCE.md
+  s_ea2a4dfe192703::t_4a663eb6996c52 1988-2045
+apps/web-ui/tsconfig.json
+  s_ea2a4dfe192703::t_f546d3c4136dcc 15
+crates/daemon/src/main.rs
+  s_ea2a4dfe192703::t_2ec0f78c6ca773 1203-1209,1215
+apps/web-ui/src/lib/result.test.ts
+  s_ea2a4dfe192703::t_25932dfc29ae16 1-46
+apps/web-ui/src/lib/api.ts
+  s_ea2a4dfe192703::t_0eb75bc2501137 288-305
+docs/adr/0029-run-output-prose-and-artifact-files.md
+  s_ea2a4dfe192703::t_faa5fc2071e046 1-94
+apps/web-ui/src/features/runs/ArtifactPanel.tsx
+  s_ea2a4dfe192703::t_be2ae1267811e0 1-212
+apps/web-ui/pnpm-lock.yaml
+  s_ea2a4dfe192703::t_c042c1c2bfb981 23-25,565-567,571-573,577-585,594-602,642-644,658-660,665-676,684-686,702-708,713-715,735-737,745-747,769-796,888-890,897-983,1000-1002,1017-1019,1025-1030,1039-1044,1064-1066,1073-1081,1107-1112,1118-1135,1142-1147,1237-1239,1624-1627,1630-1633,1636-1645,1654-1659,1715-1716,1729-1730,1733-1740,1747-1748,1757-1762,1765-1768,1809-1810,1817-1818,1830-1870,1928-1929,1938-2159,2168-2177,2190-2191,2197-2214,2219-2235,2275-2276,2281-2293,2311-2314,2317-2349,2356-2365,2410-2411
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "aa765ca33805ee4bf4514aefd49072f32ff8e337",
+  "prompts": {},
+  "sessions": {
+    "s_ea2a4dfe192703": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9cbdcf0b-ef35-4873-b2c8-816d042979c1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
