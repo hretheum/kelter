@@ -2043,3 +2043,113 @@ contract), `clippy -D warnings` + `fmt` clean, web-ui `vitest` 11/11 and
 relative `paths` mapping, added the standard `src/vite-env.d.ts` so the CSS
 side-effect import type-checks). `git grep -i` codename = 0. Not pushed
 (human gate).
+
+## Phase 22 — plan-mode resilience: bounded retry + adaptive re-planning (ADR 0030)
+
+**What.** Plan mode's documented follow-up (ADR 0010 "adaptive re-planning is
+deferred"): (a) **bounded per-node retry** — a failed tool/a2a node re-dispatches
+up to `plan_node_retries` extra times before the failure counts (review nodes
+never retry: a rejection is a verdict); (b) **bounded adaptive re-planning** —
+on a plan failure the model is asked for a REVISED plan, informed by a BOUNDED
+failure context (failed node + truncated error, completed nodes + truncated
+outputs, attempt count; rebuilt per failure, never accumulated). Both knobs
+default to **0** → pre-ADR-0030 fail-on-node-error behavior is unchanged
+(`defaults_preserve_fail_fast` asserts the exact old error string).
+
+**The three cruxes, as shipped.**
+- **Validation floor (crux #1):** a re-plan is a NEW `propose_plan` through the
+  SAME schema-constrained proposal + `plan::validate` against the SAME pristine
+  tool schema (review_verdict stays execution-only). No privileged path exists
+  in the code — the re-plan request differs from the original only in guidance
+  text. Invalid re-plan → rejected, consumes a slot, model re-asked with the
+  quoted error (budget permitting) or the run fails cleanly.
+- **Bounded (crux #2):** `max_replans` caps re-plan PROPOSALS (accepted ones
+  journaled → the count survives crash-resume via the journaled-plans count;
+  rejected ones session-local). Worst case per session: 1+max_replans plans ×
+  ≤32 nodes × ≤1+max_node_retries attempts. No re-plan→fail→re-plan loop.
+- **Exactly-once + determinism (crux #3):** each accepted plan is another
+  `PlanProposed` entry (generation = index, LAST = active); generation g node i
+  journals under step `g×100+i` (stride > MAX_NODES=32 → no receipt collisions;
+  gen-0 keys = old keys → old journals resume unchanged). Retries reuse the
+  deterministic `(run, step)` idempotency key (a keyed tool dedupes, never
+  double-executes) and the per-step attempt count re-seeds from journaled
+  receipts on resume. A node a prior generation completed — same (id, action,
+  arguments) — CARRIES FORWARD: its journaled result is applied, the effect is
+  not re-executed; the carry map is a pure fold of the journal.
+
+**Money-shot log** (`cargo test -p kernel-core --test plan_resilience_test`,
+this session):
+
+```
+running 10 tests
+test defaults_preserve_fail_fast ... ok
+test invalid_replan_is_rejected_and_a_corrected_one_accepted ... ok
+test invalid_replan_with_exhausted_budget_fails_cleanly ... ok
+test replan_budget_holds_across_resume ... ok
+test replan_repairs_a_failed_plan_with_bounded_failure_context ... ok
+test replanning_is_bounded_no_infinite_loop ... ok
+test resume_after_journaled_replan_is_deterministic_and_exactly_once ... ok
+test resume_before_replan_journaled_reasks_but_carries_completed_work ... ok
+test retry_exhaustion_fails_cleanly ... ok
+test transient_failure_retries_and_succeeds_without_reexecuting_sibling ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+What each money-shot proves (assertions, not vibes):
+- **Adaptive re-plan repairs:** `replan_repairs_…` — gen-0 plan fails on a
+  permanently-broken node → exactly 2 model proposals; the re-plan request's
+  guidance contains `id=n2` + the tool error + `id=n1` + "re-plan attempt 1 of
+  1"; the carried node executed EXACTLY once across both generations; run
+  completes with "after 1 re-plan(s)" in the summary.
+- **Floor holds:** `invalid_replan_is_rejected_…` — a re-plan proposing
+  `rm_rf_everything` (not in the action space) NEVER executes; the corrected
+  proposal is told "REJECTED by validation"; `invalid_replan_with_exhausted_…`
+  — same rejection with empty budget → clean `plan rejected … budget
+  exhausted` failure.
+- **Bounded:** `replanning_is_bounded_…` — always-failing plans, max_replans=2
+  → exactly 3 proposals, 3 executions, terminal Failed with "2 re-plan(s)
+  exhausted". `retry_exhaustion_…` — exactly 1+2 attempts.
+- **Durability:** `resume_after_journaled_replan_…` — journal seeded with
+  gen-0 plan + receipts (n1 ok, n2 failed) + journaled gen-1 re-plan → resume
+  makes **0 model calls** and executes **only** the genuinely new node (n1
+  carried, not re-run). `resume_before_replan_journaled_…` — failure durable
+  but re-plan not journaled → exactly 1 proposal on resume (deterministic:
+  crash-before-Decision semantics), completed work still carried.
+  `replan_budget_holds_across_resume` — 2 journaled failing generations,
+  max_replans=1 → resume fails cleanly with 0 further proposals.
+- **Durability on the REAL store (two-session SQLite, the
+  multiagent-durable-resume idiom):**
+  `crates/daemon/tests/plan_replan_durable_resume_test.rs` — session 1 runs
+  the original plan (n1 ok + n2 failed, receipts durable in SQLite) and DIES
+  exactly at the re-plan proposal boundary (`execute_run` returns Err; the
+  run is non-terminal on disk). Session 2 — a fresh kernel over the same DB
+  file — resumes: exactly **1** model call (the un-journaled re-plan; the
+  original plan replayed from the journal), n1 **not** re-executed (carried
+  from its session-1 receipt), only n3 runs, run completes with "after 1
+  re-plan(s)". Exactly-once across a process boundary on the real store.
+- **Retry exactly-once:** `transient_failure_retries_…` — flaky node fails 2×
+  then succeeds (3 attempts), the completed sibling ran exactly once, 1 plan
+  proposal total.
+
+**Suite.** `cargo test --workspace` **256/256** (was 245; +10 kernel-core
++1 daemon), `clippy -D
+warnings` + `fmt` clean. No regressions in plan/durability suites
+(`plan_test`, `parallel_plan_test`, `plan_delegation_ask_test`,
+`durability_test` all green — defaults preserve fail-fast exactly). Docs: ADR
+0030, follow-up note in ADR 0010, `docs/architecture.md` plan-mode paragraph,
+`config.example.toml` `[kernel]` knobs. `git grep -i` codename = 0. Not
+pushed (human gate).
+
+**Uncertainties (disclosed).** (1) An UNKEYED tool's retry re-executes a
+definitively-failed attempt — if such a tool violated its contract by
+performing the effect before erroring, a retry could repeat it; keyed tools
+are fully protected (same-key dedupe), and the failed receipt makes the
+window explicit. Same trade step mode already accepts. (2) Rejected re-plan
+proposals count against the budget only within a session (they are never
+journaled); an accepted re-plan's budget consumption IS durable. (3) A live-model
+(llama-server/OpenRouter) re-plan demo was not run — forcing a real model to
+propose a failing-then-fixed plan is inherently nondeterministic; the
+mechanism is instead proven by deterministic kernel-level tests plus the
+two-session SQLite crash-resume above (real store, real process-boundary
+semantics).

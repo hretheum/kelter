@@ -1005,6 +1005,10 @@ async fn main() -> anyhow::Result<()> {
                 max_retries_per_delegation: cfg.delegation.max_retries_per_delegation,
                 fallback,
             },
+            plan_resilience: kernel_core::PlanResilience {
+                max_node_retries: cfg.kernel.plan_node_retries,
+                max_replans: cfg.kernel.plan_replans,
+            },
         },
     );
     if let Some(learned) = learned {

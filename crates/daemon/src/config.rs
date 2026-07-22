@@ -362,6 +362,14 @@ pub struct KernelSection {
     /// "step" (default, one action at a time) or "plan" (validated durable
     /// DAG proposed up front).
     pub mode: String,
+    /// Plan-mode resilience (ADR 0030): additional attempts for a FAILED
+    /// tool/a2a plan node before the failure counts (total attempts =
+    /// 1 + this). 0 (default) = a node failure counts immediately.
+    pub plan_node_retries: u32,
+    /// Plan-mode resilience (ADR 0030): max revised-plan proposals after a
+    /// plan failure. 0 (default) = adaptive re-planning off — a failed plan
+    /// fails the run, the pre-ADR-0030 behavior.
+    pub plan_replans: u32,
 }
 
 impl Default for KernelSection {
@@ -370,6 +378,8 @@ impl Default for KernelSection {
             max_steps: 12,
             reflection: true,
             mode: "step".into(),
+            plan_node_retries: 0,
+            plan_replans: 0,
         }
     }
 }

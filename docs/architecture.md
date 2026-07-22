@@ -181,8 +181,13 @@ decision), so per-node validation, journaling and A2A egress governance
 still apply. The plan is a memoized decision: journaled once as
 `PlanProposed`, replayed on resume without re-querying the model, with node
 receipts skipping completed nodes (durable DAG execution generalizing
-ADR 0007). Node failure fails the plan explicitly; adaptive re-planning is
-a deferred follow-up.
+ADR 0007). Node failure fails the plan explicitly by default; opt-in
+plan-mode resilience (ADR 0030) adds bounded per-node retry and bounded
+adaptive re-planning — on failure the model is asked for a REVISED plan
+(informed by a bounded failure context) that passes the SAME `propose_plan`
+validation and is journaled as a new plan generation, so crash-resume stays
+deterministic and nodes completed in any generation are never re-executed
+(carry-forward by identical id/action/arguments).
 
 ### Observability
 

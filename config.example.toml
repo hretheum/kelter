@@ -42,6 +42,9 @@ path = "./kelter.db"
 max_steps = 12
 reflection = true    # gate for the provenance-tagged reflection stub
 mode = "step"        # "step" (one action at a time) | "plan" (validated durable DAG, ADR 0010)
+# Plan-mode resilience (ADR 0030) — both default 0 (= a failed node fails the run):
+# plan_node_retries = 1   # extra attempts per failed tool/a2a node (transient failures)
+# plan_replans = 2        # max REVISED plans after a failure (re-validated, journaled, bounded)
 
 [tools]
 workspace = "./work" # reference MCP tools read/write inside this directory

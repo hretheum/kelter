@@ -680,6 +680,9 @@ pub struct KernelConfig {
     pub delegation: DelegationLimits,
     /// Governed resilience: retry + sanctioned fallback (ADR 0023).
     pub resilience: ResilienceConfig,
+    /// Plan-mode resilience: bounded node retry + bounded adaptive
+    /// re-planning (ADR 0030). Defaults to off (behavior-preserving).
+    pub plan_resilience: PlanResilience,
 }
 
 impl Default for KernelConfig {
@@ -693,6 +696,7 @@ impl Default for KernelConfig {
             pricing: crate::cost::PricingTable::default(),
             delegation: DelegationLimits::default(),
             resilience: ResilienceConfig::default(),
+            plan_resilience: PlanResilience::default(),
         }
     }
 }
@@ -752,6 +756,57 @@ impl Default for DelegationLimits {
             max_depth: 3,
         }
     }
+}
+
+/// Plan-mode resilience (ADR 0030): bounded per-node retry for transient
+/// failures, and bounded adaptive re-planning — on a node failure the model
+/// is asked for a REVISED plan (through the same `propose_plan` validation,
+/// never a bypass) instead of failing the run outright. Both default to `0`,
+/// which preserves the pre-ADR-0030 behavior exactly (a failed node fails
+/// the plan); resilience is an operator opt-in, like everything governed.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlanResilience {
+    /// Additional execution attempts for a FAILED tool/a2a plan node before
+    /// the failure counts (total attempts = 1 + this). Review nodes never
+    /// retry — a rejection is a verdict, not a transient fault. Retries
+    /// reuse the node's deterministic idempotency key, so a keyed tool can
+    /// never double-execute its effect.
+    pub max_node_retries: u32,
+    /// Max re-plan PROPOSALS (valid or rejected) after the original plan.
+    /// `0` disables adaptive re-planning. Accepted re-plans are journaled,
+    /// so the budget holds across crash-resume.
+    pub max_replans: u32,
+}
+
+/// Journal-step namespace per plan generation (ADR 0030): generation g's
+/// node at plan-index i journals under step `g * STRIDE + i`. Strictly
+/// larger than `plan::MAX_NODES` (32), so receipts/intents/notes from
+/// different generations can never collide — and generation 0's keys equal
+/// the plain node index, so every pre-ADR-0030 journal resumes unchanged.
+pub const PLAN_GENERATION_STRIDE: u32 = 100;
+
+/// Identity of a plan node's WORK across generations (ADR 0030): a revised
+/// plan re-including a node with the same id, action and arguments refers to
+/// the same side effect — its journaled result carries forward instead of
+/// re-executing. `serde_json::Value::to_string` is deterministic here (maps
+/// are ordered), so the key is stable across sessions.
+fn plan_carry_key(node: &crate::plan::PlanNode) -> (String, String, String) {
+    (
+        node.id.clone(),
+        node.action.clone().unwrap_or_default(),
+        node.arguments.to_string(),
+    )
+}
+
+/// Char-boundary-safe truncation for bounded model-facing context (ADR 0030:
+/// the failure context handed to a re-plan proposal must not grow without
+/// bound).
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max).collect();
+    format!("{cut}…")
 }
 
 /// Actions named `delegate_to_*` are A2A delegations; everything else is a
@@ -3036,138 +3091,43 @@ impl Kernel {
         // 1. The action space this plan is validated and executed against.
         let mut schema = self.tools.action_schema(latitude).await?;
 
-        // 2. Obtain the plan: replay the journaled one, or ask the model
-        //    ONCE (offering only `propose_plan`, schema-constrained).
-        let journaled_plan = journal.iter().find_map(|e| match e {
-            JournalEntry::PlanProposed { plan } => Some(plan.clone()),
-            _ => None,
-        });
-
-        let plan = match journaled_plan {
-            Some(plan) => {
-                tracing::info!(
-                    %run_id,
-                    "resume: replaying journaled plan — model NOT queried"
-                );
-                plan
-            }
-            None => {
-                let propose_schema = ActionSchema {
-                    actions: vec![ActionSpec {
-                        name: crate::plan::PROPOSE_PLAN_ACTION.into(),
-                        description: "Propose a plan: a DAG of typed nodes (tool / a2a / review) \
-                                      with dependencies. Keep it minimal and correct."
-                            .into(),
-                        parameters: crate::plan::plan_schema(),
-                    }],
-                };
-                let context = PolicyContext {
-                    task: run.task.clone(),
-                    steps: Vec::new(),
-                    memory: Vec::new(),
-                    last_error: None,
-                    latitude,
-                    guidance: Some(format!(
-                        "Available tool/a2a actions: [{}]. Rules: each node needs a unique `id` \
-                         (choose short ids like n1, n2 — NOT the action name); a node's `deps` \
-                         must be [] or list OTHER nodes' ids — a node must never depend on \
-                         itself or on its own action; a `tool`/`a2a` node needs `action` + \
-                         `arguments`; a `review` node needs no action. The simplest valid plan \
-                         is one tool node with deps [].",
-                        schema
-                            .actions
-                            .iter()
-                            .map(|a| a.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )),
-                    active_skills: run.active_skills.clone(),
-                };
-                let proposal = self
-                    .oracle
-                    .propose(&context, &propose_schema)
-                    .await
-                    .map_err(|e| ExecutionError::Tool(format!("plan proposal failed: {e}")))?;
-                if let Some(u) = proposal.usage {
-                    run.usage.add(&u);
-                }
-                let validated = propose_schema.validate(proposal.action).map_err(|e| {
-                    ExecutionError::Tool(format!("proposed plan is not schema-valid: {e}"))
-                })?;
-                let plan: crate::plan::Plan = serde_json::from_value(validated.arguments().clone())
-                    .map_err(|e| ExecutionError::Tool(format!("malformed plan: {e}")))?;
-                plan
-            }
-        };
-
-        // 3. Validate the plan (structure/cycles/types/references) BEFORE
-        //    any node executes. An invalid plan fails the run — no partial
-        //    side effects (this gate runs before the PlanProposed journal).
-        let validated_plan = match crate::plan::validate(plan.clone(), &schema, is_a2a_action) {
-            Ok(v) => v,
-            Err(e) => {
-                let reason = format!("plan rejected: {e}");
-                tracing::warn!(%run_id, "{reason}");
-                return self
-                    .finalize_run(run, RunStatus::Failed, None, Some(reason), seq)
-                    .await;
-            }
-        };
-
-        // Journal the accepted plan (once). On resume this is what gets
-        // replayed instead of re-querying the model.
-        if journal
+        // 2. Journaled plans, in proposal order (ADR 0030): index = plan
+        //    GENERATION; the LAST entry is the active plan. Replay is law —
+        //    a journaled plan is never re-queried. Generation g's node at
+        //    plan-index i journals under step g * PLAN_GENERATION_STRIDE + i,
+        //    so receipts from different generations can never collide (gen 0
+        //    keys are exactly the pre-ADR-0030 keys — old journals resume
+        //    unchanged).
+        let mut plans: Vec<crate::plan::Plan> = journal
             .iter()
-            .all(|e| !matches!(e, JournalEntry::PlanProposed { .. }))
-        {
-            self.store
-                .append_journal(run_id, JournalEntry::PlanProposed { plan })
-                .await?;
-        }
-        self.emit(
-            run_id,
-            seq,
-            RunEvent::Proposed {
-                step: 0,
-                action: crate::plan::PROPOSE_PLAN_ACTION.into(),
-                arguments: serde_json::json!({ "nodes": validated_plan.len() }),
-                rationale: Some("validated plan".into()),
-                branch: None,
-            },
-        );
-        seq += 1;
-
-        // Ensure the review action is available for review nodes.
-        schema.actions.push(ActionSpec {
-            name: crate::plan::REVIEW_ACTION.into(),
-            description: "Approve or reject based on upstream node outputs.".into(),
-            parameters: crate::plan::review_schema(),
-        });
-
-        // 4. Execute nodes: a readiness-driven admission loop (ADR 0022,
-        //    Part 2). Independent nodes run CONCURRENTLY once their
-        //    dependencies are satisfied; this orchestrator is the single
-        //    writer of `run`/`node_outputs` (no locking needed) — the
-        //    durable intent→execute→receipt tail for each admitted node
-        //    runs inside a spawned task (`dispatch_plan_node_execution`).
-        //    Governance (delegation budget/depth/cycle, ADR 0022 Part 3)
-        //    runs HERE, on the orchestrator, strictly before spawning: the
-        //    admission-control point that makes a race on the budget
-        //    counter structurally impossible (checked+incremented before
-        //    any concurrent work starts).
-        let nodes: Vec<(usize, crate::plan::PlanNode)> = validated_plan
-            .nodes_in_order()
-            .map(|(i, n)| (i, n.clone()))
+            .filter_map(|e| match e {
+                JournalEntry::PlanProposed { plan } => Some(plan.clone()),
+                _ => None,
+            })
             .collect();
 
-        let mut node_outputs: std::collections::HashMap<String, serde_json::Value> =
+        // Carry-forward map (ADR 0030, exactly-once through re-planning): a
+        // node a PRIOR generation completed successfully — identified by its
+        // (id, action, arguments) — is never re-executed; a revised plan
+        // re-including it verbatim gets the journaled result applied instead
+        // of dispatching. Rebuilt deterministically from the journal alone,
+        // so crash-resume reaches the same map without executing anything.
+        // Review nodes are never carried: a verdict is re-taken over the NEW
+        // plan's upstream state, not replayed across plans.
+        let mut carried: std::collections::HashMap<(String, String, String), serde_json::Value> =
             std::collections::HashMap::new();
-        let mut completed: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        let mut dispatched: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        let mut failure: Option<String> = None;
-        let mut in_flight: FuturesUnordered<
-            tokio::task::JoinHandle<Result<PlanNodeOutcome, KernelError>>,
-        > = FuturesUnordered::new();
+        for (g, plan) in plans.iter().enumerate() {
+            for (i, node) in plan.nodes.iter().enumerate() {
+                if node.node_type == crate::plan::NodeType::Review {
+                    continue;
+                }
+                #[allow(clippy::cast_possible_truncation)]
+                let step = (g * PLAN_GENERATION_STRIDE as usize + i) as u32;
+                if let Some((true, result)) = fold_step(&journal, step).receipt {
+                    carried.insert(plan_carry_key(node), result);
+                }
+            }
+        }
 
         // Delegation-attempt counter for THIS call (ADR 0022): a plain
         // local, incremented the moment an A2A node is considered —
@@ -3176,468 +3136,902 @@ impl Kernel {
         // past the budget (recomputing from `run.steps` on every check, as
         // step mode does, would under-count siblings admitted earlier in
         // the same pass that haven't completed/recorded a `StepRecord`
-        // yet). Seeded from every A2A node this run already has a Receipt
-        // OR a dangling Intent for (from a prior crashed session), so a
-        // resume does not reset the budget.
-        // `i` (a node's position in the plan) and the final `.count()` are
-        // both bounded by the plan's own node count — a model-proposed DAG,
-        // realistically dozens of nodes at most, never remotely near
-        // u32::MAX.
+        // yet). Seeded from every A2A node ANY journaled generation already
+        // has a Receipt OR a dangling Intent for (from a prior crashed
+        // session), so a resume does not reset the run-scoped budget.
+        // Node counts are bounded by the plan's own size (MAX_NODES) and
+        // the generation count by max_replans — never remotely near u32::MAX.
         #[allow(clippy::cast_possible_truncation)]
-        let mut a2a_attempts: u32 = nodes
+        let mut a2a_attempts: u32 = plans
             .iter()
-            .filter(|(i, n)| {
-                n.node_type == crate::plan::NodeType::A2a && {
-                    let f = fold_step(&journal, *i as u32);
-                    f.intent.is_some() || f.receipt.is_some()
-                }
-            })
-            .count() as u32;
-
-        // Drain-then-pause holder (ADR 0025): set when a FRESH a2a node's
-        // trust gate returns `AskHuman`. Once set, no new node is admitted
-        // (the admission guard below also checks it), so already-in-flight
-        // siblings drain to receipts — keeping the resume budget seed exact —
-        // and then the run suspends durably as `AwaitingDelegationDecision`
-        // rather than degrading the ask to a deny (the ADR 0023 plan-mode
-        // gap). Only ONE node's ask is surfaced at a time: with the loop
-        // frozen to new admissions, a second ask-worthy node simply waits its
-        // turn on the next resume — the single-decision-at-a-time contract
-        // step mode already has.
-        struct PlanAsk {
-            step: u32,
-            branch: String,
-            agent: String,
-            origin: String,
-            arguments: serde_json::Value,
-            trust: String,
-            description: String,
-            provenance_source_kind: String,
-            provenance_source: String,
-            requested_at: u64,
-        }
-        let mut pending_ask: Option<PlanAsk> = None;
-
-        loop {
-            for (node_index, node) in &nodes {
-                if completed.contains(node_index) || dispatched.contains(node_index) {
-                    continue;
-                }
-                if failure.is_some() || pending_ask.is_some() {
-                    // No NEW node is admitted once the plan has failed
-                    // (fail-fast, ADR 0010) OR a node is awaiting human
-                    // delegation authorization (drain-then-pause, ADR 0025) —
-                    // but already in-flight siblings are left to drain
-                    // naturally below, never orphaned.
-                    continue;
-                }
-                if !validated_plan
-                    .deps_of(*node_index)
+            .enumerate()
+            .map(|(g, plan)| {
+                plan.nodes
                     .iter()
-                    .all(|d| node_outputs.contains_key(d))
-                {
-                    continue;
-                }
+                    .enumerate()
+                    .filter(|(i, n)| {
+                        n.node_type == crate::plan::NodeType::A2a && {
+                            let step = (g * PLAN_GENERATION_STRIDE as usize + i) as u32;
+                            let f = fold_step(&journal, step);
+                            f.intent.is_some() || f.receipt.is_some()
+                        }
+                    })
+                    .count()
+            })
+            .sum::<usize>() as u32;
 
-                // Bounded by the plan's own node count — see the comment on
-                // `a2a_attempts`'s seed above.
-                #[allow(clippy::cast_possible_truncation)]
-                let step = *node_index as u32;
-                let folded = fold_step(&journal, step);
+        // Re-plan budget (ADR 0030 crux #2, BOUNDED): counts re-plan
+        // PROPOSALS — accepted ones (journaled, so the count survives a
+        // crash-resume) and rejected ones (session-local). The generation
+        // loop below asks the model at most `max_replans` times beyond the
+        // original plan, then fails cleanly — no re-plan→fail→re-plan loop.
+        let resilience = self.config.plan_resilience;
+        #[allow(clippy::cast_possible_truncation)]
+        let mut replans_used: u32 = plans.len().saturating_sub(1) as u32;
+        // Bounded failure context for the NEXT re-plan proposal; `Some` also
+        // means "a fresh proposal is required" (the active plan failed, or
+        // the previous proposal was rejected by validation). Replaced
+        // wholesale on each failure — never accumulated across generations.
+        let mut replan_guidance: Option<String> = None;
 
-                // Resume fast-path: already has a receipt from before a
-                // crash — apply it inline, no need to spawn/await anything.
-                if let Some((ok, result)) = folded.receipt.clone() {
+        // The validation floor (ADR 0001/0010, re-affirmed by ADR 0030 crux
+        // #1): every plan — original or revised — validates against the SAME
+        // pristine tool schema. The kernel-owned review action is only part
+        // of the EXECUTION schema below, never proposable as a plan node
+        // action.
+        let validation_schema = schema.clone();
+        schema.actions.push(ActionSpec {
+            name: crate::plan::REVIEW_ACTION.into(),
+            description: "Approve or reject based on upstream node outputs.".into(),
+            parameters: crate::plan::review_schema(),
+        });
+
+        'generations: loop {
+            // Obtain this generation's plan: replay the journaled active plan,
+            // or ask the model ONCE (offering only `propose_plan`,
+            // schema-constrained). A re-plan request (`replan_guidance` set) is
+            // the SAME action through the SAME validation — informed about the
+            // failure, privileged in nothing.
+            #[allow(clippy::cast_possible_truncation)]
+            let generation: u32 = if replan_guidance.is_some() {
+                plans.len() as u32
+            } else {
+                plans.len().saturating_sub(1) as u32
+            };
+            let step_base = generation * PLAN_GENERATION_STRIDE;
+            let (plan, fresh_proposal) = match (&replan_guidance, plans.last()) {
+                (None, Some(journaled)) => {
                     tracing::info!(
-                        %run_id, node = %node.id,
-                        "resume: node receipt found — skipping execution"
+                        %run_id, generation,
+                        "resume: replaying journaled plan — model NOT queried"
                     );
-                    node_outputs.insert(node.id.clone(), result.clone());
-                    self.record_node_step(&mut run, step, node, result, ok)
-                        .await?;
-                    completed.insert(*node_index);
-                    dispatched.insert(*node_index);
-                    if !ok {
-                        failure = Some(format!("node '{}' had failed before the crash", node.id));
-                    }
-                    continue;
+                    (journaled.clone(), false)
                 }
+                _ => {
+                    let propose_schema = ActionSchema {
+                        actions: vec![ActionSpec {
+                            name: crate::plan::PROPOSE_PLAN_ACTION.into(),
+                            description:
+                                "Propose a plan: a DAG of typed nodes (tool / a2a / review) \
+                                      with dependencies. Keep it minimal and correct."
+                                    .into(),
+                            parameters: crate::plan::plan_schema(),
+                        }],
+                    };
+                    let base_rules = format!(
+                        "Available tool/a2a actions: [{}]. Rules: each node needs a unique `id` \
+                     (choose short ids like n1, n2 — NOT the action name); a node's `deps` \
+                     must be [] or list OTHER nodes' ids — a node must never depend on \
+                     itself or on its own action; a `tool`/`a2a` node needs `action` + \
+                     `arguments`; a `review` node needs no action. The simplest valid plan \
+                     is one tool node with deps [].",
+                        validation_schema
+                            .actions
+                            .iter()
+                            .map(|a| a.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    let guidance = match &replan_guidance {
+                        Some(failure_ctx) => format!("{base_rules}\n{failure_ctx}"),
+                        None => base_rules,
+                    };
+                    let context = PolicyContext {
+                        task: run.task.clone(),
+                        steps: Vec::new(),
+                        memory: Vec::new(),
+                        last_error: replan_guidance
+                            .as_ref()
+                            .map(|_| "previous plan failed — a revised plan was requested".into()),
+                        latitude,
+                        guidance: Some(guidance),
+                        active_skills: run.active_skills.clone(),
+                    };
+                    let proposal = self
+                        .oracle
+                        .propose(&context, &propose_schema)
+                        .await
+                        .map_err(|e| ExecutionError::Tool(format!("plan proposal failed: {e}")))?;
+                    if let Some(u) = proposal.usage {
+                        run.usage.add(&u);
+                    }
+                    let validated = propose_schema.validate(proposal.action).map_err(|e| {
+                        ExecutionError::Tool(format!("proposed plan is not schema-valid: {e}"))
+                    })?;
+                    let plan: crate::plan::Plan =
+                        serde_json::from_value(validated.arguments().clone())
+                            .map_err(|e| ExecutionError::Tool(format!("malformed plan: {e}")))?;
+                    (plan, true)
+                }
+            };
 
-                let is_a2a_node = node.node_type == crate::plan::NodeType::A2a;
+            // 3. Validate the plan (structure/cycles/types/references) BEFORE
+            //    any node executes — the SAME floor for the original plan and
+            //    every re-plan (ADR 0030 crux #1). An invalid ORIGINAL plan
+            //    fails the run — no partial side effects (this gate runs before
+            //    the PlanProposed journal). An invalid RE-plan is REJECTED and
+            //    consumes a re-plan slot: with budget left the model is asked
+            //    again (told why the proposal was rejected); budget exhausted →
+            //    the run fails cleanly.
+            let validated_plan =
+                match crate::plan::validate(plan.clone(), &validation_schema, is_a2a_action) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let was_replan = replan_guidance.is_some();
+                        let reason = format!("plan rejected: {e}");
+                        tracing::warn!(%run_id, "{reason}");
+                        if was_replan && replans_used < resilience.max_replans {
+                            replans_used += 1;
+                            self.emit(
+                                run_id,
+                                seq,
+                                RunEvent::Rejected {
+                                    step: step_base,
+                                    reason: reason.clone(),
+                                    attempt: replans_used,
+                                    branch: None,
+                                },
+                            );
+                            seq += 1;
+                            replan_guidance = Some(format!(
+                                "{}\nYour previous revised plan was REJECTED by validation: {}. \
+                             Propose a corrected plan.",
+                                replan_guidance.as_deref().unwrap_or_default(),
+                                truncate_chars(&e.to_string(), 300)
+                            ));
+                            continue 'generations;
+                        }
+                        let reason = if was_replan {
+                            format!(
+                                "re-{reason} ({replans_used} re-plan(s) used, budget exhausted)"
+                            )
+                        } else {
+                            reason
+                        };
+                        return self
+                            .finalize_run(run, RunStatus::Failed, None, Some(reason), seq)
+                            .await;
+                    }
+                };
 
-                // Resume path (ADR 0025): this a2a node reached an `AskHuman`
-                // gate in a prior session and the human has since decided.
-                // Consume the recorded decision — replay is law, the gate is
-                // NOT re-consulted. `Deny` fails the node (and the plan);
-                // `Allow*` counts one budget slot and falls through to a
-                // normal dispatch. An undecided ask should have been
-                // re-surfaced by `execute_run`'s `still_awaiting` check before
-                // reaching here; treat it defensively as a re-pause.
-                if is_a2a_node {
-                    if let Some(fold) = folded.delegation.clone() {
-                        match fold.decision {
-                            Some(AgentDelegationDecision::Deny) => {
-                                let reason = format!(
+            // Journal an ACCEPTED plan (once per generation). On resume this is
+            // what gets replayed instead of re-querying the model — a crash
+            // between this append and the run's terminal state resumes HERE,
+            // deterministically, with the same plan.
+            if fresh_proposal {
+                self.store
+                    .append_journal(run_id, JournalEntry::PlanProposed { plan: plan.clone() })
+                    .await?;
+                plans.push(plan);
+            }
+            self.emit(
+                run_id,
+                seq,
+                RunEvent::Proposed {
+                    step: step_base,
+                    action: crate::plan::PROPOSE_PLAN_ACTION.into(),
+                    arguments: serde_json::json!({ "nodes": validated_plan.len() }),
+                    rationale: Some(if generation == 0 {
+                        "validated plan".into()
+                    } else {
+                        format!("validated re-plan (generation {generation})")
+                    }),
+                    branch: None,
+                },
+            );
+            seq += 1;
+
+            // 4. Execute nodes: a readiness-driven admission loop (ADR 0022,
+            //    Part 2). Independent nodes run CONCURRENTLY once their
+            //    dependencies are satisfied; this orchestrator is the single
+            //    writer of `run`/`node_outputs` (no locking needed) — the
+            //    durable intent→execute→receipt tail for each admitted node
+            //    runs inside a spawned task (`dispatch_plan_node_execution`).
+            //    Governance (delegation budget/depth/cycle, ADR 0022 Part 3)
+            //    runs HERE, on the orchestrator, strictly before spawning: the
+            //    admission-control point that makes a race on the budget
+            //    counter structurally impossible (checked+incremented before
+            //    any concurrent work starts).
+            let nodes: Vec<(usize, crate::plan::PlanNode)> = validated_plan
+                .nodes_in_order()
+                .map(|(i, n)| (i, n.clone()))
+                .collect();
+
+            let mut node_outputs: std::collections::HashMap<String, serde_json::Value> =
+                std::collections::HashMap::new();
+            let mut completed: std::collections::HashSet<usize> = std::collections::HashSet::new();
+            let mut dispatched: std::collections::HashSet<usize> = std::collections::HashSet::new();
+            let mut failure: Option<String> = None;
+            let mut in_flight: FuturesUnordered<
+                tokio::task::JoinHandle<Result<PlanNodeOutcome, KernelError>>,
+            > = FuturesUnordered::new();
+
+            // Bounded per-node retry state (ADR 0030): attempts already burned
+            // per node index (seeded from journaled failed receipts on resume,
+            // incremented live), and the set of nodes whose NEXT dispatch is a
+            // fresh retry attempt — dispatched with a clean per-step journal
+            // view so a definitive failed receipt isn't mistaken for a crash
+            // window. The idempotency key is a pure function of (run, step), so
+            // every retry reuses the SAME key: a keyed tool whose effect
+            // somehow DID land before the failure dedupes instead of
+            // double-executing (exactly-once, crux #3).
+            let mut node_retries: std::collections::HashMap<usize, u32> =
+                std::collections::HashMap::new();
+            let mut retry_fresh: std::collections::HashSet<usize> =
+                std::collections::HashSet::new();
+
+            // Drain-then-pause holder (ADR 0025): set when a FRESH a2a node's
+            // trust gate returns `AskHuman`. Once set, no new node is admitted
+            // (the admission guard below also checks it), so already-in-flight
+            // siblings drain to receipts — keeping the resume budget seed exact —
+            // and then the run suspends durably as `AwaitingDelegationDecision`
+            // rather than degrading the ask to a deny (the ADR 0023 plan-mode
+            // gap). Only ONE node's ask is surfaced at a time: with the loop
+            // frozen to new admissions, a second ask-worthy node simply waits its
+            // turn on the next resume — the single-decision-at-a-time contract
+            // step mode already has.
+            struct PlanAsk {
+                step: u32,
+                branch: String,
+                agent: String,
+                origin: String,
+                arguments: serde_json::Value,
+                trust: String,
+                description: String,
+                provenance_source_kind: String,
+                provenance_source: String,
+                requested_at: u64,
+            }
+            let mut pending_ask: Option<PlanAsk> = None;
+
+            loop {
+                for (node_index, node) in &nodes {
+                    if completed.contains(node_index) || dispatched.contains(node_index) {
+                        continue;
+                    }
+                    if failure.is_some() || pending_ask.is_some() {
+                        // No NEW node is admitted once the plan has failed
+                        // (fail-fast, ADR 0010) OR a node is awaiting human
+                        // delegation authorization (drain-then-pause, ADR 0025) —
+                        // but already in-flight siblings are left to drain
+                        // naturally below, never orphaned.
+                        continue;
+                    }
+                    if !validated_plan
+                        .deps_of(*node_index)
+                        .iter()
+                        .all(|d| node_outputs.contains_key(d))
+                    {
+                        continue;
+                    }
+
+                    // Bounded by the plan's own node count — see the comment on
+                    // `a2a_attempts`'s seed above.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let step = step_base + *node_index as u32;
+                    // A node re-admitted for a RETRY dispatches with a clean
+                    // per-step view: its failed receipt is a definitive outcome,
+                    // not a crash window — re-reading it here would either
+                    // re-complete the node as failed or take the dangling-intent
+                    // path. The deterministic (run, step) idempotency key still
+                    // protects the effect.
+                    let folded = if retry_fresh.contains(node_index) {
+                        crate::journal::StepJournal::default()
+                    } else {
+                        fold_step(&journal, step)
+                    };
+
+                    // Resume fast-path: already has a receipt from before a
+                    // crash — apply it inline, no need to spawn/await anything.
+                    // A FAILED receipt with retry budget left (ADR 0030) is NOT
+                    // terminal: seed the attempt count from the journal and fall
+                    // through to a fresh retry dispatch instead.
+                    if let Some((ok, result)) = folded.receipt.clone() {
+                        #[allow(clippy::cast_possible_truncation)]
+                    let attempts_so_far = journal
+                        .iter()
+                        .filter(|e| matches!(e, JournalEntry::Receipt { step: s, .. } if *s == step))
+                        .count() as u32;
+                        if !ok
+                            && node.node_type != crate::plan::NodeType::Review
+                            && attempts_so_far <= resilience.max_node_retries
+                        {
+                            tracing::info!(
+                                %run_id, node = %node.id, attempts_so_far,
+                                "resume: node failed before the crash — retry budget left, \
+                                 re-dispatching"
+                            );
+                            node_retries.insert(*node_index, attempts_so_far);
+                            retry_fresh.insert(*node_index);
+                            continue;
+                        }
+                        tracing::info!(
+                            %run_id, node = %node.id,
+                            "resume: node receipt found — skipping execution"
+                        );
+                        node_outputs.insert(node.id.clone(), result.clone());
+                        self.record_node_step(&mut run, step, node, result, ok)
+                            .await?;
+                        completed.insert(*node_index);
+                        dispatched.insert(*node_index);
+                        if !ok {
+                            failure =
+                                Some(format!("node '{}' had failed before the crash", node.id));
+                        }
+                        continue;
+                    }
+
+                    // Carry-forward fast-path (ADR 0030, exactly-once through
+                    // re-planning): a PRIOR generation already completed this
+                    // exact node — same id, action and arguments — so its
+                    // journaled result is applied instead of re-executing the
+                    // side effect. Review nodes never carry (map excludes them).
+                    if !retry_fresh.contains(node_index) {
+                        if let Some(prior) = carried.get(&plan_carry_key(node)).cloned() {
+                            tracing::info!(
+                                %run_id, node = %node.id,
+                                "re-plan: node completed in a prior generation — carrying its \
+                                 result forward, NOT re-executing"
+                            );
+                            node_outputs.insert(node.id.clone(), prior.clone());
+                            self.record_node_step(&mut run, step, node, prior.clone(), true)
+                                .await?;
+                            self.emit(
+                                run_id,
+                                seq,
+                                RunEvent::Executed {
+                                    step,
+                                    action: node.action.clone().unwrap_or_default(),
+                                    ok: true,
+                                    result: prior,
+                                    branch: Some(node.id.clone()),
+                                },
+                            );
+                            seq += 1;
+                            completed.insert(*node_index);
+                            dispatched.insert(*node_index);
+                            continue;
+                        }
+                    }
+
+                    let is_a2a_node = node.node_type == crate::plan::NodeType::A2a;
+
+                    // Resume path (ADR 0025): this a2a node reached an `AskHuman`
+                    // gate in a prior session and the human has since decided.
+                    // Consume the recorded decision — replay is law, the gate is
+                    // NOT re-consulted. `Deny` fails the node (and the plan);
+                    // `Allow*` counts one budget slot and falls through to a
+                    // normal dispatch. An undecided ask should have been
+                    // re-surfaced by `execute_run`'s `still_awaiting` check before
+                    // reaching here; treat it defensively as a re-pause.
+                    if is_a2a_node {
+                        if let Some(fold) = folded.delegation.clone() {
+                            match fold.decision {
+                                Some(AgentDelegationDecision::Deny) => {
+                                    let reason = format!(
                                     "the operator declined to authorize delegating to '{}' for \
                                      this run",
                                     fold.agent
                                 );
-                                self.emit(
-                                    run_id,
-                                    seq,
-                                    RunEvent::Rejected {
+                                    self.emit(
+                                        run_id,
+                                        seq,
+                                        RunEvent::Rejected {
+                                            step,
+                                            reason: reason.clone(),
+                                            attempt: 0,
+                                            branch: Some(node.id.clone()),
+                                        },
+                                    );
+                                    seq += 1;
+                                    let result = serde_json::json!({ "error": reason });
+                                    self.record_node_step(
+                                        &mut run,
                                         step,
-                                        reason: reason.clone(),
-                                        attempt: 0,
-                                        branch: Some(node.id.clone()),
-                                    },
-                                );
-                                seq += 1;
-                                let result = serde_json::json!({ "error": reason });
-                                self.record_node_step(&mut run, step, node, result.clone(), false)
+                                        node,
+                                        result.clone(),
+                                        false,
+                                    )
                                     .await?;
-                                node_outputs.insert(node.id.clone(), result);
-                                completed.insert(*node_index);
-                                dispatched.insert(*node_index);
-                                failure = Some(format!(
-                                    "plan node '{}' delegation denied by the operator",
-                                    node.id
-                                ));
-                                continue;
-                            }
-                            Some(AgentDelegationDecision::AllowAlways) => {
-                                if let Some(gate) = &self.delegation_gate {
-                                    if let Err(e) = gate.elevate_trust(&fold.agent) {
-                                        tracing::warn!(
-                                            %run_id, agent = %fold.agent,
-                                            "trust elevation failed (delegation still applies \
-                                             for this run): {e}"
-                                        );
+                                    node_outputs.insert(node.id.clone(), result);
+                                    completed.insert(*node_index);
+                                    dispatched.insert(*node_index);
+                                    failure = Some(format!(
+                                        "plan node '{}' delegation denied by the operator",
+                                        node.id
+                                    ));
+                                    continue;
+                                }
+                                Some(AgentDelegationDecision::AllowAlways) => {
+                                    if let Some(gate) = &self.delegation_gate {
+                                        if let Err(e) = gate.elevate_trust(&fold.agent) {
+                                            tracing::warn!(
+                                                %run_id, agent = %fold.agent,
+                                                "trust elevation failed (delegation still applies \
+                                                 for this run): {e}"
+                                            );
+                                        }
                                     }
+                                    // Audit finding 3-c: only count this node's
+                                    // attempt here if the seed loop above did NOT
+                                    // already count it via a dangling Intent — a
+                                    // two-crash resume (decided in session A,
+                                    // Intent journaled in session A, crashed
+                                    // AGAIN before a Receipt) would otherwise hit
+                                    // this same arm a second time and double-count
+                                    // a single attempt. Direction was safe
+                                    // (over-count → may over-refuse a sibling,
+                                    // never over-admit past the real budget), but
+                                    // could spuriously fail an otherwise-fine plan.
+                                    if folded.intent.is_none() {
+                                        a2a_attempts += 1;
+                                    }
+                                    // Fall through to dispatch (gate NOT re-checked).
                                 }
-                                // Audit finding 3-c: only count this node's
-                                // attempt here if the seed loop above did NOT
-                                // already count it via a dangling Intent — a
-                                // two-crash resume (decided in session A,
-                                // Intent journaled in session A, crashed
-                                // AGAIN before a Receipt) would otherwise hit
-                                // this same arm a second time and double-count
-                                // a single attempt. Direction was safe
-                                // (over-count → may over-refuse a sibling,
-                                // never over-admit past the real budget), but
-                                // could spuriously fail an otherwise-fine plan.
-                                if folded.intent.is_none() {
-                                    a2a_attempts += 1;
+                                Some(AgentDelegationDecision::AllowOnce) => {
+                                    if folded.intent.is_none() {
+                                        a2a_attempts += 1;
+                                    }
+                                    // Fall through to dispatch (gate NOT re-checked).
                                 }
-                                // Fall through to dispatch (gate NOT re-checked).
-                            }
-                            Some(AgentDelegationDecision::AllowOnce) => {
-                                if folded.intent.is_none() {
-                                    a2a_attempts += 1;
+                                None => {
+                                    // Defensive re-pause: keep the run suspended
+                                    // rather than silently proceeding.
+                                    pending_ask = Some(PlanAsk {
+                                        step,
+                                        branch: node.id.clone(),
+                                        agent: fold.agent.clone(),
+                                        origin: fold.target_origin.clone(),
+                                        arguments: fold.arguments.clone(),
+                                        trust: fold.meta.trust.clone(),
+                                        description: fold.meta.description.clone(),
+                                        provenance_source_kind: fold
+                                            .meta
+                                            .provenance_source_kind
+                                            .clone(),
+                                        provenance_source: fold.meta.provenance_source.clone(),
+                                        requested_at: fold.requested_at,
+                                    });
+                                    continue;
                                 }
-                                // Fall through to dispatch (gate NOT re-checked).
-                            }
-                            None => {
-                                // Defensive re-pause: keep the run suspended
-                                // rather than silently proceeding.
-                                pending_ask = Some(PlanAsk {
-                                    step,
-                                    branch: node.id.clone(),
-                                    agent: fold.agent.clone(),
-                                    origin: fold.target_origin.clone(),
-                                    arguments: fold.arguments.clone(),
-                                    trust: fold.meta.trust.clone(),
-                                    description: fold.meta.description.clone(),
-                                    provenance_source_kind: fold
-                                        .meta
-                                        .provenance_source_kind
-                                        .clone(),
-                                    provenance_source: fold.meta.provenance_source.clone(),
-                                    requested_at: fold.requested_at,
-                                });
-                                continue;
                             }
                         }
                     }
-                }
 
-                // Fresh admission — governed delegation limits (ADR 0022) +
-                // trust gate (ADR 0023). Skipped for a node with a dangling
-                // Intent (already passed this gate before a crash; "replay is
-                // law") and for a node whose ask was pre-decided above
-                // (`folded.delegation` present → handled by the resume arm).
-                let has_dangling_intent = folded.intent.is_some();
-                let ask_already_recorded = folded.delegation.is_some();
-                if is_a2a_node && !has_dangling_intent && !ask_already_recorded {
-                    let action_name = node.action.clone().unwrap_or_default();
-                    let target_origin = self.tools.a2a_origin(&action_name);
-                    // P2 (budget/depth/cycle) FIRST — a hard refusal fails the
-                    // plan (a run-scoped governance fact); the counter is
-                    // incremented exactly once per considered a2a node.
-                    let refusal = match &target_origin {
-                        None => Some(format!(
+                    // Fresh admission — governed delegation limits (ADR 0022) +
+                    // trust gate (ADR 0023). Skipped for a node with a dangling
+                    // Intent (already passed this gate before a crash; "replay is
+                    // law") and for a node whose ask was pre-decided above
+                    // (`folded.delegation` present → handled by the resume arm).
+                    let has_dangling_intent = folded.intent.is_some();
+                    let ask_already_recorded = folded.delegation.is_some();
+                    if is_a2a_node && !has_dangling_intent && !ask_already_recorded {
+                        let action_name = node.action.clone().unwrap_or_default();
+                        let target_origin = self.tools.a2a_origin(&action_name);
+                        // P2 (budget/depth/cycle) FIRST — a hard refusal fails the
+                        // plan (a run-scoped governance fact); the counter is
+                        // incremented exactly once per considered a2a node.
+                        let refusal = match &target_origin {
+                            None => Some(format!(
                             "internal error: no origin declared for a2a action '{action_name}' \
                              (plan validation should have caught this) — refusing rather than \
                              dialing an unverified target"
                         )),
-                        Some(origin) => self.authorize_delegation(&run, a2a_attempts, origin).err(),
-                    };
-                    a2a_attempts += 1;
-                    // Circuit-breaker (ADR 0023): an open circuit is a node
-                    // failure here — plan-mode does not retry/fall back within
-                    // a node this round (disclosed scope, ADR 0025).
-                    let refusal = refusal.or_else(|| {
-                        target_origin.as_deref()?;
-                        matches!(
-                            self.tools.circuit_state(&action_name),
-                            CircuitCheck::Open { .. }
-                        )
-                        .then(|| {
-                            format!(
-                                "agent circuit open for '{action_name}' — refusing to dial \
-                                 (plan-mode does not retry/fall back within a node this round)"
+                            Some(origin) => {
+                                self.authorize_delegation(&run, a2a_attempts, origin).err()
+                            }
+                        };
+                        a2a_attempts += 1;
+                        // Circuit-breaker (ADR 0023): an open circuit is a node
+                        // failure here — plan-mode does not retry/fall back within
+                        // a node this round (disclosed scope, ADR 0025).
+                        let refusal = refusal.or_else(|| {
+                            target_origin.as_deref()?;
+                            matches!(
+                                self.tools.circuit_state(&action_name),
+                                CircuitCheck::Open { .. }
                             )
-                        })
-                    });
-                    if let Some(reason) = refusal {
+                            .then(|| {
+                                format!(
+                                    "agent circuit open for '{action_name}' — refusing to dial \
+                                 (plan-mode does not retry/fall back within a node this round)"
+                                )
+                            })
+                        });
+                        if let Some(reason) = refusal {
+                            self.emit(
+                                run_id,
+                                seq,
+                                RunEvent::Rejected {
+                                    step,
+                                    reason: reason.clone(),
+                                    attempt: 0,
+                                    branch: Some(node.id.clone()),
+                                },
+                            );
+                            seq += 1;
+                            let result = serde_json::json!({ "error": reason });
+                            self.record_node_step(&mut run, step, node, result.clone(), false)
+                                .await?;
+                            node_outputs.insert(node.id.clone(), result);
+                            completed.insert(*node_index);
+                            dispatched.insert(*node_index);
+                            failure = Some(format!(
+                                "plan node '{}' refused by delegation governance",
+                                node.id
+                            ));
+                            continue;
+                        }
+
+                        // Trust gate (ADR 0023) — now THREE-way in plan-mode
+                        // (ADR 0025): Allow → dispatch; Deny → node/plan fail;
+                        // AskHuman → drain-then-pause (no degrade-to-deny). Runs
+                        // SECOND, only once P2 already allowed this delegation
+                        // structurally — same ordering as step mode.
+                        if let Some(gate) = &self.delegation_gate {
+                            let origin = target_origin.clone().expect(
+                                "target_origin is Some: the None arm above already refused",
+                            );
+                            match gate.authorize_delegation_to(&action_name, &origin) {
+                                DelegationDecisionOutcome::Allow(_) => { /* dispatch below */ }
+                                DelegationDecisionOutcome::Deny(reason) => {
+                                    self.emit(
+                                        run_id,
+                                        seq,
+                                        RunEvent::Rejected {
+                                            step,
+                                            reason: reason.clone(),
+                                            attempt: 0,
+                                            branch: Some(node.id.clone()),
+                                        },
+                                    );
+                                    seq += 1;
+                                    let result = serde_json::json!({ "error": reason });
+                                    self.record_node_step(
+                                        &mut run,
+                                        step,
+                                        node,
+                                        result.clone(),
+                                        false,
+                                    )
+                                    .await?;
+                                    node_outputs.insert(node.id.clone(), result);
+                                    completed.insert(*node_index);
+                                    dispatched.insert(*node_index);
+                                    failure = Some(format!(
+                                        "plan node '{}' refused by delegation governance",
+                                        node.id
+                                    ));
+                                    continue;
+                                }
+                                DelegationDecisionOutcome::AskHuman(meta) => {
+                                    pending_ask = Some(PlanAsk {
+                                        step,
+                                        branch: node.id.clone(),
+                                        agent: action_name.clone(),
+                                        origin,
+                                        arguments: node.arguments.clone(),
+                                        trust: meta.trust.clone(),
+                                        description: meta.description.clone(),
+                                        provenance_source_kind: meta.provenance_source_kind.clone(),
+                                        provenance_source: meta.provenance_source.clone(),
+                                        requested_at: now_secs(),
+                                    });
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    dispatched.insert(*node_index);
+                    let deps_context: Vec<serde_json::Value> = node
+                        .deps
+                        .iter()
+                        .filter_map(|d| node_outputs.get(d).cloned())
+                        .collect();
+                    let handle = tokio::spawn(dispatch_plan_node_execution(
+                        run_id,
+                        step,
+                        node.clone(),
+                        deps_context,
+                        folded,
+                        schema.clone(),
+                        run.active_skills.clone(),
+                        run.a2a_depth,
+                        run.a2a_ancestry.clone(),
+                        latitude,
+                        self.store.clone(),
+                        self.tools.clone(),
+                        self.oracle.clone(),
+                        self.events.clone(),
+                    ));
+                    in_flight.push(handle);
+                }
+
+                if in_flight.is_empty() {
+                    break;
+                }
+
+                // Readiness-driven: await the NEXT completion (not all) — as
+                // soon as one branch finishes, its dependents may become ready
+                // this same loop iteration.
+                let joined = in_flight
+                    .next()
+                    .await
+                    .expect("in_flight is non-empty (just checked above)");
+                let outcome = match joined {
+                    Ok(Ok(o)) => o,
+                    Ok(Err(kernel_err)) => return Err(kernel_err),
+                    Err(join_err) => {
+                        return Err(KernelError::Execution(ExecutionError::Tool(format!(
+                            "plan node task panicked: {join_err}"
+                        ))));
+                    }
+                };
+                // `outcome.node_index` carries the generation-scoped STEP; the
+                // plan-local index is recovered by subtracting this generation's
+                // base.
+                let node_index = (outcome.node_index - step_base) as usize;
+                let node = validated_plan.node(node_index);
+
+                if let Some(u) = outcome.usage {
+                    run.usage.add(&u);
+                }
+                for (agent, elapsed_ms) in &outcome.agent_usage {
+                    let entry = run.agent_usage.entry(agent.clone()).or_default();
+                    entry.delegations += 1;
+                    entry.remote_ms += elapsed_ms;
+                }
+
+                // Bounded per-node retry (ADR 0030): a FAILED tool/a2a node with
+                // budget left is re-admitted instead of failing the plan — no
+                // step is recorded for the burned attempt (its failed receipt is
+                // journaled by the dispatch tail; `fold_step` last-wins, so a
+                // crash mid-retry resumes from the latest attempt). Review nodes
+                // never retry: a rejection is a verdict, not a transient fault.
+                // An a2a retry re-enters the FULL admission governance (budget +
+                // trust gate) exactly like a fresh dial — the ADR 0023 rule.
+                if !outcome.ok && node.node_type != crate::plan::NodeType::Review {
+                    let used = node_retries.entry(node_index).or_insert(0);
+                    if *used < resilience.max_node_retries {
+                        *used += 1;
+                        let attempt = *used;
+                        tracing::warn!(
+                            %run_id, node = %node.id, attempt,
+                            max = resilience.max_node_retries,
+                            "plan node failed — retrying (bounded)"
+                        );
                         self.emit(
                             run_id,
                             seq,
                             RunEvent::Rejected {
-                                step,
-                                reason: reason.clone(),
-                                attempt: 0,
+                                step: outcome.node_index,
+                                reason: truncate_chars(
+                                    &format!(
+                                        "node '{}' attempt failed — retrying: {}",
+                                        node.id, outcome.result
+                                    ),
+                                    400,
+                                ),
+                                attempt,
                                 branch: Some(node.id.clone()),
                             },
                         );
                         seq += 1;
-                        let result = serde_json::json!({ "error": reason });
-                        self.record_node_step(&mut run, step, node, result.clone(), false)
-                            .await?;
-                        node_outputs.insert(node.id.clone(), result);
-                        completed.insert(*node_index);
-                        dispatched.insert(*node_index);
-                        failure = Some(format!(
-                            "plan node '{}' refused by delegation governance",
-                            node.id
-                        ));
+                        dispatched.remove(&node_index);
+                        retry_fresh.insert(node_index);
                         continue;
                     }
-
-                    // Trust gate (ADR 0023) — now THREE-way in plan-mode
-                    // (ADR 0025): Allow → dispatch; Deny → node/plan fail;
-                    // AskHuman → drain-then-pause (no degrade-to-deny). Runs
-                    // SECOND, only once P2 already allowed this delegation
-                    // structurally — same ordering as step mode.
-                    if let Some(gate) = &self.delegation_gate {
-                        let origin = target_origin
-                            .clone()
-                            .expect("target_origin is Some: the None arm above already refused");
-                        match gate.authorize_delegation_to(&action_name, &origin) {
-                            DelegationDecisionOutcome::Allow(_) => { /* dispatch below */ }
-                            DelegationDecisionOutcome::Deny(reason) => {
-                                self.emit(
-                                    run_id,
-                                    seq,
-                                    RunEvent::Rejected {
-                                        step,
-                                        reason: reason.clone(),
-                                        attempt: 0,
-                                        branch: Some(node.id.clone()),
-                                    },
-                                );
-                                seq += 1;
-                                let result = serde_json::json!({ "error": reason });
-                                self.record_node_step(&mut run, step, node, result.clone(), false)
-                                    .await?;
-                                node_outputs.insert(node.id.clone(), result);
-                                completed.insert(*node_index);
-                                dispatched.insert(*node_index);
-                                failure = Some(format!(
-                                    "plan node '{}' refused by delegation governance",
-                                    node.id
-                                ));
-                                continue;
-                            }
-                            DelegationDecisionOutcome::AskHuman(meta) => {
-                                pending_ask = Some(PlanAsk {
-                                    step,
-                                    branch: node.id.clone(),
-                                    agent: action_name.clone(),
-                                    origin,
-                                    arguments: node.arguments.clone(),
-                                    trust: meta.trust.clone(),
-                                    description: meta.description.clone(),
-                                    provenance_source_kind: meta.provenance_source_kind.clone(),
-                                    provenance_source: meta.provenance_source.clone(),
-                                    requested_at: now_secs(),
-                                });
-                                continue;
-                            }
-                        }
-                    }
                 }
 
-                dispatched.insert(*node_index);
-                let deps_context: Vec<serde_json::Value> = node
-                    .deps
-                    .iter()
-                    .filter_map(|d| node_outputs.get(d).cloned())
-                    .collect();
-                let handle = tokio::spawn(dispatch_plan_node_execution(
-                    run_id,
-                    step,
-                    node.clone(),
-                    deps_context,
-                    folded,
-                    schema.clone(),
-                    run.active_skills.clone(),
-                    run.a2a_depth,
-                    run.a2a_ancestry.clone(),
-                    latitude,
-                    self.store.clone(),
-                    self.tools.clone(),
-                    self.oracle.clone(),
-                    self.events.clone(),
-                ));
-                in_flight.push(handle);
-            }
-
-            if in_flight.is_empty() {
-                break;
-            }
-
-            // Readiness-driven: await the NEXT completion (not all) — as
-            // soon as one branch finishes, its dependents may become ready
-            // this same loop iteration.
-            let joined = in_flight
-                .next()
-                .await
-                .expect("in_flight is non-empty (just checked above)");
-            let outcome = match joined {
-                Ok(Ok(o)) => o,
-                Ok(Err(kernel_err)) => return Err(kernel_err),
-                Err(join_err) => {
-                    return Err(KernelError::Execution(ExecutionError::Tool(format!(
-                        "plan node task panicked: {join_err}"
-                    ))));
-                }
-            };
-            let node_index = outcome.node_index as usize;
-            let node = validated_plan.node(node_index);
-
-            if let Some(u) = outcome.usage {
-                run.usage.add(&u);
-            }
-            for (agent, elapsed_ms) in &outcome.agent_usage {
-                let entry = run.agent_usage.entry(agent.clone()).or_default();
-                entry.delegations += 1;
-                entry.remote_ms += elapsed_ms;
-            }
-            node_outputs.insert(node.id.clone(), outcome.result.clone());
-            self.record_node_step(
-                &mut run,
-                outcome.node_index,
-                node,
-                outcome.result.clone(),
-                outcome.ok,
-            )
-            .await?;
-            self.emit(
-                run_id,
-                seq,
-                RunEvent::Executed {
-                    step: outcome.node_index,
-                    action: node
-                        .action
-                        .clone()
-                        .unwrap_or_else(|| format!("{:?}", node.node_type).to_lowercase()),
-                    ok: outcome.ok,
-                    result: outcome.result,
-                    branch: Some(node.id.clone()),
-                },
-            );
-            seq += 1;
-            completed.insert(node_index);
-            if !outcome.ok {
-                // Fail-on-node-error: adaptive re-planning is deliberately
-                // deferred (ADR 0010) — a node failure fails the plan
-                // explicitly rather than silently guessing a new plan.
-                // Already-in-flight siblings (tracked in `in_flight`) are
-                // left to drain naturally rather than aborted.
-                failure = Some(format!("plan node '{}' failed", node.id));
-            }
-        }
-
-        // Drain-then-pause resolution (ADR 0025): a fresh a2a node's trust
-        // gate asked for human authorization. The loop only exits once
-        // `in_flight` is empty, so every sibling has drained to a receipt —
-        // the resume budget seed is therefore exact — and the run now suspends
-        // durably as `AwaitingDelegationDecision`. A concurrent sibling
-        // FAILURE during the drain takes priority (the plan is doomed anyway),
-        // so the pause is only taken when `failure` is still None; otherwise
-        // the ask is abandoned unjournaled (its node never ran) and the plan
-        // finalizes as failed below.
-        if failure.is_none() {
-            if let Some(ask) = pending_ask {
-                self.store
-                    .append_journal(
-                        run_id,
-                        JournalEntry::AgentDelegationRequested {
-                            step: ask.step,
-                            agent: ask.agent.clone(),
-                            target_origin: ask.origin.clone(),
-                            arguments: ask.arguments.clone(),
-                            trust: ask.trust.clone(),
-                            description: ask.description.clone(),
-                            provenance_source_kind: ask.provenance_source_kind.clone(),
-                            provenance_source: ask.provenance_source.clone(),
-                            requested_at: ask.requested_at,
-                        },
-                    )
-                    .await?;
-                run.status = RunStatus::AwaitingDelegationDecision;
-                run.pending_delegation = Some(PendingDelegation {
-                    step: ask.step,
-                    agent: ask.agent.clone(),
-                    target_origin: ask.origin.clone(),
-                    trust: ask.trust.clone(),
-                    description: ask.description.clone(),
-                    provenance_source_kind: ask.provenance_source_kind.clone(),
-                    provenance_source: ask.provenance_source.clone(),
-                    requested_at: ask.requested_at,
-                });
-                self.store.put(run.clone()).await?;
+                node_outputs.insert(node.id.clone(), outcome.result.clone());
+                self.record_node_step(
+                    &mut run,
+                    outcome.node_index,
+                    node,
+                    outcome.result.clone(),
+                    outcome.ok,
+                )
+                .await?;
                 self.emit(
                     run_id,
                     seq,
-                    RunEvent::AgentDelegationRequested {
-                        step: ask.step,
-                        agent: ask.agent,
-                        target_origin: ask.origin,
-                        description: ask.description,
-                        trust: ask.trust,
-                        provenance_source_kind: ask.provenance_source_kind,
-                        provenance_source: ask.provenance_source,
-                        branch: Some(ask.branch),
+                    RunEvent::Executed {
+                        step: outcome.node_index,
+                        action: node
+                            .action
+                            .clone()
+                            .unwrap_or_else(|| format!("{:?}", node.node_type).to_lowercase()),
+                        ok: outcome.ok,
+                        result: outcome.result,
+                        branch: Some(node.id.clone()),
                     },
                 );
-                return Ok(run);
+                seq += 1;
+                completed.insert(node_index);
+                if !outcome.ok {
+                    // Fail-on-node-error: no NEW node is admitted (the guard at
+                    // the top of the admission pass), already-in-flight siblings
+                    // drain naturally, and then the generation either re-plans
+                    // (ADR 0030, budget permitting) or the run fails.
+                    failure = Some(format!("plan node '{}' failed", node.id));
+                }
             }
-        }
 
-        let (status, output, error) = match failure {
-            None => (
-                RunStatus::Completed,
-                Some(serde_json::json!({
-                    "summary": format!("plan completed: {} node(s)", validated_plan.len()),
-                    "nodes": node_outputs,
-                })),
-                None,
-            ),
-            Some(err) => (RunStatus::Failed, None, Some(err)),
-        };
-        self.finalize_run(run, status, output, error, seq).await
+            // Drain-then-pause resolution (ADR 0025): a fresh a2a node's trust
+            // gate asked for human authorization. The loop only exits once
+            // `in_flight` is empty, so every sibling has drained to a receipt —
+            // the resume budget seed is therefore exact — and the run now suspends
+            // durably as `AwaitingDelegationDecision`. A concurrent sibling
+            // FAILURE during the drain takes priority (the plan is doomed anyway),
+            // so the pause is only taken when `failure` is still None; otherwise
+            // the ask is abandoned unjournaled (its node never ran) and the plan
+            // finalizes as failed below.
+            if failure.is_none() {
+                if let Some(ask) = pending_ask {
+                    self.store
+                        .append_journal(
+                            run_id,
+                            JournalEntry::AgentDelegationRequested {
+                                step: ask.step,
+                                agent: ask.agent.clone(),
+                                target_origin: ask.origin.clone(),
+                                arguments: ask.arguments.clone(),
+                                trust: ask.trust.clone(),
+                                description: ask.description.clone(),
+                                provenance_source_kind: ask.provenance_source_kind.clone(),
+                                provenance_source: ask.provenance_source.clone(),
+                                requested_at: ask.requested_at,
+                            },
+                        )
+                        .await?;
+                    run.status = RunStatus::AwaitingDelegationDecision;
+                    run.pending_delegation = Some(PendingDelegation {
+                        step: ask.step,
+                        agent: ask.agent.clone(),
+                        target_origin: ask.origin.clone(),
+                        trust: ask.trust.clone(),
+                        description: ask.description.clone(),
+                        provenance_source_kind: ask.provenance_source_kind.clone(),
+                        provenance_source: ask.provenance_source.clone(),
+                        requested_at: ask.requested_at,
+                    });
+                    self.store.put(run.clone()).await?;
+                    self.emit(
+                        run_id,
+                        seq,
+                        RunEvent::AgentDelegationRequested {
+                            step: ask.step,
+                            agent: ask.agent,
+                            target_origin: ask.origin,
+                            description: ask.description,
+                            trust: ask.trust,
+                            provenance_source_kind: ask.provenance_source_kind,
+                            provenance_source: ask.provenance_source,
+                            branch: Some(ask.branch),
+                        },
+                    );
+                    return Ok(run);
+                }
+            }
+
+            match failure {
+                None => {
+                    let summary = if generation == 0 {
+                        format!("plan completed: {} node(s)", validated_plan.len())
+                    } else {
+                        format!(
+                            "plan completed: {} node(s) (after {} re-plan(s))",
+                            validated_plan.len(),
+                            generation
+                        )
+                    };
+                    let output = Some(serde_json::json!({
+                        "summary": summary,
+                        "nodes": node_outputs,
+                    }));
+                    return self
+                        .finalize_run(run, RunStatus::Completed, output, None, seq)
+                        .await;
+                }
+                Some(err) => {
+                    // Adaptive re-planning (ADR 0030): with budget left, fold
+                    // this generation's successes into the carry-forward map,
+                    // hand the model a BOUNDED failure context, and loop for a
+                    // fresh `propose_plan` — through the same validation floor.
+                    // Budget exhausted (or resilience off) → the run fails
+                    // cleanly, exactly as before ADR 0030.
+                    if replans_used < resilience.max_replans {
+                        replans_used += 1;
+                        let this_gen_steps: Vec<&StepRecord> = run
+                            .steps
+                            .iter()
+                            .filter(|s| {
+                                s.index >= step_base && s.index < step_base + PLAN_GENERATION_STRIDE
+                            })
+                            .collect();
+                        let mut completed_desc = String::new();
+                        let mut failed_desc = String::new();
+                        for s in &this_gen_steps {
+                            let node = validated_plan.node((s.index - step_base) as usize);
+                            if s.ok {
+                                if node.node_type != crate::plan::NodeType::Review {
+                                    carried.insert(plan_carry_key(node), s.result.clone());
+                                }
+                                completed_desc.push_str(&format!(
+                                    "\n- id={} action={} arguments={} output={}",
+                                    node.id,
+                                    s.action,
+                                    truncate_chars(&s.arguments.to_string(), 120),
+                                    truncate_chars(&s.result.to_string(), 160),
+                                ));
+                            } else {
+                                failed_desc.push_str(&format!(
+                                    "\n- id={} action={} error={}",
+                                    node.id,
+                                    s.action,
+                                    truncate_chars(&s.result.to_string(), 300),
+                                ));
+                            }
+                        }
+                        tracing::warn!(
+                            %run_id, attempt = replans_used,
+                            max = resilience.max_replans,
+                            "plan failed — requesting a REVISED plan from the model (bounded)"
+                        );
+                        replan_guidance = Some(format!(
+                            "A previous plan for this task FAILED (re-plan attempt {} of {}). \
+                         Failed node(s):{}\nNodes already completed successfully — their side \
+                         effects are DONE; to let later nodes depend on one, include it again \
+                         with EXACTLY the same id, action and arguments (it will NOT \
+                         re-execute):{}\nPropose a REVISED plan that fixes or replaces the \
+                         failed work. Do not redo completed work.",
+                            replans_used,
+                            resilience.max_replans,
+                            if failed_desc.is_empty() {
+                                "\n- (none recorded)".to_string()
+                            } else {
+                                failed_desc
+                            },
+                            if completed_desc.is_empty() {
+                                "\n- (none)".to_string()
+                            } else {
+                                completed_desc
+                            },
+                        ));
+                        continue 'generations;
+                    }
+                    let err = if replans_used > 0 {
+                        format!("{err} ({replans_used} re-plan(s) exhausted)")
+                    } else {
+                        err
+                    };
+                    return self
+                        .finalize_run(run, RunStatus::Failed, None, Some(err), seq)
+                        .await;
+                }
+            }
+        } // 'generations
     }
 
     /// Record a plan node as a run step (mirrors StepRecord for observability

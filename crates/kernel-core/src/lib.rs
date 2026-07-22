@@ -33,9 +33,10 @@ pub use delegation_gate::{
 pub use engine::{
     crash_point, is_a2a_action, ActionSource, AgentUsage, CircuitCheck, CompositeActionSource,
     DelegationLimits, ExecutionContext, ExecutionError, Kernel, KernelConfig, KernelError,
-    PendingDelegation, PendingDelegationInput, PendingSkillActivation, ResilienceConfig, Run,
-    RunEvent, RunEventEnvelope, RunMode, RunStatus, StepRecord, A2A_CONTINUATION_INPUT_NOTE,
-    ACTIVATE_SKILL_ACTION, DEACTIVATE_SKILL_ACTION, FINISH_ACTION, MAX_PROGRESS_NOTES_PER_STEP,
+    PendingDelegation, PendingDelegationInput, PendingSkillActivation, PlanResilience,
+    ResilienceConfig, Run, RunEvent, RunEventEnvelope, RunMode, RunStatus, StepRecord,
+    A2A_CONTINUATION_INPUT_NOTE, ACTIVATE_SKILL_ACTION, DEACTIVATE_SKILL_ACTION, FINISH_ACTION,
+    MAX_PROGRESS_NOTES_PER_STEP,
 };
 pub use journal::{JournalEntry, PendingActivationFold, PendingDelegationFold, Usage};
 pub use learned::{

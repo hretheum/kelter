@@ -77,6 +77,11 @@ re-planning (re-propose the remaining work on failure, re-validate,
 re-journal) is a documented follow-up, per the phase's failure guidance:
 never ship an uncertain re-plan that pretends to work.
 
+> **Follow-up delivered:** ADR 0030 adds exactly that follow-up — bounded
+> per-node retry and bounded adaptive re-planning, re-validated through this
+> ADR's `propose_plan` floor and journaled for deterministic resume. Off by
+> default; this ADR's fail-on-node-error remains the default behavior.
+
 ## Consequences
 
 - Plan mode composes tools, A2A delegations and review into one validated,
