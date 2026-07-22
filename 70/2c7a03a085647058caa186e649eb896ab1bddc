@@ -1,0 +1,19 @@
+Dockerfile
+  s_af0e8d445a0a59::t_0c8222e8a0775d 27-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "702c7a03a085647058caa186e649eb896ab1bddc",
+  "prompts": {},
+  "sessions": {
+    "s_af0e8d445a0a59": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "46832159-e10a-4072-bbe0-7b856432d754",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
