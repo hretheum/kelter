@@ -1,0 +1,29 @@
+deploy/fcos/k12.bu
+  s_ebdbabe3e659c2::t_3358243caeb9e6 1-25
+AGENTS.md
+  s_1074d76163698a::t_462c3783711a5e 1-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "325c867592c780d30ae203a5185cd0df13b05233",
+  "prompts": {},
+  "sessions": {
+    "s_1074d76163698a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb271-f1d3-72c1-8c10-aa2f898b1df2",
+        "model": "unknown"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    },
+    "s_ebdbabe3e659c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c5b3f5c-743c-4671-b335-fb75dd1590bf",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
