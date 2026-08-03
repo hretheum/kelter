@@ -43,6 +43,10 @@ async fn desktop_run_and_memory_survive_a_restart() {
             pending_delegation_input: None,
             a2a_depth: 0,
             a2a_ancestry: Vec::new(),
+            // Per-run step budget override; `None` = fall back to the
+            // daemon-wide KernelConfig::max_steps, which is what this
+            // fixture wants.
+            max_steps: None,
         };
         store.put(run).await.unwrap();
         memory

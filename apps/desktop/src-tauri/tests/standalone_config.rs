@@ -23,6 +23,9 @@ async fn serve(dir: &std::path::Path) -> (String, String) {
         engine: "local:qwen2.5-0.5b-instruct".into(),
         base_url: None,
         latitude: None,
+        max_tokens: None,
+        thinking: None,
+        step_result_limit: None,
         api_key: None,
     };
     model_config::apply_overlay(&config_path, &mut policy_cfg);
@@ -59,7 +62,11 @@ async fn serve(dir: &std::path::Path) -> (String, String) {
             Vec::new(),
         ));
     let token = "desktop-standalone-token".to_string();
-    let router = api::build_app(kernel, api::Principals::single(token.clone()), Some(controller));
+    let router = api::build_app(
+        kernel,
+        api::Principals::single(token.clone()),
+        Some(controller),
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -98,7 +105,9 @@ async fn standalone_model_config_works_end_to_end_no_501() {
     assert!(keyfile.is_file(), "secret file not written");
     let mode = std::fs::metadata(&keyfile).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "secret file perms {mode:o}, expected 600");
-    assert!(std::fs::read_to_string(&keyfile).unwrap().contains(DUMMY_KEY));
+    assert!(std::fs::read_to_string(&keyfile)
+        .unwrap()
+        .contains(DUMMY_KEY));
     // GET now reports the key is set — but never returns the value.
     let view: serde_json::Value = c
         .get(format!("{base}/api/v1/config/model"))
@@ -178,12 +187,12 @@ async fn standalone_model_config_works_end_to_end_no_501() {
         engine: "local:qwen2.5-0.5b-instruct".into(),
         base_url: None,
         latitude: None,
+        max_tokens: None,
+        thinking: None,
+        step_result_limit: None,
         api_key: None,
     };
-    model_config::apply_overlay(
-        &dir.join("config.toml").to_string_lossy(),
-        &mut fresh,
-    );
+    model_config::apply_overlay(&dir.join("config.toml").to_string_lossy(), &mut fresh);
     assert_eq!(
         fresh.engine, "openrouter:anthropic/claude-sonnet-5",
         "on restart the UI-chosen model must win over the default"

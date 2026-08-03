@@ -2330,3 +2330,46 @@ gzip). Whether the rest of the pipeline — including the new Postgres
 
 **Noted, not fixed:** `ci.yml` runs `pnpm build` but never `pnpm test`, so the
 web-ui vitest suite is outside CI even once the pipeline is alive.
+
+**Follow-up 2 — the first pipeline to get past checkout found a two-week-old
+break.** With the pnpm fix in, the `desktop` job reached compilation and failed:
+`E0063: missing fields max_tokens, step_result_limit and thinking in
+initializer of PolicyConfig` at `apps/desktop/src-tauri/src/lib.rs:106`. The
+ubuntu leg reported "operation was canceled" — matrix fail-fast, not a second
+fault.
+
+**Root cause, structural.** `apps/desktop/src-tauri` is deliberately excluded
+from the root workspace (`Cargo.toml` `exclude`), so `cargo test --workspace`
+never compiles it — by design, so a workspace build does not require the
+platform webview toolchain. The three fields are the B1/B2/B3 adapter tuning
+added to `PolicyConfig` in `b6f673f` (A1, 2026-07-22). The daemon survived
+because its construction spreads (`..cfg.policy.clone()`); the desktop's
+explicit literal did not. The only thing that could have caught this is the CI
+`desktop` job, dead since 2026-07-19. Drift window: 12 days.
+
+**A second break underneath it.** `cargo clippy --all-targets` on the desktop
+crate surfaced `E0063: missing field max_steps in initializer of Run` in
+`tests/durable_store.rs` — which the CI `desktop` job would NOT have caught
+either, since `cargo tauri build --no-bundle` compiles the lib, not the test
+targets. Found only because this pass ran `--all-targets` locally.
+
+**Fix.** Three explicit `PolicyConfig` literals (src/lib.rs:106,
+tests/standalone_config.rs:22 and :177) gain `max_tokens/thinking/
+step_result_limit: None` — the adapter-derived defaults, so standalone desktop
+behaviour is unchanged from pre-A1. Listed explicitly rather than deriving
+`Default` and spreading: a future field addition SHOULD break this build, which
+is exactly the signal that was missing. `Run` in tests/durable_store.rs gains
+`max_steps: None`. The crate was also never `cargo fmt`-checked (root
+`--all` does not reach an excluded workspace, and the `desktop` job runs only
+the tauri build), so several pre-existing formatting diffs are normalized in
+the same pass.
+
+**Verified locally, in the excluded workspace.** `cargo fmt --all --check`
+clean, `cargo clippy --all-targets -- -D warnings` clean, `cargo test` 2/2
+(`desktop_run_and_memory_survive_a_restart`,
+`standalone_model_config_works_end_to_end_no_501`).
+
+**Open, not fixed here.** The `desktop` CI job still runs only `cargo tauri
+build --no-bundle` — no fmt, no clippy, no tests for that crate. The
+`durable_store.rs` break proves that a build-only job is not sufficient
+coverage for a workspace excluded from the root.

@@ -54,8 +54,7 @@ fn load_settings(app: &AppHandle) -> Settings {
 
 fn store_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     let path = settings_path(app).map_err(|e| e.to_string())?;
-    std::fs::write(path, serde_json::to_vec_pretty(settings).unwrap())
-        .map_err(|e| e.to_string())
+    std::fs::write(path, serde_json::to_vec_pretty(settings).unwrap()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -107,6 +106,14 @@ async fn start_standalone(
         engine,
         base_url: None,
         latitude: None,
+        // B1/B2/B3 adapter tuning (added to PolicyConfig in b6f673f). `None`
+        // means "use the adapter-derived default" — the pre-A1 behaviour, so
+        // standalone desktop is unchanged by this fix. Listed explicitly
+        // rather than spread from Default: a future field addition should
+        // break this build, which is how the drift below was found.
+        max_tokens: None,
+        thinking: None,
+        step_result_limit: None,
         api_key: None,
     };
     model_config::apply_overlay(&config_path, &mut policy_cfg);
@@ -177,7 +184,11 @@ async fn start_standalone(
             // :8080, ollama :11434, openrouter.ai) are the SSRF allowlist.
             Vec::new(),
         ));
-    let router = api::build_app(kernel, api::Principals::single(token.clone()), Some(controller));
+    let router = api::build_app(
+        kernel,
+        api::Principals::single(token.clone()),
+        Some(controller),
+    );
     tauri::async_runtime::spawn(async move {
         if let Err(e) = axum::serve(listener, router).await {
             tracing::error!("standalone api server stopped: {e}");
