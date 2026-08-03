@@ -2457,3 +2457,27 @@ and 51s vs a full dependency recompile is where the time actually goes.
 **Not verified.** Built natively on arm64 (Apple silicon) to exercise the
 Dockerfile's logic without emulation. CI builds `linux/amd64`; the structure is
 architecture-independent but the amd64 build itself is unobserved here.
+
+**Follow-up 4 — container build cost.** Two changes, both aimed at the 40+
+minute `container` job. (1) `7b11ba3` dropped the emulated arm64 leg from
+`ci.yml` and added a GHA layer cache — the job only answers "does the
+Dockerfile still build", the runner is amd64, and multi-arch already lives in
+`publish-image.yml` behind an explicit opt-in that defaults arm64 off. Cache is
+`mode=min` and scoped away from the publish workflow's `mode=max`, since the
+per-repo GHA cache is capped at 10 GB and a shared scope would have them
+evicting each other. (2) The Dockerfile Rust stage is split with `cargo-chef`
+so the ~415-dependency compile becomes a layer keyed on `Cargo.toml`/
+`Cargo.lock` alone; a source-only change now recompiles this workspace's crates
+rather than wasmtime and cranelift along with them.
+
+**Verified by reading, not by building.** The real `cargo build --release -p
+daemon -p mcp` survives below the chef layers, and all five runtime `COPY`
+lines are intact — the four `mcp` binaries plus `kelter` — so the `702c7a0`
+regression does not return. `cargo chef cook` without `-p` cooks a superset of
+the needed dependencies: correct, marginally slower cold.
+
+**Not verified:** no image was built locally for this change. The first CI run
+on this commit is its test. Also unmeasured: whether the layer cache actually
+hits — this commit changes the Dockerfile, so it starts cold by construction;
+the run AFTER it, with `Cargo.lock` unchanged, is the one whose duration means
+something.
