@@ -2392,3 +2392,32 @@ order is as intended; `cargo test --all-targets` passes 2/2 in the crate.
 macOS run, not observed — the desktop tests bind a local TCP listener and assert
 unix 0600 permissions, both of which should hold on Linux, but "should" is not
 evidence. If the ubuntu leg fails, it fails on this commit.
+
+**Follow-up 4 — container job: 40+ minutes down to one architecture, with cache.**
+The `container` job built `linux/amd64,linux/arm64` on an amd64 runner, i.e. the
+arm64 leg ran under QEMU emulation, with no layer cache at all — 40+ minutes per
+push for a ~415-crate Rust build including wasmtime/cranelift.
+
+The fix is not a new idea: `publish-image.yml` had already reached the opposite
+conclusion, raising QEMU only when arm64 is explicitly requested, defaulting
+arm64 OFF ("podwaja czas; K12 potrzebuje tylko amd64") and caching via
+`type=gha`. `ci.yml` simply never picked it up. This brings the two into line.
+
+- `setup-qemu-action` dropped; `platforms: linux/amd64` only. The job's question
+  is "does the Dockerfile still build" and one arch answers it. Multi-arch stays
+  a deliberate, human-triggered act in publish-image.yml.
+- Switched from a raw `docker buildx build` to `docker/build-push-action@v6`
+  (`push: false`) so `cache-from`/`cache-to` are available.
+- `mode=min`, deliberately NOT `mode=max`: publish-image.yml already exports
+  `mode=max`, and both share one 10 GB per-repo GHA cache. Exporting every
+  intermediate layer from a build-only job as well would evict the publish
+  cache, which is the one that matters for K12.
+
+**Accepted trade-off:** an arm64-specific build break is no longer caught on
+every push, surfacing instead at publish time. Publish is manual and
+human-gated, and K12 is amd64, so the exposure is small and deliberate.
+
+**Verified:** workflow YAML parses, the container job's step list is as intended
+and contains no QEMU step. **Not verified:** the actual wall-clock improvement
+and the cache hit rate — both are observable only on GitHub. First run populates
+the cache and will still be slow; the second is the real measurement.

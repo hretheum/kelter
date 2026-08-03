@@ -58,19 +58,31 @@ jobs:
           KELTER_TEST_POSTGRES_URL: postgres://kelter:kelter@localhost:5432/kelter_test
 
   container:
-    name: container image (amd64 + arm64)
+    name: container image (amd64)
     runs-on: ubuntu-latest
     needs: check
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
+      # NO setup-qemu here, deliberately. This job only answers "does the
+      # Dockerfile still build", and amd64 answers it. Cross-building arm64
+      # on an amd64 runner means QEMU emulation, and a Rust build of ~415
+      # crates (wasmtime + cranelift among them) under emulation took 40+
+      # minutes per push. Multi-arch stays in publish-image.yml, behind an
+      # explicit input — which already defaults arm64 off for exactly this
+      # reason. K12 is amd64 anyway.
       - uses: docker/setup-buildx-action@v3
       # Build only — no registry push. Publishing is a human decision.
-      - run: >
-          docker buildx build
-          --platform linux/amd64,linux/arm64
-          --tag kelter:ci
-          .
+      # mode=min, not max: publish-image.yml uses mode=max and both jobs share
+      # one 10 GB per-repo GHA cache. Exporting every intermediate layer from
+      # here too would evict the publish cache, which is the one that matters.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          tags: kelter:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=min
 
   desktop:
     name: desktop shell (lint + test + build)
