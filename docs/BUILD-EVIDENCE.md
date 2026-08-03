@@ -2485,3 +2485,17 @@ step list dumped, confirming the three steps land in the intended order and the
 
 **Not verified here.** The CI run itself. As with the `services:` block above,
 the next push to `main` is its real test.
+
+**Confirmed green in CI (run `30818247349`, commit `ca0cfd8`).** All four jobs
+succeeded: `fmt + clippy + test` 4m02s (with `pnpm test` as its own step,
+passing), `container image (amd64)` 18s, `desktop shell` 10m00s on ubuntu and
+3m55s on macos. The `check` job's step list on GitHub matches the local
+`yaml.safe_load` dump — install, test, build, in that order.
+
+**A note on the 18s container job, so it is not over-read.** That push touched
+only `ci.yml` and two `.md` files, so the Docker build was a *full* cache hit —
+the workspace-build layer was cached alongside the `cargo chef cook` layer. It
+proves the GHA layer cache hits at all, which was the open question, but it is
+NOT the measurement the cargo-chef split was made for: that one needs a push
+that edits `crates/` WITHOUT touching `Cargo.lock`, where cook stays cached and
+only the workspace layer rebuilds. Still pending.
