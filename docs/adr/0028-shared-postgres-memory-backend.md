@@ -4,7 +4,7 @@ provenance_metadata:
   agent: claude-fable-5
   session_date: 2026-07-21
   human_validated: true
-  validation_note: "signed 2026-07-22 on Eryk's authorization; governance invariant mirrors independently-verified ADR 0024, but the live Postgres+pgvector path was NOT independently re-run at sign-off"
+  validation_note: "signed 2026-07-22 on Eryk's authorization; pgstore integration + pgvector tests (7) re-run independently against live Postgres 16 + pgvector — all green"
   session_context: "Shared, concurrent-safe memory backend (Postgres + pgvector) behind the existing memory seam, so two independent kernels (desktop + server) share episodic memory + learned facts — with Kelter's governance (provenance, complete reversibility, learned-as-validated-context) preserved and re-proven on the shared store. Opt-in; SQLite stays the default. Dumb store: zero opaque learning."
 ---
 

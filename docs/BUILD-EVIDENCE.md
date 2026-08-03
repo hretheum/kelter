@@ -2249,5 +2249,23 @@ port-free wait per run; contaminated runs discarded).
 
 **Suite.** 272/272 (was 266; +4 A2 contract, +1 epoch-window regression, +2 executor
 parser/guard, −1 consolidation), clippy -D + fmt clean, smoke-durability green. Evidence:
-`~/dev/llm/oculink-testy/results/kelter/` (RAPORT.md sekcja A2 + seria-a2/). Not pushed;
-stopped before merge per the gate.
+`~/dev/llm/oculink-testy/results/kelter/` (RAPORT.md sekcja A2 + seria-a2/). Stopped before
+merge per the gate; merged and pushed afterwards (`0fc0a43` on `origin/main`).
+
+**Independent re-verification (2026-08-03, at HEAD `702c7a0`).** `cargo test --workspace`
+re-run from a clean invocation: **273 passed / 0 failed / 0 ignored**. The A2 tests were
+checked by name, not by aggregate: `agentic_loop_step_zero_test` 6/6
+(`test_rerun_after_edit_now_executes_and_the_loop_completes`,
+`pointless_repeat_without_state_change_is_still_rejected`,
+`identical_re_edit_without_other_changes_is_still_rejected`,
+`constrained_mutation_restores_a_dropped_tool`,
+`constrained_within_epoch_removal_still_applies`,
+`resume_replays_without_reexecution_and_allows_post_resume_reread`) and
+`a2_epoch_window_test` 1/1 (`failed_attempt_repeat_after_keyed_command_is_allowed`).
+Delta vs the 272 recorded above is +1, un-reconciled — the A2-round count predates the
+`950f899`/`702c7a0` CI+Docker commits.
+**Caveat, stated rather than buried:** the 7 `pgstore` tests (6 integration + 1 pgvector)
+return early with a skip message unless `KELTER_TEST_POSTGRES_URL` is set, and that
+variable was unset in this run — they reported `ok` without touching Postgres. Genuinely
+executed count is **266**. The ADR 0028 live-Postgres claim rests on its own earlier run,
+not on this one. The N=24 live gemma-3-27b series was likewise not re-run here.

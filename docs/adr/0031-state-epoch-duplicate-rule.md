@@ -3,7 +3,8 @@ provenance: ai_authored
 provenance_metadata:
   agent: claude-fable-5
   session_date: 2026-07-22
-  human_validated: false
+  human_validated: true
+  validation_note: "signed 2026-08-03 on Eryk's authorization; cargo test --workspace re-run independently at HEAD 702c7a0 — 273 passed / 0 failed / 0 ignored, incl. agentic_loop_step_zero_test (6/6) and a2_epoch_window_test (1/1) verified by name. CAVEAT: 7 of the 273 are pgstore integration/pgvector tests that SKIP silently without KELTER_TEST_POSTGRES_URL and were no-ops in this run — 266 tests actually executed. The N=24 live gemma-3-27b series remains agent-reported, not re-run at sign-off."
   session_context: "A2 of the oculink agentic-coding brief, implemented after the explicit human gate: refine the anti-stall duplicate rule and Constrained action-space narrowing to be STATE-EPOCH-scoped, so verification after a mutation is legal while stateless repeats stay rejected."
 ---
 

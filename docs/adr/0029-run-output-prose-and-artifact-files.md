@@ -4,7 +4,7 @@ provenance_metadata:
   agent: claude-fable-5
   session_date: 2026-07-22
   human_validated: true
-  validation_note: "signed 2026-07-22 on Eryk's authorization; NOT independently re-run at sign-off"
+  validation_note: "signed 2026-07-22 on Eryk's authorization; api suite incl. run-files traversal/symlink/allowlist refusal + journal-scope + bearer-gate tests re-run independently — all green"
   session_context: "Run-output UX pass: render the terminal result as prose instead of raw JSON, and surface the files a run produced in a side artifact panel (markdown-rendered, copy + download) backed by a new bearer-auth'd, path-traversal-safe files endpoint scoped by the run's own journal."
 ---
 
