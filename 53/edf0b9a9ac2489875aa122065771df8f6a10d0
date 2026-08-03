@@ -1,0 +1,21 @@
+apps/desktop/src-tauri/src/lib.rs
+  s_bc90dd57576985::t_0a8d53e2c87c02 57,109-116,187-191
+apps/desktop/src-tauri/tests/standalone_config.rs
+  s_bc90dd57576985::t_55f68b4523784f 26-28,65-69,108-110,190-192,195
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "53edf0b9a9ac2489875aa122065771df8f6a10d0",
+  "prompts": {},
+  "sessions": {
+    "s_bc90dd57576985": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3d17715f-5cc5-496d-8e47-82bf4328cf7e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
