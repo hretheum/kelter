@@ -73,7 +73,7 @@ jobs:
           .
 
   desktop:
-    name: desktop shell (build only)
+    name: desktop shell (lint + test + build)
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -93,6 +93,8 @@ jobs:
       - run: pnpm install --frozen-lockfile && pnpm build
         working-directory: apps/web-ui
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
@@ -102,6 +104,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
             librsvg2-dev patchelf libgtk-3-dev
+      # apps/desktop/src-tauri is EXCLUDED from the root workspace, so the
+      # check job's fmt/clippy/test never touch it. Without the three steps
+      # below, this crate's only coverage is `cargo tauri build`, which
+      # compiles the lib and NOT the test targets — that is exactly how
+      # tests/durable_store.rs drifted out of sync with `Run` unnoticed
+      # (see BUILD-EVIDENCE 2026-08-03). Lint runs once on ubuntu (it is
+      # platform-independent); tests run on both legs.
+      - name: fmt + clippy (ubuntu leg only — platform-independent)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: apps/desktop/src-tauri
+        run: |
+          cargo fmt --all --check
+          cargo clippy --all-targets -- -D warnings
+      - name: Test the desktop crate
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --all-targets
       - run: cargo install tauri-cli --version '^2' --locked
       - name: Build (no bundle, no signing — build only)
         working-directory: apps/desktop/src-tauri

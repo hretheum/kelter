@@ -2373,3 +2373,22 @@ clean, `cargo clippy --all-targets -- -D warnings` clean, `cargo test` 2/2
 build --no-bundle` — no fmt, no clippy, no tests for that crate. The
 `durable_store.rs` break proves that a build-only job is not sufficient
 coverage for a workspace excluded from the root.
+
+**Follow-up 3 — the `desktop` job now lints and tests, not just builds.** The
+open item from Follow-up 2 is closed: `cargo fmt --all --check` and `cargo
+clippy --all-targets -- -D warnings` run on the ubuntu leg (lint is
+platform-independent, so once is enough), and `cargo test --all-targets` runs
+on BOTH legs, all in `apps/desktop/src-tauri` before the tauri build. The
+toolchain step gains the `rustfmt, clippy` components it previously did not
+request. Job renamed `desktop shell (build only)` → `(lint + test + build)`.
+
+The steps sit before `cargo install tauri-cli`, so a compile error now fails in
+a couple of minutes rather than after the tauri-cli install and full bundle
+build.
+
+**Verified locally:** the workflow YAML parses and the `desktop` job's step
+order is as intended; `cargo test --all-targets` passes 2/2 in the crate.
+**Not verified:** the ubuntu leg. fmt/clippy/test on Linux are reasoned from the
+macOS run, not observed — the desktop tests bind a local TCP listener and assert
+unix 0600 permissions, both of which should hold on Linux, but "should" is not
+evidence. If the ubuntu leg fails, it fails on this commit.
