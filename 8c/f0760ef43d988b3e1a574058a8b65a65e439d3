@@ -1,0 +1,20 @@
+docs/BUILD-EVIDENCE.md
+  h_e759e7d12241fb 2252-2271
+docs/adr/0028-shared-postgres-memory-backend.md
+  h_e759e7d12241fb 7
+docs/adr/0029-run-output-prose-and-artifact-files.md
+  h_e759e7d12241fb 7
+docs/adr/0031-state-epoch-duplicate-rule.md
+  h_e759e7d12241fb 6-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "8cf0760ef43d988b3e1a574058a8b65a65e439d3",
+  "prompts": {},
+  "humans": {
+    "h_e759e7d12241fb": {
+      "author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
