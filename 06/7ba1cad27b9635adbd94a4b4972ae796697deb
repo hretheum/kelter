@@ -1,0 +1,14 @@
+docs/ROADMAP.md
+  h_e759e7d12241fb 1,174-224,343-347
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "067ba1cad27b9635adbd94a4b4972ae796697deb",
+  "prompts": {},
+  "humans": {
+    "h_e759e7d12241fb": {
+      "author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
