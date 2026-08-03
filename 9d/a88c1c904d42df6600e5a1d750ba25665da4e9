@@ -1,0 +1,16 @@
+Dockerfile
+  h_e759e7d12241fb 11-22,24-36
+docs/BUILD-EVIDENCE.md
+  h_e759e7d12241fb 2424-2459
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "9da88c1c904d42df6600e5a1d750ba25665da4e9",
+  "prompts": {},
+  "humans": {
+    "h_e759e7d12241fb": {
+      "author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
