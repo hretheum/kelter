@@ -2421,3 +2421,39 @@ human-gated, and K12 is amd64, so the exposure is small and deliberate.
 and contains no QEMU step. **Not verified:** the actual wall-clock improvement
 and the cache hit rate — both are observable only on GitHub. First run populates
 the cache and will still be slow; the second is the real measurement.
+
+## 2026-08-03 — container build split with cargo-chef (verified locally)
+
+**Context.** The `container` CI job took 40+ minutes per push: an arm64 leg
+cross-built under QEMU on an amd64 runner, with no layer cache, recompiling all
+~415 dependency crates (wasmtime + cranelift among them) every time.
+`publish-image.yml` had already learned both lessons — arm64 defaults off there,
+and it uses a GHA cache — but `ci.yml` had not. `7b11ba3` dropped the emulated
+leg and added the cache. This entry covers the remaining structural half.
+
+**Change.** The Rust stage is split with `cargo-chef`: a `planner` stage emits
+`recipe.json` from the manifests, and the expensive `cargo chef cook --release`
+layer is keyed on `Cargo.toml`/`Cargo.lock` alone. Sources are copied only
+below it, so a source-only edit no longer invalidates the dependency build.
+
+**Verified by building the image, not by reading the file.**
+- All five binaries land in the runtime image: `kelter` (40M), `tools-server`
+  (8.5M), `ledger-server` (3.9M), `code-server` (8.8M), `memory-server` (11M) —
+  matching the four `[[bin]]` entries in `crates/mcp/Cargo.toml` plus the
+  daemon. The `702c7a0` fix survives the restructure, which was the main risk.
+- Image size 260 MB; `kelter --help` reaches its own config check
+  (`cannot read config 'config.toml'`), i.e. the binary runs.
+- **Cache behaviour proven, not assumed.** A one-line edit to
+  `crates/kernel-core/src/lib.rs` and a rebuild: the cook layer reports
+  `#22 CACHED` and only the workspace build re-runs — **51s**. Probe reverted.
+
+**Cold-build cost, stated plainly.** On a cold cache this is SLOWER, not
+faster: `cargo chef cook` took 254s and the subsequent workspace build 75s,
+plus a `cargo install cargo-chef` layer. Cook also builds dependencies for
+every workspace member, a superset of what `-p daemon -p mcp` needs. The trade
+is deliberate — cold builds are rare, source-only pushes are the common case,
+and 51s vs a full dependency recompile is where the time actually goes.
+
+**Not verified.** Built natively on arm64 (Apple silicon) to exercise the
+Dockerfile's logic without emulation. CI builds `linux/amd64`; the structure is
+architecture-independent but the amd64 build itself is unobserved here.

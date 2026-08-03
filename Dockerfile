@@ -8,9 +8,32 @@ RUN pnpm install --frozen-lockfile
 COPY apps/web-ui/ ./
 RUN pnpm build
 
-# Rust build stage
-FROM rust:1.95-bookworm AS builder
+# ---------------------------------------------------------------------------
+# Rust build, split with cargo-chef so DEPENDENCIES are their own cached layer.
+#
+# Previously this was a single `COPY crates ./crates && cargo build`, which
+# meant one edited line in kernel-core invalidated the layer and recompiled all
+# ~415 dependency crates — wasmtime and cranelift included. cargo-chef derives
+# a dependency-only "recipe" from the manifests, so the expensive layer is
+# keyed on Cargo.toml/Cargo.lock alone. A source-only change now recompiles
+# just this workspace's crates.
+# ---------------------------------------------------------------------------
+FROM rust:1.95-bookworm AS chef
+RUN cargo install cargo-chef --locked
 WORKDIR /src
+
+# Planner: needs the real sources, but only to emit recipe.json.
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+# The one expensive layer. Its only inputs are the manifests, via recipe.json.
+COPY --from=planner /src/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+# Only now the real sources. Everything below re-runs on a source change;
+# everything above is reused.
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY --from=webui /src/apps/web-ui/dist ./apps/web-ui/dist
