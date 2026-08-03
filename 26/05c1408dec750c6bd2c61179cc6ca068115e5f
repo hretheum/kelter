@@ -1,0 +1,16 @@
+.github/workflows/ci.yml
+  h_e759e7d12241fb 76,96-97,107-122
+docs/BUILD-EVIDENCE.md
+  h_e759e7d12241fb 2376-2394
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "2605c1408dec750c6bd2c61179cc6ca068115e5f",
+  "prompts": {},
+  "humans": {
+    "h_e759e7d12241fb": {
+      "author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
