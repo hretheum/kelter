@@ -1,0 +1,25 @@
+# Butane config for the K12 homelab host (Fedora CoreOS) — the HUMAN-gated
+# deploy from ADR 0014 / docs/packaging.md. Convert with:
+#   podman run --rm -i quay.io/coreos/butane:release --pretty --strict \
+#     < deploy/fcos/k12.bu > deploy/fcos/k12.ign
+# Contains ONLY the public key — nothing secret lives here.
+variant: fcos
+version: 1.5.0
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKr665Yt6K6NrztE3glqYezbtRhFFE8HyhBX80Y2kStg k12-2026-07-16
+storage:
+  files:
+    - path: /etc/hostname
+      mode: 0644
+      contents:
+        inline: k12
+    # Enable lingering for `core` at first boot: rootless Quadlet services
+    # keep running after logout/reboot (equivalent of `loginctl
+    # enable-linger core` — see deploy/README.md).
+    - path: /var/lib/systemd/linger/core
+      mode: 0644
+      contents:
+        inline: ""
