@@ -43,7 +43,17 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: apps/web-ui/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile && pnpm build
+      - run: pnpm install --frozen-lockfile
+        working-directory: apps/web-ui
+      # The vitest suite ran nowhere in CI until 2026-08-03: `pnpm build` only
+      # type-checks and bundles, it never executes a test. Kept ahead of the
+      # build so a failing test fails fast, before the Rust toolchain is even
+      # installed. The `desktop` job deliberately does NOT repeat this — it
+      # builds the web-ui only because crates/api embeds dist/, and the suite is
+      # platform-independent, so running it once here is enough.
+      - run: pnpm test
+        working-directory: apps/web-ui
+      - run: pnpm build
         working-directory: apps/web-ui
       - uses: dtolnay/rust-toolchain@stable
         with:

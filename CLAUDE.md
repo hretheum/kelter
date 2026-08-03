@@ -80,11 +80,12 @@ time since July 19. Full detail in `docs/BUILD-EVIDENCE.md` (entries dated
 2026-08-03). ADR 0031 was also signed off, and `docs/ROADMAP.md` "Where we are"
 was brought current through Phase 22.
 
-**Recommended next step: add vitest to CI, then go back to product work.**
-`ci.yml` runs `pnpm build` for the web-ui but never `pnpm test`, so the vitest
-suite is outside CI. That is a small, well-understood gap — close it and stop
-there. The infrastructure work above had a real payoff, but it has hit
-diminishing returns.
+**vitest is now in CI — done, and that closes the infrastructure work.** The
+`check` job's `pnpm install && pnpm build` was split into install / `pnpm test`
+/ `pnpm build`, test first so a red suite fails before the Rust toolchain is
+installed (11 tests, verified locally; BUILD-EVIDENCE 2026-08-03). That was the
+last small, well-understood gap. **Next step is product work** — the
+infrastructure pass had a real payoff but has hit diminishing returns.
 
 **Deliberately NOT recommended yet: the smoke scripts.** `scripts/smoke-*.sh`
 (wasm sandbox, trust posture, durability) are real end-to-end proofs against a

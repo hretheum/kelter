@@ -2457,3 +2457,31 @@ and 51s vs a full dependency recompile is where the time actually goes.
 **Not verified.** Built natively on arm64 (Apple silicon) to exercise the
 Dockerfile's logic without emulation. CI builds `linux/amd64`; the structure is
 architecture-independent but the amd64 build itself is unobserved here.
+
+## 2026-08-03 — vitest wired into CI
+
+**The gap.** The `check` job ran `pnpm install --frozen-lockfile && pnpm build`
+for the web-ui and nothing else. `pnpm build` is `tsc -b && vite build`, which
+type-checks and bundles but never executes a test, so `apps/web-ui`'s vitest
+suite had no CI coverage at all — it existed only as a command a human might
+remember to run. The suite is small but it is the only automated check on the
+embedded UI's behaviour, as opposed to its types.
+
+**Change.** The compound step is split into three: `pnpm install
+--frozen-lockfile`, then `pnpm test`, then `pnpm build`. Test before build so a
+red suite fails the job in seconds, before `dtolnay/rust-toolchain` and the
+Rust cache are installed. `apps/web-ui/package.json` already defines `test` as
+`vitest run` (non-watch), so no script change was needed.
+
+**Deliberately not repeated in the `desktop` job.** That job also builds the
+web-ui, but only because `crates/api` embeds `dist/`. The vitest suite is
+platform-independent, so running it on both the ubuntu and macos legs would buy
+nothing; `desktop` also `needs: check`, so a red suite already blocks it.
+
+**Verified locally.** `pnpm --dir apps/web-ui test`: **2 files, 11 tests
+passed**, 220ms. `ci.yml` re-parsed with `yaml.safe_load` and the `check` job's
+step list dumped, confirming the three steps land in the intended order and the
+`desktop` job is untouched.
+
+**Not verified here.** The CI run itself. As with the `services:` block above,
+the next push to `main` is its real test.
