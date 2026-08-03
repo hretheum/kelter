@@ -1,0 +1,24 @@
+.github/workflows/ci.yml
+  h_e759e7d12241fb 15-33,54-58
+AGENTS.md
+  h_e759e7d12241fb 43-48
+CLAUDE.md
+  h_e759e7d12241fb 43-48
+crates/pgstore/tests/pg_integration_test.rs
+  h_e759e7d12241fb 16-23,88,117,188,246,278,310
+crates/pgstore/tests/pg_vector_test.rs
+  h_e759e7d12241fb 64
+docs/BUILD-EVIDENCE.md
+  h_e759e7d12241fb 2272-2311
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "9f4f432cd5d6867f925a35bcc6d2f76945f1c42c",
+  "prompts": {},
+  "humans": {
+    "h_e759e7d12241fb": {
+      "author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
