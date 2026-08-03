@@ -39,7 +39,7 @@ use pgvector::Vector;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
-use kernel_core::{LearnedFact, LearnedStore, StoreError};
+use kernel_core::{LearnedFact, LearnedPlan, LearnedStore, StoreError};
 
 /// A fixed advisory-lock key that serializes schema application across
 /// concurrently-connecting instances. `CREATE TABLE IF NOT EXISTS` is NOT
@@ -86,6 +86,19 @@ CREATE TABLE IF NOT EXISTS learned_facts (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS learned_batch ON learned_facts(batch_id);
+
+-- Plan distillation (the second self-learning slice): a distinct reversible
+-- layer for distilled PLANS, mirroring `learned_facts` exactly so `forget`/
+-- `forget_batch` reverse both artifact kinds with one path.
+CREATE TABLE IF NOT EXISTS learned_plans (
+    id           UUID PRIMARY KEY,
+    task_context TEXT NOT NULL,
+    batch_id     UUID NOT NULL,
+    data         TEXT NOT NULL,
+    embedding    vector,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS learned_plan_batch ON learned_plans(batch_id);
 ";
 
 /// A shared handle to one Postgres database: a connection pool plus the
@@ -334,11 +347,12 @@ async fn load_episodes(
     Ok(out)
 }
 
-// ---- learned facts (governed self-learning, ADR 0016) ---------------------
+// ---- learned facts + plans (governed self-learning, ADR 0016 / plan
+// distillation) ------------------------------------------------------------
 
-/// `LearnedStore` on Postgres: the distinct, reversible learned-fact layer.
-/// A row `DELETE` on `forget` is complete — ranking is recomputed per query,
-/// so nothing lingers.
+/// `LearnedStore` on Postgres: the distinct, reversible learned layer — facts
+/// AND plans. A row `DELETE` on `forget`/`forget_batch` is complete — ranking
+/// is recomputed per query, so nothing lingers.
 pub struct PgLearnedStore {
     store: PgStore,
 }
@@ -353,6 +367,23 @@ impl PgLearnedStore {
         let rows = client
             .query(
                 "SELECT data FROM learned_facts ORDER BY created_at DESC, id ASC",
+                &[],
+            )
+            .await
+            .map_err(store_err)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let data: String = row.get("data");
+            out.push(serde_json::from_str(&data).map_err(store_err)?);
+        }
+        Ok(out)
+    }
+
+    async fn load_all_plans(&self) -> Result<Vec<LearnedPlan>, StoreError> {
+        let client = self.store.client().await.map_err(store_err)?;
+        let rows = client
+            .query(
+                "SELECT data FROM learned_plans ORDER BY created_at DESC, id ASC",
                 &[],
             )
             .await
@@ -424,24 +455,95 @@ impl LearnedStore for PgLearnedStore {
         self.load_all().await
     }
 
+    async fn put_plan(&self, plan: LearnedPlan) -> Result<(), StoreError> {
+        let data = serde_json::to_string(&plan).map_err(store_err)?;
+        let embedding = self.store.embed_one(&plan.task_context).await;
+        let client = self.store.client().await.map_err(store_err)?;
+        client
+            .execute(
+                "INSERT INTO learned_plans (id, task_context, batch_id, data, embedding)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (id) DO UPDATE SET data = $4, embedding = $5",
+                &[
+                    &plan.id,
+                    &plan.task_context,
+                    &plan.provenance.batch_id,
+                    &data,
+                    &embedding,
+                ],
+            )
+            .await
+            .map_err(store_err)?;
+        Ok(())
+    }
+
+    async fn retrieve_plans(
+        &self,
+        task: &str,
+        limit: usize,
+    ) -> Result<Vec<LearnedPlan>, StoreError> {
+        let client = self.store.client().await.map_err(store_err)?;
+        if let Some(qvec) = self.store.embed_one(task).await {
+            let rows = client
+                .query(
+                    "SELECT data FROM learned_plans
+                     WHERE embedding IS NOT NULL
+                     ORDER BY embedding <=> $1
+                     LIMIT $2",
+                    &[&qvec, &(limit as i64)],
+                )
+                .await
+                .map_err(store_err)?;
+            let mut out = Vec::with_capacity(rows.len());
+            for row in rows {
+                let data: String = row.get("data");
+                out.push(serde_json::from_str(&data).map_err(store_err)?);
+            }
+            return Ok(out);
+        }
+
+        let plans = self.load_all_plans().await?;
+        if plans.is_empty() {
+            return Ok(Vec::new());
+        }
+        let docs: Vec<String> = plans.iter().map(|p| p.task_context.clone()).collect();
+        let ranked = retrieval::rank_bm25(task, &docs, limit);
+        Ok(ranked.into_iter().map(|(i, _)| plans[i].clone()).collect())
+    }
+
+    async fn list_plans(&self) -> Result<Vec<LearnedPlan>, StoreError> {
+        self.load_all_plans().await
+    }
+
     async fn forget(&self, id: Uuid) -> Result<bool, StoreError> {
         let client = self.store.client().await.map_err(store_err)?;
-        let n = client
+        let facts_removed = client
             .execute("DELETE FROM learned_facts WHERE id = $1", &[&id])
             .await
             .map_err(store_err)?;
-        Ok(n > 0)
+        let plans_removed = client
+            .execute("DELETE FROM learned_plans WHERE id = $1", &[&id])
+            .await
+            .map_err(store_err)?;
+        Ok(facts_removed > 0 || plans_removed > 0)
     }
 
     async fn forget_batch(&self, batch_id: Uuid) -> Result<u64, StoreError> {
         let client = self.store.client().await.map_err(store_err)?;
-        let n = client
+        let facts_removed = client
             .execute(
                 "DELETE FROM learned_facts WHERE batch_id = $1",
                 &[&batch_id],
             )
             .await
             .map_err(store_err)?;
-        Ok(n)
+        let plans_removed = client
+            .execute(
+                "DELETE FROM learned_plans WHERE batch_id = $1",
+                &[&batch_id],
+            )
+            .await
+            .map_err(store_err)?;
+        Ok(facts_removed + plans_removed)
     }
 }

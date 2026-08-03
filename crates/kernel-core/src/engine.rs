@@ -1052,29 +1052,77 @@ impl Kernel {
         use crate::learned::{LearnedFact, LearnedProvenance};
 
         let learned = self.learned_store()?;
-        // Don't re-distil a run we already learned from.
+        // Don't re-distil a run we already learned from — either artifact kind.
         let already: std::collections::HashSet<Uuid> = learned
             .list()
             .await?
             .into_iter()
             .flat_map(|f| f.provenance.source_run_ids)
+            .chain(
+                learned
+                    .list_plans()
+                    .await?
+                    .into_iter()
+                    .flat_map(|p| p.provenance.source_run_ids),
+            )
             .collect();
 
         let batch_id = Uuid::new_v4();
         let now = now_secs();
         let mut source_run_ids = Vec::new();
-        let mut created = 0usize;
+        let mut facts_created = 0usize;
+        let mut plans_created = 0usize;
 
-        // Newest runs first, cap at `limit` new facts.
+        // Newest runs first, cap at `limit` new artifacts.
         let mut runs = self.store.list().await?;
         runs.reverse();
         for run in runs {
-            if created >= limit {
+            if facts_created + plans_created >= limit {
                 break;
             }
             if run.status != RunStatus::Completed || already.contains(&run.id) {
                 continue;
             }
+            let provenance = LearnedProvenance {
+                source_run_ids: vec![run.id],
+                distilled_at: now,
+                model: run.policy.clone(),
+                level: crate::learned::LEARNED_LEVEL.to_string(),
+                human_validated: false,
+                batch_id,
+            };
+
+            // A plan-mode run distils to its PLAN, not to prose — structure a
+            // later run can re-validate rather than only read. The LAST
+            // journaled generation is the source: it is the one that carried
+            // the run to completion, while earlier ones failed and triggered a
+            // re-plan (ADR 0030), so learning from those would be learning
+            // failure. One run yields one artifact, never both.
+            let final_plan = self
+                .store
+                .journal(run.id)
+                .await?
+                .into_iter()
+                .filter_map(|e| match e {
+                    JournalEntry::PlanProposed { plan } => Some(plan),
+                    _ => None,
+                })
+                .next_back();
+
+            if let Some(plan) = final_plan {
+                learned
+                    .put_plan(crate::learned::LearnedPlan {
+                        id: Uuid::new_v4(),
+                        task_context: run.task.clone(),
+                        plan,
+                        provenance,
+                    })
+                    .await?;
+                source_run_ids.push(run.id);
+                plans_created += 1;
+                continue;
+            }
+
             let actions: Vec<String> = run
                 .steps
                 .iter()
@@ -1094,28 +1142,23 @@ impl Kernel {
                     id: Uuid::new_v4(),
                     fact,
                     task_context: run.task.clone(),
-                    provenance: LearnedProvenance {
-                        source_run_ids: vec![run.id],
-                        distilled_at: now,
-                        model: run.policy.clone(),
-                        level: crate::learned::LEARNED_LEVEL.to_string(),
-                        human_validated: false,
-                        batch_id,
-                    },
+                    provenance,
                 })
                 .await?;
             source_run_ids.push(run.id);
-            created += 1;
+            facts_created += 1;
         }
 
         tracing::info!(
             %batch_id,
-            facts_created = created,
-            "distill: extracted reusable facts into the learned layer (ai_extracted, human_validated=false)"
+            facts_created,
+            plans_created,
+            "distill: extracted reusable facts and plans into the learned layer (ai_extracted, human_validated=false)"
         );
         Ok(crate::learned::DistillReport {
             batch_id,
-            facts_created: created,
+            facts_created,
+            plans_created,
             source_run_ids,
         })
     }
@@ -1123,6 +1166,14 @@ impl Kernel {
     /// All learned facts, for inspection (what the system learned + why).
     pub async fn list_learned(&self) -> Result<Vec<crate::learned::LearnedFact>, KernelError> {
         Ok(self.learned_store()?.list().await?)
+    }
+
+    /// All learned plans, same inspection contract as the facts above — and the
+    /// only way to obtain a plan's id, which `forget_learned` needs.
+    pub async fn list_learned_plans(
+        &self,
+    ) -> Result<Vec<crate::learned::LearnedPlan>, KernelError> {
+        Ok(self.learned_store()?.list_plans().await?)
     }
 
     /// Completely forget one learned fact — the next run will not see it.
@@ -3273,6 +3324,52 @@ impl Kernel {
             parameters: crate::plan::review_schema(),
         });
 
+        // Retrieved context — which plan mode has never had. This branch
+        // returns before step mode's memory block, so plan-mode runs have been
+        // composing plans against an empty `PolicyContext.memory`. Same
+        // sources and the same `[learned]` tagging as step mode, and the same
+        // degradation: a failing backend costs context quality, never run
+        // integrity.
+        let mut memory_context: Vec<String> = match self.memory.retrieve(&run.task, 3).await {
+            Ok(hits) => hits.into_iter().map(|h| h.summary).collect(),
+            Err(e) => {
+                tracing::warn!(%run_id, "memory retrieve failed: {e}");
+                Vec::new()
+            }
+        };
+        if let Some(learned) = &self.learned {
+            match learned.retrieve(&run.task, 3).await {
+                Ok(facts) => {
+                    memory_context
+                        .extend(facts.iter().map(crate::learned::LearnedFact::as_context));
+                }
+                Err(e) => tracing::warn!(%run_id, "learned retrieve failed: {e}"),
+            }
+        }
+
+        // Candidate learned plans (ADR 0016's deferred second slice). Each is
+        // re-validated against the LIVE action space here and only survivors
+        // are offered, so a plan naming a tool the registry no longer carries
+        // simply does not exist for the model. That is the structural analogue
+        // of forgetting: no expiry field, no staleness policy — the action
+        // space itself does the pruning.
+        let candidates: Vec<crate::learned::LearnedPlan> = match &self.learned {
+            Some(learned) => match learned.retrieve_plans(&run.task, 3).await {
+                Ok(found) => found
+                    .into_iter()
+                    .filter(|c| {
+                        crate::plan::validate(c.plan.clone(), &validation_schema, is_a2a_action)
+                            .is_ok()
+                    })
+                    .collect(),
+                Err(e) => {
+                    tracing::warn!(%run_id, "learned plan retrieve failed: {e}");
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        };
+
         'generations: loop {
             // Obtain this generation's plan: replay the journaled active plan,
             // or ask the model ONCE (offering only `propose_plan`,
@@ -3295,60 +3392,146 @@ impl Kernel {
                     (journaled.clone(), false)
                 }
                 _ => {
-                    let propose_schema = ActionSchema {
-                        actions: vec![ActionSpec {
+                    // Adoption is offered on the FIRST proposal only. A plan
+                    // that just failed must never return as a candidate — that
+                    // is a direct route to a loop — and confining the offer to
+                    // generation zero leaves the ADR 0030 re-plan budget
+                    // untouched.
+                    let mut offer_adoption = replan_guidance.is_none() && !candidates.is_empty();
+                    loop {
+                        let mut actions = vec![ActionSpec {
                             name: crate::plan::PROPOSE_PLAN_ACTION.into(),
                             description:
                                 "Propose a plan: a DAG of typed nodes (tool / a2a / review) \
                                       with dependencies. Keep it minimal and correct."
                                     .into(),
                             parameters: crate::plan::plan_schema(),
-                        }],
-                    };
-                    let base_rules = format!(
-                        "Available tool/a2a actions: [{}]. Rules: each node needs a unique `id` \
+                        }];
+                        if offer_adoption {
+                            actions.push(ActionSpec {
+                                name: crate::plan::ADOPT_PLAN_ACTION.into(),
+                                description: "Adopt one of the learned plans listed in the \
+                                     guidance, by its id, instead of composing a new one."
+                                    .into(),
+                                parameters: crate::plan::adopt_schema(),
+                            });
+                        }
+                        let propose_schema = ActionSchema { actions };
+                        let base_rules = format!(
+                            "Available tool/a2a actions: [{}]. Rules: each node needs a unique `id` \
                      (choose short ids like n1, n2 — NOT the action name); a node's `deps` \
                      must be [] or list OTHER nodes' ids — a node must never depend on \
                      itself or on its own action; a `tool`/`a2a` node needs `action` + \
                      `arguments`; a `review` node needs no action. The simplest valid plan \
                      is one tool node with deps [].",
-                        validation_schema
-                            .actions
-                            .iter()
-                            .map(|a| a.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                    let guidance = match &replan_guidance {
-                        Some(failure_ctx) => format!("{base_rules}\n{failure_ctx}"),
-                        None => base_rules,
-                    };
-                    let context = PolicyContext {
-                        task: run.task.clone(),
-                        steps: Vec::new(),
-                        memory: Vec::new(),
-                        last_error: replan_guidance
-                            .as_ref()
-                            .map(|_| "previous plan failed — a revised plan was requested".into()),
-                        latitude,
-                        guidance: Some(guidance),
-                        active_skills: run.active_skills.clone(),
-                    };
-                    let proposal = self
-                        .oracle
-                        .propose(&context, &propose_schema)
-                        .await
-                        .map_err(|e| ExecutionError::Tool(format!("plan proposal failed: {e}")))?;
-                    if let Some(u) = proposal.usage {
-                        run.usage.add(&u);
+                            validation_schema
+                                .actions
+                                .iter()
+                                .map(|a| a.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                        // The candidates' CONTENTS reach the prompt, not just
+                        // their ids: the model decides seeing what it would
+                        // adopt, rather than blind on an opaque handle.
+                        let candidate_rules = if offer_adoption {
+                            let listed = candidates
+                                .iter()
+                                .map(|c| {
+                                    let nodes = c
+                                        .plan
+                                        .nodes
+                                        .iter()
+                                        .map(|n| match &n.action {
+                                            Some(a) => format!("{}={a}", n.id),
+                                            None => format!("{}=review", n.id),
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join(", ");
+                                    format!(
+                                        "- id {} [learned, lower-trust], distilled from a task \
+                                         like \"{}\": [{nodes}]",
+                                        c.id, c.task_context
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            format!(
+                                "\nLearned plans that still fit this action space — adopt one with \
+                                 `{}` if it suits the task, otherwise propose your own:\n{listed}",
+                                crate::plan::ADOPT_PLAN_ACTION
+                            )
+                        } else {
+                            String::new()
+                        };
+                        let guidance = match &replan_guidance {
+                            Some(failure_ctx) => {
+                                format!("{base_rules}{candidate_rules}\n{failure_ctx}")
+                            }
+                            None => format!("{base_rules}{candidate_rules}"),
+                        };
+                        let context = PolicyContext {
+                            task: run.task.clone(),
+                            steps: Vec::new(),
+                            memory: memory_context.clone(),
+                            last_error: replan_guidance.as_ref().map(|_| {
+                                "previous plan failed — a revised plan was requested".into()
+                            }),
+                            latitude,
+                            guidance: Some(guidance),
+                            active_skills: run.active_skills.clone(),
+                        };
+                        let proposal = self
+                            .oracle
+                            .propose(&context, &propose_schema)
+                            .await
+                            .map_err(|e| {
+                                ExecutionError::Tool(format!("plan proposal failed: {e}"))
+                            })?;
+                        if let Some(u) = proposal.usage {
+                            run.usage.add(&u);
+                        }
+                        let validated = propose_schema.validate(proposal.action).map_err(|e| {
+                            ExecutionError::Tool(format!("proposed plan is not schema-valid: {e}"))
+                        })?;
+
+                        if validated.action() == crate::plan::ADOPT_PLAN_ACTION {
+                            let requested = validated.arguments()["plan_id"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string();
+                            match candidates.iter().find(|c| c.id.to_string() == requested) {
+                                Some(chosen) => {
+                                    tracing::info!(
+                                        %run_id, plan_id = %chosen.id,
+                                        "plan: adopted a learned plan — validated below like any other"
+                                    );
+                                    break (chosen.plan.clone(), true);
+                                }
+                                None => {
+                                    // A hallucinated id, or one forgotten
+                                    // between retrieval and now. Ask once more
+                                    // WITHOUT the adoption action: the retry is
+                                    // bounded by the schema itself rather than
+                                    // by a counter, and consumes no re-plan
+                                    // budget. Failing the whole run over a bad
+                                    // id would be disproportionate.
+                                    tracing::warn!(
+                                        %run_id, requested,
+                                        "plan: adoption named an unknown plan id — re-asking for a fresh plan"
+                                    );
+                                    offer_adoption = false;
+                                    continue;
+                                }
+                            }
+                        }
+
+                        let plan: crate::plan::Plan =
+                            serde_json::from_value(validated.arguments().clone()).map_err(|e| {
+                                ExecutionError::Tool(format!("malformed plan: {e}"))
+                            })?;
+                        break (plan, true);
                     }
-                    let validated = propose_schema.validate(proposal.action).map_err(|e| {
-                        ExecutionError::Tool(format!("proposed plan is not schema-valid: {e}"))
-                    })?;
-                    let plan: crate::plan::Plan =
-                        serde_json::from_value(validated.arguments().clone())
-                            .map_err(|e| ExecutionError::Tool(format!("malformed plan: {e}")))?;
-                    (plan, true)
                 }
             };
 

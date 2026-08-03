@@ -17,8 +17,9 @@ use serde_json::json;
 
 use kernel_core::{
     ActionSchema, ActionSource, ActionSpec, ExecutionContext, ExecutionError, InMemoryLearnedStore,
-    Kernel, KernelConfig, Latitude, LearnedFact, LearnedProvenance, LearnedStore, PolicyContext,
-    PolicyError, PolicyOracle, Proposal, ProposedAction, RunStatus, ValidatedAction, LEARNED_LEVEL,
+    Kernel, KernelConfig, Latitude, LearnedFact, LearnedPlan, LearnedProvenance, LearnedStore,
+    NodeType, Plan, PlanNode, PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction,
+    RunStatus, ValidatedAction, LEARNED_LEVEL,
 };
 use memory::{InMemoryProvider, MemoryProvider};
 use uuid::Uuid;
@@ -123,6 +124,43 @@ fn learned_fact(fact: &str, task: &str) -> LearnedFact {
             batch_id: Uuid::new_v4(),
         },
     }
+}
+
+fn learned_plan_with_batch(task: &str, batch_id: Uuid) -> LearnedPlan {
+    LearnedPlan {
+        id: Uuid::new_v4(),
+        task_context: task.into(),
+        plan: Plan {
+            nodes: vec![
+                PlanNode {
+                    id: "a".into(),
+                    node_type: NodeType::Tool,
+                    action: Some("echo".into()),
+                    arguments: json!({"message": "hi"}),
+                    deps: Vec::new(),
+                },
+                PlanNode {
+                    id: "b".into(),
+                    node_type: NodeType::Review,
+                    action: None,
+                    arguments: serde_json::Value::Null,
+                    deps: vec!["a".into()],
+                },
+            ],
+        },
+        provenance: LearnedProvenance {
+            source_run_ids: vec![Uuid::new_v4()],
+            distilled_at: 0,
+            model: "mock".into(),
+            level: LEARNED_LEVEL.into(),
+            human_validated: false,
+            batch_id,
+        },
+    }
+}
+
+fn learned_plan(task: &str) -> LearnedPlan {
+    learned_plan_with_batch(task, Uuid::new_v4())
 }
 
 #[tokio::test]
@@ -258,4 +296,137 @@ async fn distillation_tags_provenance_and_forget_batch_reverses_it() {
     let removed = kernel.forget_learned_batch(report.batch_id).await.unwrap();
     assert_eq!(removed, 1);
     assert!(kernel.list_learned().await.unwrap().is_empty());
+}
+
+// ---- plan distillation (second self-learning slice): store-layer tests ----
+
+fn learned_fact_with_batch(fact: &str, task: &str, batch_id: Uuid) -> LearnedFact {
+    LearnedFact {
+        id: Uuid::new_v4(),
+        fact: fact.into(),
+        task_context: task.into(),
+        provenance: LearnedProvenance {
+            source_run_ids: vec![Uuid::new_v4()],
+            distilled_at: 0,
+            model: "mock".into(),
+            level: LEARNED_LEVEL.into(),
+            human_validated: false,
+            batch_id,
+        },
+    }
+}
+
+/// Load-bearing: one distillation batch can contain BOTH a fact and a plan,
+/// and `forget_batch` is the ONE reversal path for the whole batch — it must
+/// remove both, never leaving one artifact kind behind as residue.
+#[tokio::test]
+async fn forget_batch_removes_facts_and_plans_from_the_same_batch() {
+    let learned = InMemoryLearnedStore::new();
+    let batch = Uuid::new_v4();
+    learned
+        .put(learned_fact_with_batch(
+            "a fact in the batch",
+            "task a",
+            batch,
+        ))
+        .await
+        .unwrap();
+    learned
+        .put_plan(learned_plan_with_batch("a plan in the batch", batch))
+        .await
+        .unwrap();
+    // A fact from an unrelated batch must survive.
+    let other_batch = Uuid::new_v4();
+    learned
+        .put(learned_fact_with_batch(
+            "unrelated fact",
+            "task b",
+            other_batch,
+        ))
+        .await
+        .unwrap();
+
+    let removed = learned.forget_batch(batch).await.unwrap();
+    assert_eq!(removed, 2, "one fact and one plan from the same batch");
+    assert!(learned
+        .list()
+        .await
+        .unwrap()
+        .iter()
+        .all(|f| f.provenance.batch_id != batch));
+    assert!(learned.list_plans().await.unwrap().is_empty());
+    assert_eq!(learned.list().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn forget_on_a_plan_id_works_and_reports_whether_it_existed() {
+    let learned = InMemoryLearnedStore::new();
+    let plan = learned_plan("some recurring task");
+    let id = plan.id;
+    learned.put_plan(plan).await.unwrap();
+
+    assert!(learned.forget(id).await.unwrap());
+    assert!(learned.list_plans().await.unwrap().is_empty());
+    // Forgetting again (or an id that never existed) reports false, never an error.
+    assert!(!learned.forget(id).await.unwrap());
+    assert!(!learned.forget(Uuid::new_v4()).await.unwrap());
+}
+
+#[tokio::test]
+async fn retrieve_plans_ranks_by_similarity_and_respects_limit() {
+    let learned = InMemoryLearnedStore::new();
+    learned
+        .put_plan(learned_plan("extract links from a webpage"))
+        .await
+        .unwrap();
+    learned
+        .put_plan(learned_plan("summarise the quarterly sales report"))
+        .await
+        .unwrap();
+    learned
+        .put_plan(learned_plan("draft a release changelog"))
+        .await
+        .unwrap();
+
+    let hits = learned
+        .retrieve_plans("webpage links extraction", 5)
+        .await
+        .unwrap();
+    assert_eq!(hits[0].task_context, "extract links from a webpage");
+
+    assert_eq!(
+        learned
+            .retrieve_plans("webpage links extraction", 1)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "limit must be respected even with more candidates available"
+    );
+}
+
+/// Round-trip: a multi-node plan with deps and non-empty arguments survives
+/// put -> list -> retrieve unchanged.
+#[tokio::test]
+async fn learned_plan_round_trips_through_put_list_retrieve() {
+    let learned = InMemoryLearnedStore::new();
+    let plan = learned_plan("assemble the release");
+    let id = plan.id;
+    learned.put_plan(plan.clone()).await.unwrap();
+
+    let listed = learned.list_plans().await.unwrap();
+    let got = listed.iter().find(|p| p.id == id).unwrap();
+    assert_eq!(got.plan.nodes.len(), plan.plan.nodes.len());
+    assert_eq!(got.plan.nodes[0].action, plan.plan.nodes[0].action);
+    assert_eq!(got.plan.nodes[0].arguments, plan.plan.nodes[0].arguments);
+    assert_eq!(got.plan.nodes[1].deps, plan.plan.nodes[1].deps);
+    assert_eq!(got.provenance, plan.provenance);
+
+    let retrieved = learned
+        .retrieve_plans("assemble the release", 5)
+        .await
+        .unwrap();
+    let got = retrieved.iter().find(|p| p.id == id).unwrap();
+    assert_eq!(got.plan.nodes.len(), plan.plan.nodes.len());
+    assert_eq!(got.plan.nodes[1].deps, plan.plan.nodes[1].deps);
 }

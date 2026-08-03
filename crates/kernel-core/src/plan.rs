@@ -22,6 +22,12 @@ use crate::action::ActionSchema;
 pub const REVIEW_ACTION: &str = "review_verdict";
 /// The action the model proposes to enter plan mode.
 pub const PROPOSE_PLAN_ACTION: &str = "propose_plan";
+/// The action the model proposes to adopt a distilled plan instead of
+/// composing one (the second self-learning slice). Offered only alongside
+/// `propose_plan`, and only when a learned plan still validates against the
+/// live action space — adopting is a *choice the model makes*, journaled like
+/// any other, never a silent substitution.
+pub const ADOPT_PLAN_ACTION: &str = "adopt_learned_plan";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -261,6 +267,21 @@ pub fn plan_schema() -> serde_json::Value {
             }
         },
         "required": ["nodes"],
+        "additionalProperties": false
+    })
+}
+
+/// JSON Schema for the plan-adoption action's arguments. Deliberately one
+/// opaque string: the plan itself is never re-emitted by the model, only
+/// referenced, so a model that adopts cannot smuggle edits past the
+/// re-validation the kernel performs on the stored plan.
+pub fn adopt_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "plan_id": {"type": "string"}
+        },
+        "required": ["plan_id"],
         "additionalProperties": false
     })
 }

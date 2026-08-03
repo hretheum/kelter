@@ -14,8 +14,9 @@
 //!    no longer sees it.
 //!
 //! `#[ignore]`d by default, so the plain `cargo test` stays hermetic AND the
-//! skip is VISIBLE as `7 ignored` rather than a green `ok` that touched
-//! nothing. To run them: start a `pgvector/pgvector:pg16` container, set
+//! skip is VISIBLE as `9 ignored` (across this file and `pg_vector_test.rs`)
+//! rather than a green `ok` that touched nothing. To run them: start a
+//! `pgvector/pgvector:pg16` container, set
 //! `KELTER_TEST_POSTGRES_URL`, and pass `-- --include-ignored`. CI does exactly
 //! this via a `services:` block (added 2026-08-03 — before that these tests had
 //! never run in CI at all, despite this comment once claiming they did). The
@@ -23,7 +24,10 @@
 //! no init step is needed. The tests use a UNIQUE table-namespace per run via
 //! fresh UUIDs, and clean up the rows they create.
 
-use kernel_core::{LearnedFact, LearnedProvenance, LearnedStore, LEARNED_LEVEL};
+use kernel_core::{
+    LearnedFact, LearnedPlan, LearnedProvenance, LearnedStore, NodeType, Plan, PlanNode,
+    LEARNED_LEVEL,
+};
 use memory::{Episode, EpisodeOutcome, MemoryProvider, Provenance};
 use pgstore::{PgLearnedStore, PgMemoryProvider, PgStore};
 use uuid::Uuid;
@@ -71,6 +75,39 @@ fn fact(text: &str, task_context: &str, batch_id: Uuid, run_id: Uuid) -> Learned
         id: Uuid::new_v4(),
         fact: text.to_string(),
         task_context: task_context.to_string(),
+        provenance: LearnedProvenance {
+            source_run_ids: vec![run_id],
+            distilled_at: 1_700_000_000,
+            model: "local:test".into(),
+            level: LEARNED_LEVEL.into(),
+            human_validated: false,
+            batch_id,
+        },
+    }
+}
+
+fn plan(task_context: &str, batch_id: Uuid, run_id: Uuid) -> LearnedPlan {
+    LearnedPlan {
+        id: Uuid::new_v4(),
+        task_context: task_context.to_string(),
+        plan: Plan {
+            nodes: vec![
+                PlanNode {
+                    id: "a".into(),
+                    node_type: NodeType::Tool,
+                    action: Some("read_source".into()),
+                    arguments: serde_json::json!({"path": "report.csv"}),
+                    deps: Vec::new(),
+                },
+                PlanNode {
+                    id: "b".into(),
+                    node_type: NodeType::Review,
+                    action: None,
+                    arguments: serde_json::Value::Null,
+                    deps: vec!["a".into()],
+                },
+            ],
+        },
         provenance: LearnedProvenance {
             source_run_ids: vec![run_id],
             distilled_at: 1_700_000_000,
@@ -344,4 +381,107 @@ async fn instance_a_distils_b_sees_then_a_forgets_b_stops_seeing() {
         "A's forget propagates to B (same store)"
     );
     assert!(!b.list().await.unwrap().iter().any(|x| x.id == f.id));
+}
+
+// ---- plan distillation (second self-learning slice) -----------------------
+
+/// Governance re-proof for `LearnedPlan` on the shared Postgres backend,
+/// mirroring `provenance_survives_and_forget_leaves_zero_residue` above: the
+/// full DAG (nodes, deps, arguments) round-trips intact, and `forget` leaves
+/// zero residue in both `retrieve_plans` and `list_plans`.
+#[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
+async fn learned_plan_round_trips_and_forget_leaves_zero_residue_on_postgres() {
+    let _ = require_pg!();
+    let learned = PgLearnedStore::new(store().await);
+
+    let batch = Uuid::new_v4();
+    let run = Uuid::new_v4();
+    let p = plan(
+        &format!("distill a reusable release plan {batch}"),
+        batch,
+        run,
+    );
+    learned.put_plan(p.clone()).await.unwrap();
+
+    // The full DAG — nodes, deps, arguments — round-trips intact.
+    let got = learned
+        .list_plans()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|x| x.id == p.id)
+        .expect("the plan persisted");
+    assert_eq!(got.plan.nodes.len(), p.plan.nodes.len());
+    assert_eq!(got.plan.nodes[0].arguments, p.plan.nodes[0].arguments);
+    assert_eq!(got.plan.nodes[1].deps, p.plan.nodes[1].deps);
+    assert_eq!(got.provenance.level, LEARNED_LEVEL);
+    assert!(!got.provenance.human_validated);
+    assert_eq!(got.provenance.source_run_ids, vec![run]);
+
+    // Retrievable as a candidate by task similarity.
+    let hits = learned
+        .retrieve_plans(&format!("distill a reusable release plan {batch}"), 5)
+        .await
+        .unwrap();
+    assert!(hits.iter().any(|h| h.id == p.id));
+
+    // forget → COMPLETE reversal: gone from BOTH retrieve_plans and
+    // list_plans, zero residue.
+    assert!(learned.forget(p.id).await.unwrap());
+    assert!(
+        !learned
+            .list_plans()
+            .await
+            .unwrap()
+            .iter()
+            .any(|x| x.id == p.id),
+        "forgotten plan must be gone from list_plans — zero residue"
+    );
+    let after = learned
+        .retrieve_plans(&format!("distill a reusable release plan {batch}"), 5)
+        .await
+        .unwrap();
+    assert!(!after.iter().any(|h| h.id == p.id));
+}
+
+/// The load-bearing invariant of this phase: a single distillation batch can
+/// contain BOTH a fact and a plan, and `forget_batch` must reverse both in one
+/// call — never leaving one artifact kind behind as residue.
+#[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
+async fn forget_batch_removes_facts_and_plans_together_on_postgres() {
+    let _ = require_pg!();
+    let learned = PgLearnedStore::new(store().await);
+    let batch = Uuid::new_v4();
+    let run = Uuid::new_v4();
+
+    learned
+        .put(fact(
+            "a fact from this batch",
+            &format!("ctx {batch}"),
+            batch,
+            run,
+        ))
+        .await
+        .unwrap();
+    learned
+        .put_plan(plan(&format!("ctx {batch}"), batch, run))
+        .await
+        .unwrap();
+
+    let removed = learned.forget_batch(batch).await.unwrap();
+    assert_eq!(removed, 2, "one fact and one plan from the same batch");
+    assert!(learned
+        .list()
+        .await
+        .unwrap()
+        .iter()
+        .all(|f| f.provenance.batch_id != batch));
+    assert!(learned
+        .list_plans()
+        .await
+        .unwrap()
+        .iter()
+        .all(|p| p.provenance.batch_id != batch));
 }

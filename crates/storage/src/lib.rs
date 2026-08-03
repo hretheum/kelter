@@ -65,6 +65,17 @@ const MIGRATIONS: &[&str] = &[
          created_at INTEGER NOT NULL
      );
      CREATE INDEX learned_batch ON learned_facts(batch_id);",
+    // v3 — plan distillation (the second self-learning slice): a distinct
+    // reversible layer for distilled PLANS, mirroring `learned_facts` exactly
+    // so `forget`/`forget_batch` reverse both artifact kinds with one path.
+    "CREATE TABLE learned_plans (
+         id TEXT PRIMARY KEY,
+         task_context TEXT NOT NULL,
+         batch_id TEXT NOT NULL,
+         data TEXT NOT NULL,
+         created_at INTEGER NOT NULL
+     );
+     CREATE INDEX learned_plan_batch ON learned_plans(batch_id);",
 ];
 
 /// A shared handle to one SQLite database file.
@@ -405,11 +416,11 @@ impl MemoryProvider for SqliteMemoryProvider {
 
 // ---- LearnedStore (governed self-learning, ADR 0016) ----------------------
 
-use kernel_core::{LearnedFact, LearnedStore};
+use kernel_core::{LearnedFact, LearnedPlan, LearnedStore};
 
-/// SQLite-backed learned-fact layer. A DISTINCT table from `episodes`; ranking
-/// reuses the shared BM25 contract, recomputed per retrieval, so `forget`
-/// (a row delete) leaves zero residue.
+/// SQLite-backed learned layer: facts AND plans. Each is a DISTINCT table
+/// from `episodes`; ranking reuses the shared BM25 contract, recomputed per
+/// retrieval, so `forget` (a row delete) leaves zero residue.
 pub struct SqliteLearnedStore {
     db: Db,
 }
@@ -423,6 +434,22 @@ impl SqliteLearnedStore {
         let conn = self.db.conn.lock().await;
         let mut stmt = conn
             .prepare("SELECT data FROM learned_facts ORDER BY created_at DESC, id ASC")
+            .map_err(backend_err)?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(backend_err)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let raw = row.map_err(backend_err)?;
+            out.push(serde_json::from_str(&raw).map_err(backend_err)?);
+        }
+        Ok(out)
+    }
+
+    async fn load_all_plans(&self) -> Result<Vec<LearnedPlan>, StoreError> {
+        let conn = self.db.conn.lock().await;
+        let mut stmt = conn
+            .prepare("SELECT data FROM learned_plans ORDER BY created_at DESC, id ASC")
             .map_err(backend_err)?;
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(0))
@@ -472,26 +499,76 @@ impl LearnedStore for SqliteLearnedStore {
         self.load_all().await
     }
 
+    async fn put_plan(&self, plan: LearnedPlan) -> Result<(), StoreError> {
+        let conn = self.db.conn.lock().await;
+        let data = serde_json::to_string(&plan).map_err(backend_err)?;
+        conn.execute(
+            "INSERT INTO learned_plans (id, task_context, batch_id, data, created_at)
+             VALUES (?1, ?2, ?3, ?4, strftime('%s','now'))
+             ON CONFLICT(id) DO UPDATE SET data = ?4",
+            params![
+                plan.id.to_string(),
+                plan.task_context,
+                plan.provenance.batch_id.to_string(),
+                data
+            ],
+        )
+        .map_err(backend_err)?;
+        Ok(())
+    }
+
+    async fn retrieve_plans(
+        &self,
+        task: &str,
+        limit: usize,
+    ) -> Result<Vec<LearnedPlan>, StoreError> {
+        let plans = self.load_all_plans().await?;
+        if plans.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Rank fresh over task_context — no persistent index, so a forgotten
+        // plan leaves nothing behind.
+        let docs: Vec<String> = plans.iter().map(|p| p.task_context.clone()).collect();
+        let ranked = memory::retrieval::rank_bm25(task, &docs, limit);
+        Ok(ranked.into_iter().map(|(i, _)| plans[i].clone()).collect())
+    }
+
+    async fn list_plans(&self) -> Result<Vec<LearnedPlan>, StoreError> {
+        self.load_all_plans().await
+    }
+
     async fn forget(&self, id: uuid::Uuid) -> Result<bool, StoreError> {
         let conn = self.db.conn.lock().await;
-        let n = conn
+        let facts_removed = conn
             .execute(
                 "DELETE FROM learned_facts WHERE id = ?1",
                 params![id.to_string()],
             )
             .map_err(backend_err)?;
-        Ok(n > 0)
+        let plans_removed = conn
+            .execute(
+                "DELETE FROM learned_plans WHERE id = ?1",
+                params![id.to_string()],
+            )
+            .map_err(backend_err)?;
+        Ok(facts_removed > 0 || plans_removed > 0)
     }
 
     async fn forget_batch(&self, batch_id: uuid::Uuid) -> Result<u64, StoreError> {
         let conn = self.db.conn.lock().await;
-        let n = conn
+        let facts_removed = conn
             .execute(
                 "DELETE FROM learned_facts WHERE batch_id = ?1",
                 params![batch_id.to_string()],
             )
             .map_err(backend_err)?;
-        Ok(n as u64)
+        let plans_removed = conn
+            .execute(
+                "DELETE FROM learned_plans WHERE batch_id = ?1",
+                params![batch_id.to_string()],
+            )
+            .map_err(backend_err)?;
+        Ok((facts_removed + plans_removed) as u64)
     }
 }
 
@@ -770,5 +847,141 @@ mod tests {
         // forget the batch → the layer is empty.
         assert_eq!(store.forget_batch(batch).await.unwrap(), 1);
         assert!(store.list().await.unwrap().is_empty());
+    }
+
+    fn plan_fixture(task: &str, batch: Uuid) -> LearnedPlan {
+        LearnedPlan {
+            id: Uuid::new_v4(),
+            task_context: task.into(),
+            plan: kernel_core::Plan {
+                nodes: vec![
+                    kernel_core::PlanNode {
+                        id: "a".into(),
+                        node_type: kernel_core::NodeType::Tool,
+                        action: Some("read_source".into()),
+                        arguments: serde_json::json!({"path": "report.csv"}),
+                        deps: Vec::new(),
+                    },
+                    kernel_core::PlanNode {
+                        id: "b".into(),
+                        node_type: kernel_core::NodeType::Review,
+                        action: None,
+                        arguments: serde_json::Value::Null,
+                        deps: vec!["a".into()],
+                    },
+                ],
+            },
+            provenance: kernel_core::LearnedProvenance {
+                source_run_ids: vec![Uuid::new_v4()],
+                distilled_at: 0,
+                model: "mock".into(),
+                level: kernel_core::LEARNED_LEVEL.into(),
+                human_validated: false,
+                batch_id: batch,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_learned_plan_store_ranks_and_forgets_without_residue() {
+        let store = SqliteLearnedStore::new(Db::open_in_memory().unwrap());
+        let batch = Uuid::new_v4();
+        let a = plan_fixture("extract links from a webpage", batch);
+        let a_id = a.id;
+        store.put_plan(a.clone()).await.unwrap();
+        store
+            .put_plan(plan_fixture("summarise the quarterly sales report", batch))
+            .await
+            .unwrap();
+
+        store
+            .put_plan(plan_fixture("draft a release changelog", batch))
+            .await
+            .unwrap();
+
+        // BM25 over task_context ranks the relevant plan first.
+        let hits = store
+            .retrieve_plans("webpage links extraction", 5)
+            .await
+            .unwrap();
+        assert_eq!(hits[0].task_context, "extract links from a webpage");
+
+        // `limit` is respected even with more candidates available.
+        assert_eq!(
+            store
+                .retrieve_plans("webpage links extraction", 1)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Round-trip: nodes, deps, and arguments survive put -> list -> retrieve.
+        let round_tripped = store.list_plans().await.unwrap();
+        let got = round_tripped.iter().find(|p| p.id == a_id).unwrap();
+        assert_eq!(got.plan.nodes.len(), a.plan.nodes.len());
+        assert_eq!(got.plan.nodes[0].arguments, a.plan.nodes[0].arguments);
+        assert_eq!(got.plan.nodes[1].deps, a.plan.nodes[1].deps);
+
+        // forget one -> gone from retrieval (no residue), the other two remain.
+        assert!(store.forget(a_id).await.unwrap());
+        let hits = store
+            .retrieve_plans("webpage links extraction", 5)
+            .await
+            .unwrap();
+        assert!(hits.iter().all(|p| p.id != a_id));
+        assert_eq!(store.list_plans().await.unwrap().len(), 2);
+
+        // forget the batch -> the layer is empty.
+        assert_eq!(store.forget_batch(batch).await.unwrap(), 2);
+        assert!(store.list_plans().await.unwrap().is_empty());
+    }
+
+    /// Load-bearing: `forget_batch` is the ONE reversal path for a whole
+    /// distillation call, and a distillation call can produce BOTH facts and
+    /// plans tagged with the same `batch_id`. A `forget_batch` that only
+    /// cleared one artifact kind would leave the other as residue — exactly
+    /// the bug this phase must not ship.
+    #[tokio::test]
+    async fn forget_batch_removes_facts_and_plans_from_the_same_batch() {
+        let store = SqliteLearnedStore::new(Db::open_in_memory().unwrap());
+        let batch = Uuid::new_v4();
+        store.put(fact("a fact in the batch", batch)).await.unwrap();
+        store
+            .put_plan(plan_fixture("a plan in the batch", batch))
+            .await
+            .unwrap();
+        // A fact/plan from an unrelated batch must survive.
+        let other_batch = Uuid::new_v4();
+        store
+            .put(fact("unrelated fact", other_batch))
+            .await
+            .unwrap();
+
+        let removed = store.forget_batch(batch).await.unwrap();
+        assert_eq!(removed, 2, "one fact and one plan from the same batch");
+        assert!(store
+            .list()
+            .await
+            .unwrap()
+            .iter()
+            .all(|f| f.provenance.batch_id != batch));
+        assert!(store.list_plans().await.unwrap().is_empty());
+        assert_eq!(store.list().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn forget_on_a_plan_id_works_and_reports_whether_it_existed() {
+        let store = SqliteLearnedStore::new(Db::open_in_memory().unwrap());
+        let batch = Uuid::new_v4();
+        let plan = plan_fixture("some recurring task", batch);
+        let id = plan.id;
+        store.put_plan(plan).await.unwrap();
+
+        assert!(store.forget(id).await.unwrap());
+        assert!(store.list_plans().await.unwrap().is_empty());
+        // Forgetting again (or an id that never existed) reports false, not an error.
+        assert!(!store.forget(id).await.unwrap());
+        assert!(!store.forget(Uuid::new_v4()).await.unwrap());
     }
 }

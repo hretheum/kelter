@@ -421,6 +421,7 @@ pub fn router_full(
         // Governed self-learning (Phase 10, ADR 0016): distil facts from past
         // runs, inspect what was learned, and completely forget it. Bearer.
         .route("/api/v1/learn", get(list_learned))
+        .route("/api/v1/learn/plans", get(list_learned_plans))
         .route("/api/v1/learn/distill", post(distill_learned))
         .route("/api/v1/learn/{id}", delete(forget_learned))
         .route(
@@ -1461,6 +1462,22 @@ async fn list_learned(State(state): State<ApiState>, headers: HeaderMap) -> Resp
     };
     match state.kernel.list_learned().await {
         Ok(facts) => Json(facts).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Distilled plans, the second learned-artifact kind. Separate from
+/// `list_learned` so the existing facts response keeps its shape; without this
+/// route a learned plan has no id you can read, which would make the per-plan
+/// `forget` unreachable and the "inspectable" half of ADR 0016 untrue for
+/// plans.
+async fn list_learned_plans(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    match state.kernel.list_learned_plans().await {
+        Ok(plans) => Json(plans).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

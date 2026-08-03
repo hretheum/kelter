@@ -66,9 +66,22 @@ impl LearnedFact {
     }
 }
 
-/// The distinct, reversible learned-fact layer. Kept separate from the
-/// episodic `MemoryProvider` on purpose: a separate store is what makes
-/// `forget` complete (no residue) and keeps learned facts a tagged,
+/// One reusable plan distilled from a completed plan-mode run. Retrieved as a
+/// candidate by task similarity, re-validated before it can be adopted, never
+/// an authority.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LearnedPlan {
+    pub id: Uuid,
+    /// What task this plan is relevant to — the text retrieval ranks against.
+    pub task_context: String,
+    /// The full DAG, arguments included.
+    pub plan: crate::plan::Plan,
+    pub provenance: LearnedProvenance,
+}
+
+/// The distinct, reversible learned layer — facts AND plans. Kept separate
+/// from the episodic `MemoryProvider` on purpose: a separate store is what
+/// makes `forget` complete (no residue) and keeps learned artifacts a tagged,
 /// inspectable layer rather than indistinguishable state.
 #[async_trait]
 pub trait LearnedStore: Send + Sync {
@@ -77,19 +90,35 @@ pub trait LearnedStore: Send + Sync {
     async fn retrieve(&self, task: &str, limit: usize) -> Result<Vec<LearnedFact>, StoreError>;
     /// All learned facts (for inspection), newest first.
     async fn list(&self) -> Result<Vec<LearnedFact>, StoreError>;
-    /// Delete one fact; returns whether it existed.
+    async fn put_plan(&self, plan: LearnedPlan) -> Result<(), StoreError>;
+    /// Plans most relevant to `task`, best first, at most `limit`.
+    async fn retrieve_plans(
+        &self,
+        task: &str,
+        limit: usize,
+    ) -> Result<Vec<LearnedPlan>, StoreError>;
+    /// All learned plans (for inspection), newest first.
+    async fn list_plans(&self) -> Result<Vec<LearnedPlan>, StoreError>;
+    /// Delete one fact OR plan (ids never collide across the two kinds in
+    /// practice, but this checks both so callers need not know which kind an
+    /// id belongs to); returns whether it existed.
     async fn forget(&self, id: Uuid) -> Result<bool, StoreError>;
-    /// Delete every fact from one distillation batch; returns the count.
+    /// Delete every fact AND plan from one distillation batch; returns the
+    /// combined count. One reversal path covers both artifact kinds, so a
+    /// single `batch_id` always undoes everything one distillation call
+    /// produced.
     async fn forget_batch(&self, batch_id: Uuid) -> Result<u64, StoreError>;
 }
 
-/// A summary of one distillation call (Phase 10) — what was learned and from
-/// where. Returned by the governed operation and logged; the learned facts
-/// themselves are the durable, inspectable record.
+/// A summary of one distillation call (Phase 10; plans added by the second
+/// self-learning slice) — what was learned and from where. Returned by the
+/// governed operation and logged; the learned artifacts themselves are the
+/// durable, inspectable record.
 #[derive(Debug, Clone, Serialize)]
 pub struct DistillReport {
     pub batch_id: Uuid,
     pub facts_created: usize,
+    pub plans_created: usize,
     pub source_run_ids: Vec<Uuid>,
 }
 
@@ -99,6 +128,7 @@ pub struct DistillReport {
 #[derive(Default)]
 pub struct InMemoryLearnedStore {
     inner: std::sync::Mutex<Vec<LearnedFact>>,
+    plans: std::sync::Mutex<Vec<LearnedPlan>>,
 }
 
 impl InMemoryLearnedStore {
@@ -145,17 +175,61 @@ impl LearnedStore for InMemoryLearnedStore {
         Ok(self.inner.lock().unwrap().clone())
     }
 
+    async fn put_plan(&self, plan: LearnedPlan) -> Result<(), StoreError> {
+        self.plans.lock().unwrap().push(plan);
+        Ok(())
+    }
+
+    async fn retrieve_plans(
+        &self,
+        task: &str,
+        limit: usize,
+    ) -> Result<Vec<LearnedPlan>, StoreError> {
+        let plans = self.plans.lock().unwrap().clone();
+        let mut scored: Vec<(usize, &LearnedPlan)> = plans
+            .iter()
+            .map(|p| (overlap(task, &p.task_context), p))
+            .filter(|(s, _)| *s > 0)
+            .collect();
+        scored.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
+        Ok(scored
+            .into_iter()
+            .take(limit)
+            .map(|(_, p)| p.clone())
+            .collect())
+    }
+
+    async fn list_plans(&self) -> Result<Vec<LearnedPlan>, StoreError> {
+        Ok(self.plans.lock().unwrap().clone())
+    }
+
     async fn forget(&self, id: Uuid) -> Result<bool, StoreError> {
         let mut facts = self.inner.lock().unwrap();
         let before = facts.len();
         facts.retain(|f| f.id != id);
-        Ok(facts.len() < before)
+        let fact_removed = facts.len() < before;
+        drop(facts);
+
+        let mut plans = self.plans.lock().unwrap();
+        let before = plans.len();
+        plans.retain(|p| p.id != id);
+        let plan_removed = plans.len() < before;
+
+        Ok(fact_removed || plan_removed)
     }
 
     async fn forget_batch(&self, batch_id: Uuid) -> Result<u64, StoreError> {
         let mut facts = self.inner.lock().unwrap();
         let before = facts.len();
         facts.retain(|f| f.provenance.batch_id != batch_id);
-        Ok((before - facts.len()) as u64)
+        let facts_removed = (before - facts.len()) as u64;
+        drop(facts);
+
+        let mut plans = self.plans.lock().unwrap();
+        let before = plans.len();
+        plans.retain(|p| p.provenance.batch_id != batch_id);
+        let plans_removed = (before - plans.len()) as u64;
+
+        Ok(facts_removed + plans_removed)
     }
 }

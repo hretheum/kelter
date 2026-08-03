@@ -40,11 +40,11 @@ pub use engine::{
 };
 pub use journal::{JournalEntry, PendingActivationFold, PendingDelegationFold, Usage};
 pub use learned::{
-    DistillReport, InMemoryLearnedStore, LearnedFact, LearnedProvenance, LearnedStore,
+    DistillReport, InMemoryLearnedStore, LearnedFact, LearnedPlan, LearnedProvenance, LearnedStore,
     LEARNED_LEVEL,
 };
 pub use oracle::{Latitude, PolicyContext, PolicyError, PolicyOracle, Proposal};
-pub use plan::{Plan, PlanNode, ValidatedPlan};
+pub use plan::{NodeType, Plan, PlanNode, ValidatedPlan};
 pub use skill_gate::{
     ActivationAuthorization, ActivationRequestMeta, SkillActivationDecision, SkillGate,
 };
