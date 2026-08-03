@@ -2499,3 +2499,47 @@ proves the GHA layer cache hits at all, which was the open question, but it is
 NOT the measurement the cargo-chef split was made for: that one needs a push
 that edits `crates/` WITHOUT touching `Cargo.lock`, where cook stays cached and
 only the workspace layer rebuilds. Still pending.
+
+## 2026-08-03 — plan distillation (self-learning, second slice; ADR 0032)
+
+**What shipped.** The slice ADR 0016 deferred. A completed plan-mode run distils
+to its LAST journaled generation as a structured `LearnedPlan`; a later run with
+a similar task is offered surviving candidates as a second proposable action,
+`adopt_learned_plan`, on generation zero only. Adoption re-enters the identical
+`plan::validate` floor and is journaled BY VALUE. Plan mode also gained the
+retrieved context it never had (`execute_plan` branched before step mode's
+memory block).
+
+**Split across two models, deliberately.** The storage layer — `LearnedPlan`,
+three `LearnedStore` backends, the `learned_plans` tables, store-level tests —
+went to a Sonnet 5 agent: mechanical work with an existing fact-layer pattern to
+mirror. The `engine.rs` seam stayed on Opus 5 because it sits inside ADR 0030's
+re-plan generations, carry-forward map and exactly-once accounting, where a
+mistake is silent rather than loud (a double-executed node fails no test, it
+just calls the tool twice). File ownership was partitioned up front so the two
+never touched the same file.
+
+**Verified at HEAD `edc4bca`.** `cargo fmt --all --check` clean.
+`cargo clippy --workspace --all-targets -- -D warnings` clean.
+`cargo test --workspace`: **276 passed / 0 failed / 9 ignored** across 63
+suites, against a 266/7 baseline — +10 passed (7 new integration tests in
+`plan_distillation_test.rs`, 3 store-level tests) and +2 ignored (both new
+Postgres tests, correctly reporting as ignored rather than falsely passing
+without a database). From `apps/desktop/src-tauri` — the excluded-workspace
+check — `cargo fmt --all --check` clean, `cargo clippy --all-targets -- -D
+warnings` clean, `cargo test --all-targets` 2 passed.
+
+**One transient failure worth recording.** A first run of the desktop `cargo fmt
+--all --check` reported a diff in `crates/kernel-core/tests/learned_test.rs`;
+re-running it after the storage agent had fully settled was clean, as were both
+workspace roots checked explicitly afterwards. The likely cause is that the
+check raced the agent's own final `cargo fmt --all` write. Recorded because a
+formatting check that disagrees between the two workspace roots would be a real
+trap, and the evidence here is that it did not — but the observation was real
+and is not being quietly dropped.
+
+**Not verified here.** The CI run itself. The plan leg of
+`scripts/smoke-selflearn.sh` (spec section 6) is NOT written — the existing
+smoke scripts stay manual and need a live daemon, so this remains an open item
+rather than a silent omission. There is also no web-UI surface for learned
+plans, though facts have one.
