@@ -1,0 +1,16 @@
+apps/web-ui/package.json
+  h_e759e7d12241fb 6
+docs/BUILD-EVIDENCE.md
+  h_e759e7d12241fb 2312-2332
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "d387180843b5e52941b58c262770093d521b4466",
+  "prompts": {},
+  "humans": {
+    "h_e759e7d12241fb": {
+      "author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
