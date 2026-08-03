@@ -40,9 +40,12 @@ workspace).
 `architecture-overview.md`. Decisions → `docs/adr/` (0001–0028). The 2026-07-21
 adversarial audit + its fix passes → `docs/audit/AUDIT-2026-07-21.md`.
 
-**Testing.** `cargo test --workspace` is hermetic (235 tests; the `pgstore`
-Postgres integration tests skip unless `KELTER_TEST_POSTGRES_URL` is set — use a
-Docker/podman `pgvector/pgvector` container). `cargo clippy --workspace
+**Testing.** `cargo test --workspace` is hermetic — 266 tests, plus 7
+`pgstore` tests that are `#[ignore]`d because they need a real Postgres. To run
+those too: start a `pgvector/pgvector:pg16` container, export
+`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (273 total). CI does
+this via a `services:` block. Bare `cargo test` reports them as `7 ignored`,
+never as a green pass. `cargo clippy --workspace
 --all-targets -D warnings` and `cargo fmt --check` are the bar. web-ui:
 `pnpm --dir apps/web-ui test` (vitest) + `pnpm build`.
 

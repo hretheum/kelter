@@ -13,9 +13,14 @@
 //! 3. **Sharing** — instance A distils → instance B sees it; A `forget`s → B
 //!    no longer sees it.
 //!
-//! Skipped (not failed) when `KELTER_TEST_POSTGRES_URL` is unset, so the
-//! default `cargo test` stays hermetic. CI / local runs set it to the
-//! Docker/podman Postgres. The tests use a UNIQUE table-namespace per run via
+//! `#[ignore]`d by default, so the plain `cargo test` stays hermetic AND the
+//! skip is VISIBLE as `7 ignored` rather than a green `ok` that touched
+//! nothing. To run them: start a `pgvector/pgvector:pg16` container, set
+//! `KELTER_TEST_POSTGRES_URL`, and pass `-- --include-ignored`. CI does exactly
+//! this via a `services:` block (added 2026-08-03 — before that these tests had
+//! never run in CI at all, despite this comment once claiming they did). The
+//! schema migration issues its own `CREATE EXTENSION IF NOT EXISTS vector`, so
+//! no init step is needed. The tests use a UNIQUE table-namespace per run via
 //! fresh UUIDs, and clean up the rows they create.
 
 use kernel_core::{LearnedFact, LearnedProvenance, LearnedStore, LEARNED_LEVEL};
@@ -80,6 +85,7 @@ fn fact(text: &str, task_context: &str, batch_id: Uuid, run_id: Uuid) -> Learned
 // ---- (base) write / retrieve / upsert on Postgres -------------------------
 
 #[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
 async fn write_retrieve_upsert_on_postgres() {
     let _ = require_pg!();
     let mem = PgMemoryProvider::new(store().await);
@@ -108,6 +114,7 @@ async fn write_retrieve_upsert_on_postgres() {
 // ---- money-shot #1: concurrency, two independent instances ----------------
 
 #[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
 async fn concurrent_two_instances_no_corruption() {
     let url = require_pg!();
     // Two independent stores = two kernels, each its own pool on the same DB.
@@ -178,6 +185,7 @@ async fn concurrent_two_instances_no_corruption() {
 // ---- money-shot #2: governance re-proof on Postgres -----------------------
 
 #[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
 async fn provenance_survives_and_forget_leaves_zero_residue() {
     let _ = require_pg!();
     let learned = PgLearnedStore::new(store().await);
@@ -235,6 +243,7 @@ async fn provenance_survives_and_forget_leaves_zero_residue() {
 }
 
 #[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
 async fn forget_batch_removes_the_whole_distillation() {
     let _ = require_pg!();
     let learned = PgLearnedStore::new(store().await);
@@ -266,6 +275,7 @@ async fn forget_batch_removes_the_whole_distillation() {
 /// could smuggle. This mirrors Phase 10's invariant at the store layer: even a
 /// maliciously-crafted fact can, at most, appear as `[learned] …` context.
 #[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
 async fn poisoned_fact_is_only_ever_context_never_an_action() {
     let _ = require_pg!();
     let learned = PgLearnedStore::new(store().await);
@@ -297,6 +307,7 @@ async fn poisoned_fact_is_only_ever_context_never_an_action() {
 // ---- money-shot #3: sharing between instance A and B ----------------------
 
 #[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
 async fn instance_a_distils_b_sees_then_a_forgets_b_stops_seeing() {
     let url = require_pg!();
     let a = PgLearnedStore::new(PgStore::connect(&url, None).await.unwrap());

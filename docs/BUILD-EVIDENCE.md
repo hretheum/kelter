@@ -2269,3 +2269,43 @@ return early with a skip message unless `KELTER_TEST_POSTGRES_URL` is set, and t
 variable was unset in this run — they reported `ok` without touching Postgres. Genuinely
 executed count is **266**. The ADR 0028 live-Postgres claim rests on its own earlier run,
 not on this one. The N=24 live gemma-3-27b series was likewise not re-run here.
+
+---
+
+## 2026-08-03 — pgstore tests wired into CI; silent skip made visible
+
+**The gap.** ADR 0028's 7 Postgres tests guarded on `KELTER_TEST_POSTGRES_URL`
+with an early `return`, so an unset variable produced a green `ok` that had
+touched no database. `KELTER_TEST_POSTGRES_URL` appeared in **zero** CI
+configuration — the `check` job ran a bare `cargo test --workspace` with no
+`services:` block. The tests' own module comment claimed "CI / local runs set
+it"; that was false from the day it was written. The shared-memory backend had
+therefore never been exercised by CI, and the suite reported it as passing.
+
+**Measured before changing anything.** `pgvector/pgvector:pg16` (Postgres 16.14,
+vector 0.8.5) on podman, port 55432, `KELTER_TEST_POSTGRES_URL` exported:
+**7/7 pass** — 6 integration + 1 pgvector, wall-clock 0.16s / 0.08s rather than
+the 0.00s of the skip path. No rot had set in between ADR 0028 and now; the
+gap was in visibility and CI coverage, not correctness.
+
+**Change.** (1) All 7 tests carry `#[ignore = "needs a live Postgres+pgvector…"]`
+instead of relying solely on the early return — a bare `cargo test` now reports
+`7 ignored`, not a false `ok`. The `require_pg!` guard is retained as a safety
+net for `--include-ignored` without a database. (2) The `check` job gains a
+`services: pgvector/pgvector:pg16` block and runs `cargo test --workspace --
+--include-ignored` with `KELTER_TEST_POSTGRES_URL` set. There are no other
+`#[ignore]`d tests in the workspace (verified by grep), so `--include-ignored`
+widens nothing else. The schema migration issues its own `CREATE EXTENSION IF
+NOT EXISTS vector`, so CI needs no init step. (3) The false module comment,
+`AGENTS.md` and `CLAUDE.md` corrected — the latter two also carried a stale
+count of 235.
+
+**Both paths verified locally.** Hermetic `cargo test --workspace`:
+**266 passed / 0 failed / 7 ignored**. CI-equivalent `cargo test --workspace --
+--include-ignored` against the live container: **273 passed / 0 failed /
+0 ignored**. `cargo fmt --all --check` and `cargo clippy --workspace
+--all-targets -D warnings` clean.
+
+**Not verified here.** The CI change itself is unrun — the `services:` block is
+reasoned from the local podman equivalent, not observed green on GitHub. The
+first push to `main` is its real test.

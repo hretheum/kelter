@@ -12,6 +12,25 @@ jobs:
   check:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
+    # The pgstore integration tests (ADR 0028) need a real Postgres+pgvector.
+    # Without this they are #[ignore]d and the shared-memory backend is never
+    # exercised in CI — which is exactly what happened between ADR 0028 and
+    # 2026-08-03. The schema migration issues its own CREATE EXTENSION, so the
+    # image is all that is required here.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: kelter
+          POSTGRES_PASSWORD: kelter
+          POSTGRES_DB: kelter_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kelter -d kelter_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       # Build the web-ui first: crates/api embeds apps/web-ui/dist via
@@ -32,7 +51,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      # --include-ignored so the pgstore tests above actually run. There are no
+      # other #[ignore]d tests in the workspace, so this widens nothing else.
+      - run: cargo test --workspace -- --include-ignored
+        env:
+          KELTER_TEST_POSTGRES_URL: postgres://kelter:kelter@localhost:5432/kelter_test
 
   container:
     name: container image (amd64 + arm64)

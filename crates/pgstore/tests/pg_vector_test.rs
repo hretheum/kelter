@@ -61,6 +61,7 @@ fn episode(task: &str) -> Episode {
 }
 
 #[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
 async fn pgvector_cosine_retrieval_and_forget_removes_the_vector() {
     let Some(url) = pg_url() else {
         eprintln!("KELTER_TEST_POSTGRES_URL unset — skipping pgvector test");
