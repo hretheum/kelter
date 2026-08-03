@@ -1,0 +1,19 @@
+CLAUDE.md
+  s_53657b47dae73b::t_076d586b133212 40,52-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "3672086daf3e90b796a40a02f4c234437e907859",
+  "prompts": {},
+  "sessions": {
+    "s_53657b47dae73b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0a9a506f-8097-4771-848a-39431ab40c30",
+        "model": "unknown"
+      },
+      "human_author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
