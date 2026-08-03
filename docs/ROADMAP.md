@@ -1,4 +1,4 @@
-<!-- provenance: ai_authored | agent: claude-opus-4-8 | session_date: 2026-07-20 | human_validated: false | context: roadmap current through Phase 15 (multi-agent trust/resilience, ADR 0023) + parked follow-ups -->
+<!-- provenance: ai_authored | agent: claude-opus-4-5 | session_date: 2026-08-03 | human_validated: false | context: roadmap brought current through Phase 22 (state-epoch duplicate rule, ADR 0031) at HEAD 702c7a0; Phases 16-22 (ADR 0024-0031 + the A1 coding round) written from the ADRs, BUILD-EVIDENCE and git log, not re-derived from source -->
 
 # Kelter roadmap
 
@@ -171,6 +171,57 @@ swappable policy engine, and it stays reliable even on small local models.
   due to sustained shared-machine resource contention (disclosed honestly
   in the evidence log, not papered over) — every crate touched compiles
   and tests clean individually and in combination. Done.
+- **Phase 16 — WASM memory backend (ADR 0024).** The memory capability moved
+  behind the ADR 0011 WASM sandbox: a memory backend can now ship as an
+  in-process, capability-gated module rather than a compiled trait impl or a
+  subprocess. Proves the governance invariant on a second capability axis — a
+  poisoned fact from a WASM store reaches the model's context but can never
+  authorize an action, an ungranted capability is refused at load, and
+  retrieval stays bounded by the kernel's limit rather than the module's
+  claims. Done.
+- **Phase 17 — delegation ask + interactive multi-turn + streamed progress
+  (ADR 0025/0026/0027).** Three slices closing the delegation UX gaps ADR
+  0023 left open: plan mode gets its own `AskHuman` pause on a delegation
+  proposal (0025, the explicitly-deferred half of Phase 15); a delegated
+  A2A task can carry a real multi-turn exchange instead of a single
+  request/response (0026); and delegation progress streams back to the
+  parent run's timeline rather than surfacing only at completion (0027).
+  Done.
+- **Phase 18 — shared Postgres + pgvector memory backend (ADR 0028).** An
+  opt-in concurrent-safe shared memory backend behind the existing memory
+  seam, so a desktop kernel and a server kernel share episodic memory and
+  learned facts with governance intact — provenance-tagged, completely
+  reversible (forget leaves zero residue, vector included), learned-as-
+  validated-context preserved. SQLite stays the default; the store stays
+  dumb (zero opaque learning). 7 tests against live Postgres 16 + pgvector.
+  Done.
+- **Phase 19 — run-output prose + artifact files (ADR 0029).** The terminal
+  result of a run renders as prose instead of raw JSON, and the files a run
+  produced surface in a side artifact panel (markdown-rendered, copy +
+  download), backed by a new bearer-auth'd files endpoint scoped by the
+  run's own journal and hardened against path traversal, symlink escape and
+  allowlist bypass. Done.
+- **Phase 20 — plan-mode resilience (ADR 0030).** Bounded retry plus
+  adaptive re-planning at the plan layer: a failed node no longer sinks the
+  plan, and a re-plan stays validated and durable like any other plan
+  (closing the "adaptive re-planning" item long parked in Deferred). Done.
+- **Phase 21 — agentic coding on local models (oculink brief A1, commit
+  `b6f673f`).** Role-split code tools (a reference wedge separate from the
+  coding surface), model-adapter tuning, and the first round of loop-safety
+  fixes — the groundwork that made the A2 measurement possible. Stopped at
+  the defined human gate before A2, as designed. Done.
+- **Phase 22 — state-epoch duplicate rule (ADR 0031).** The deterministic
+  anti-stall rule and Constrained action-space narrowing became state-epoch
+  scoped instead of state-blind: a successful MUTATING step (one whose
+  action spec declares `idempotency_key` — the tool author's own existing
+  side-effect declaration, no new manifest field, no trust in the model)
+  opens a new epoch, and both rules only look back to it. Re-running the
+  test suite after an edit is now legal; a stateless repeat with nothing
+  mutating in between still dies exactly as before. The measured loop-killer
+  is gone: duplicate-rule deaths 5/12 pre vs 0/12 post across an N=24
+  before/after live series on gemma-3-27b (Fisher one-tailed p≈0.019),
+  premature finish 0/24. Wide latitude, plan mode and the journal shape are
+  untouched; exactly-once across resume re-proven post-change. Done.
 
 ## Phase 4 — the governed extension platform (delivered)
 
@@ -289,10 +340,11 @@ block a launch; the core is complete.
   WebSocket-channel auth, opt-in TLS termination — tailnet stays the default
   transport) is done. Still deferred: mTLS, OAuth/OIDC, and OS-level subprocess
   containment.
-- **Correctness-sensitive extensions.** Adaptive re-planning (a re-plan must
-  stay validated + durable), plan distillation (the second self-learning slice —
-  a learned plan re-validated like any plan, reversible per ADR 0016), and WASM
-  for the memory / agent / policy capabilities plus the component model and a
+- **Correctness-sensitive extensions.** Adaptive re-planning — *shipped as
+  Phase 20 (ADR 0030)*. WASM for the memory capability — *shipped as Phase 16
+  (ADR 0024)*. Still deferred: plan distillation (the second self-learning
+  slice — a learned plan re-validated like any plan, reversible per ADR 0016),
+  and WASM for the agent / policy capabilities plus the component model and a
   real network host-fn.
 - **Governed shared-memory backend (Postgres + pgvector) — Done (ADR 0028; validated 7/7 on real Postgres: concurrency, A→B sharing, provenance + zero-residue forget, poisoned-fact-never-an-action).** A
   concurrent-safe shared memory backend behind the existing memory seam (ADR
