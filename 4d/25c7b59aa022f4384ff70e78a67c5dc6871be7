@@ -1,0 +1,14 @@
+docs/BUILD-EVIDENCE.md
+  h_e759e7d12241fb 2460-2483
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "4d25c7b59aa022f4384ff70e78a67c5dc6871be7",
+  "prompts": {},
+  "humans": {
+    "h_e759e7d12241fb": {
+      "author": "Eryk Orłowski <eryk@talentcanvas.tech>"
+    }
+  }
+}
