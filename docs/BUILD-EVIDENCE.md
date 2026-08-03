@@ -2309,3 +2309,24 @@ count of 235.
 **Not verified here.** The CI change itself is unrun — the `services:` block is
 reasoned from the local podman equivalent, not observed green on GitHub. The
 first push to `main` is its real test.
+
+**Follow-up, same day — CI had not run at all since 2026-07-19.** The first push
+after the change above failed at step one: `pnpm/action-setup@v4` errored with
+"No pnpm version is specified". v4 requires either a `version:` key in the
+workflow or `packageManager` in `package.json`, and `apps/web-ui/package.json`
+has never carried that key (`git log -S packageManager` returns nothing). The
+action entered `ci.yml` with the web-ui redesign (`41094e5`, 2026-07-19), so
+the `check` job has failed on its first step for **51 commits**, and
+`container` + `desktop` (both `needs: check`) never ran either.
+
+This reframes the finding above: the pgstore tests were not merely
+un-configured in CI — no CI was executing at all, which is why nothing
+surfaced the silent skip. Fixed by pinning `"packageManager": "pnpm@11.9.0"`
+(the version in local use; the lockfile is `lockfileVersion: '9.0'`). Verified
+locally with the exact commands CI runs: `pnpm install --frozen-lockfile`
+resolves clean, `pnpm build` emits `dist/` (222 modules, 409 kB JS / 124 kB
+gzip). Whether the rest of the pipeline — including the new Postgres
+`services:` block — is green remains unproven until a run gets past this step.
+
+**Noted, not fixed:** `ci.yml` runs `pnpm build` but never `pnpm test`, so the
+web-ui vitest suite is outside CI even once the pipeline is alive.
