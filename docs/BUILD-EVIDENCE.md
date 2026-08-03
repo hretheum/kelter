@@ -2553,3 +2553,43 @@ and is not being quietly dropped.
 smoke scripts stay manual and need a live daemon, so this remains an open item
 rather than a silent omission. There is also no web-UI surface for learned
 plans, though facts have one.
+
+## 2026-08-03 — the cargo-chef cache measurement, answered (negative)
+
+`888f7d7` was the push CLAUDE.md had been waiting for: it touches `crates/`
+(engine, learned, plan, storage, pgstore, api) and touches **neither
+`Cargo.lock` nor any `Cargo.toml`** — the clean test of whether the GHA layer
+cache lets the `cargo chef cook` layer survive a source-only change.
+
+**It does not.** Container-job durations across today's runs:
+
+| commit | what changed | `container` job |
+|---|---|---|
+| `9da88c1` | Dockerfile — cold build | 14m 49s |
+| `4d25c7b` | Dockerfile (the cargo-chef split) | 19s |
+| `988688c` | docs only | 23s |
+| `ca0cfd8` | `ci.yml` + docs | 18s |
+| `888f7d7` | **`crates/`, no `Cargo.lock`** | **14m 10s** |
+
+A source-only change costs essentially what a cold build costs. The sub-30s
+runs are not the split paying off — they are whole-image cache hits from
+pushes whose build context did not change at all.
+
+**Cause, and it is deliberate rather than a bug.** `ci.yml`'s container job
+sets `cache-to: type=gha,mode=min`. `mode=min` does not export intermediate
+stages, so the cook layer is never written to the cache from this job and
+cannot be restored on the next push. The comment directly above that line
+states the reason: `publish-image.yml` uses `mode=max`, both jobs share one
+10 GB per-repo GHA cache, and exporting every intermediate layer from here too
+would evict the publish cache.
+
+So the trade-off was chosen knowingly; what was missing was its price. The
+price is **~14 minutes on every push that touches source**. The cargo-chef
+split still pays off locally (51s warm vs 254s cold cook, measured 2026-08-03)
+and in `publish-image.yml`, which does use `mode=max`. It buys the per-push
+`container` job nothing.
+
+**Not evaluated here.** Whether giving the container job its own buildx cache
+`scope=` would let it use `mode=max` without evicting the publish cache — the
+two would still compete for the same 10 GB, so this is a hypothesis, not a
+recommendation. Recorded as an open question rather than presented as a fix.
