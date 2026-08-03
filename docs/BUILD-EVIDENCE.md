@@ -2519,15 +2519,25 @@ mistake is silent rather than loud (a double-executed node fails no test, it
 just calls the tool twice). File ownership was partitioned up front so the two
 never touched the same file.
 
-**Verified at HEAD `edc4bca`.** `cargo fmt --all --check` clean.
+**Verified at `edc4bca`.** `cargo fmt --all --check` clean.
 `cargo clippy --workspace --all-targets -- -D warnings` clean.
-`cargo test --workspace`: **276 passed / 0 failed / 9 ignored** across 63
-suites, against a 266/7 baseline — +10 passed (7 new integration tests in
-`plan_distillation_test.rs`, 3 store-level tests) and +2 ignored (both new
-Postgres tests, correctly reporting as ignored rather than falsely passing
-without a database). From `apps/desktop/src-tauri` — the excluded-workspace
-check — `cargo fmt --all --check` clean, `cargo clippy --all-targets -- -D
-warnings` clean, `cargo test --all-targets` 2 passed.
+`cargo test --workspace`: **280 passed / 0 failed / 9 ignored** across 63
+suites, against a 266/7 baseline — +14 passed (7 integration tests in
+`plan_distillation_test.rs`, 7 store-level tests in `learned_test.rs` and the
+`storage` unit tests) and +2 ignored (both new Postgres tests, correctly
+reporting as ignored rather than falsely passing without a database). From
+`apps/desktop/src-tauri` — the excluded-workspace check — `cargo fmt --all
+--check` clean, `cargo clippy --all-targets -- -D warnings` clean,
+`cargo test --all-targets` 2 passed.
+
+**Correction, recorded rather than quietly fixed.** `edc4bca`'s own commit
+message says 276 passed. That number was measured before four further
+store-level tests landed, and the commit then swept them in — so the message
+under-counts the tree it describes by exactly those four. The code committed is
+unchanged; only the count was stale. 280/0/9 is the verified figure for that
+tree, re-run afterwards with the four cases confirmed present by name. The
+process lesson is the ordinary one: a test count is only true for the tree it
+was run against, and `git add -A` can move the tree underneath it.
 
 **One transient failure worth recording.** A first run of the desktop `cargo fmt
 --all --check` reported a diff in `crates/kernel-core/tests/learned_test.rs`;
