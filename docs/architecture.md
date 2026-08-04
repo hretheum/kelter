@@ -106,19 +106,33 @@ replaces it. Reference examples: a Python tool in ~25 lines
 (`extensions/wordstats/`) and a Python memory backend in ~30 lines
 (`examples/extensions/memstore/`).
 
-**Governed self-learning (ADR 0016):** the runtime can distil reusable
-**facts** from completed runs into a **distinct, provenance-tagged, reversible**
-learned layer (`LearnedStore` / the `learned_facts` table) — separate from
-episodes so `forget` is complete (delete the rows; ranking is recomputed per
-retrieval → zero residue). A bearer-gated `Kernel::distill` extracts facts
-(each tagged `ai_extracted`, `human_validated:false`, with its source run ids);
-`GET /api/v1/learn` lists them; `forget`/`forget_batch` undo them entirely. Two
-invariants keep it safe: a learned fact enters **only** as retrieved context
-(the `[learned]`-tagged `PolicyContext.memory` seam) so the kernel still
-validates every action (the ADR 0001 floor is unchanged — even a poisoned fact
-cannot trigger an unvalidated action), and forgetting leaves no residue. First
-slice is facts; plans, background distillation and sharing are deferred. Proof:
-`scripts/smoke-selflearn.sh` + `crates/kernel-core/tests/learned_test.rs`.
+**Governed self-learning (ADR 0016 facts, ADR 0032 plans):** the runtime can
+distil reusable **facts** and **plans** from completed runs into a **distinct,
+provenance-tagged, reversible** learned layer (`LearnedStore` / the
+`learned_facts` and `learned_plans` tables) — separate from episodes so
+`forget` is complete (delete the rows; ranking is recomputed per retrieval →
+zero residue). A bearer-gated `Kernel::distill` extracts them (each tagged
+`ai_extracted`, `human_validated:false`, with its source run ids); one run
+yields one artifact — plan mode a plan, step mode a fact. `GET /api/v1/learn`
+and `GET /api/v1/learn/plans` list them; `forget`/`forget_batch` span both
+kinds and undo them entirely.
+
+Two invariants keep it safe. A learned **fact** enters **only** as retrieved
+context (the `[learned]`-tagged `PolicyContext.memory` seam), so the kernel
+still validates every action — the ADR 0001 floor is unchanged, and even a
+poisoned fact cannot trigger an unvalidated action. A learned **plan** is
+structured rather than prose, so it gets a stronger check: candidates are
+re-validated against the *live* action space before they are offered at all
+(one naming a departed tool simply does not exist for the model — staleness
+handled by the action space, not by a policy), the model must explicitly adopt
+one via `adopt_learned_plan`, and the adopted plan re-enters the identical
+`plan::validate` floor. The journal records it **by value**, so `forget`
+removes future influence without rewriting what a finished run did.
+
+Still deferred: background distillation, cross-user sharing, model-assisted
+extraction, learning from failed runs. Proof: `scripts/smoke-selflearn.sh`
+(facts only — no plan leg yet) + `crates/kernel-core/tests/learned_test.rs` +
+`crates/kernel-core/tests/plan_distillation_test.rs`.
 
 **A2A inbound — Kelter as an A2A server (ADR 0013):** the outbound `agent`
 seam has a mirror. Kelter publishes an Agent Card at

@@ -17,7 +17,8 @@ trust/policy/ask + retry/circuit-breaker + streamed progress (ADR
 0009/0013/0022/0023/0026/0027), plan mode (ADR 0010), WASM-sandboxed extensions
 incl. a memory backend (ADR 0011/0024), advisory skills with model
 self-activation + human-in-the-loop ask (ADR 0019/0020/0021), governed +
-reversible self-learning (ADR 0016), retention/log hardening (ADR 0017),
+reversible self-learning in both slices — facts and plans (ADR 0016/0032),
+retention/log hardening (ADR 0017),
 security surface — bearer/principals/SSRF-pin/TLS (ADR 0018), and an optional
 **shared** Postgres+pgvector memory backend so two independent kernels share
 memory + learned facts, governance preserved (ADR 0028). React 19 + Tailwind
@@ -37,17 +38,18 @@ workspace).
 **Where the detail lives.** Ongoing status/roadmap → `docs/ROADMAP.md`
 (Eryk-owned — leave unstaged). Per-phase evidence + decisions →
 `docs/BUILD-EVIDENCE.md`. Architecture → `docs/architecture.md` /
-`architecture-overview.md`. Decisions → `docs/adr/` (0001–0031). The 2026-07-21
+`architecture-overview.md`. Decisions → `docs/adr/` (0001–0032). The 2026-07-21
 adversarial audit + its fix passes → `docs/audit/AUDIT-2026-07-21.md`.
 
-**Testing.** `cargo test --workspace` is hermetic — 266 tests, plus 7
+**Testing.** `cargo test --workspace` is hermetic — 280 tests, plus 9
 `pgstore` tests that are `#[ignore]`d because they need a real Postgres. To run
 those too: start a `pgvector/pgvector:pg16` container, export
-`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (273 total). CI does
-this via a `services:` block. Bare `cargo test` reports them as `7 ignored`,
-never as a green pass. `cargo clippy --workspace
+`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (289 total — the
+figure CI reports). CI does this via a `services:` block. Bare `cargo test`
+reports them as `9 ignored`, never as a green pass. `cargo clippy --workspace
 --all-targets -D warnings` and `cargo fmt --check` are the bar. web-ui:
-`pnpm --dir apps/web-ui test` (vitest) + `pnpm build`.
+`pnpm --dir apps/web-ui test` (vitest — 2 files, 11 tests) + `pnpm build`;
+both run in CI since 2026-08-03.
 
 **The excluded-workspace hazard — read this before touching shared types.**
 `Cargo.toml` `exclude`s three crates from the default workspace:
@@ -64,59 +66,47 @@ but locally the root workspace will happily go green while the desktop is
 broken. The two `wasm-tools` crates are lower risk (no workspace deps) and
 currently compile clean.
 
-## Where work stands (2026-08-03) and what comes next
+## Where work stands (2026-08-04)
 
-**What just happened.** A full day went into CI and evidence hygiene, not
-features. In short: CI had been dead since 2026-07-19 — `pnpm/action-setup@v4`
-failed on step one because `apps/web-ui/package.json` had no `packageManager`
-key, so the `check` job never ran for 51 commits and `container`/`desktop`
-(both `needs: check`) never ran at all. Fixing that surfaced the desktop
-breakage above, plus a second one in `tests/durable_store.rs` that even the old
-CI would have missed (`cargo tauri build` compiles the lib, not test targets).
-Separately, the 7 `pgstore` tests had been returning a green `ok` without
-touching a database — the env guard was an early `return`, and the variable was
-set nowhere in CI. All fixed; the pipeline is green end to end for the first
-time since July 19. Full detail in `docs/BUILD-EVIDENCE.md` (entries dated
-2026-08-03). ADR 0031 was also signed off, and `docs/ROADMAP.md` "Where we are"
-was brought current through Phase 22.
+Chronology lives in `docs/ROADMAP.md` ("Where we are", current through Phase
+23) and `docs/BUILD-EVIDENCE.md` (dated entries). This section is only what a
+fresh session needs that isn't derivable from those.
 
-**vitest is now in CI — done, and that closes the infrastructure work.** The
-`check` job's `pnpm install && pnpm build` was split into install / `pnpm test`
-/ `pnpm build`, test first so a red suite fails before the Rust toolchain is
-installed (11 tests, verified locally; BUILD-EVIDENCE 2026-08-03). That was the
-last small, well-understood gap. **Next step is product work** — the
-infrastructure pass had a real payoff but has hit diminishing returns.
+**Latest: Phase 23, plan distillation (ADR 0032).** Self-learning's second
+slice; ADR 0016's deferral is closed. Design spec:
+`docs/superpowers/specs/2026-08-03-plan-distillation-design.md`. CI has been
+green end to end since 2026-08-03, when it was repaired after 51 dead commits.
 
-**Deliberately NOT recommended yet: the smoke scripts.** `scripts/smoke-*.sh`
-(wasm sandbox, trust posture, durability) are real end-to-end proofs against a
-live daemon, and none of them run in CI. They stay manual on purpose: they bind
-ports, spawn daemons and need cleanup, so they would make the pipeline flaky in
-exchange for a regression class nothing has actually hit yet. Wire them in when
-one of them catches something by hand — not before.
+**Open items, in the order they'd bite.**
+1. **18 ADRs carry `human_validated: false`** — 0007–0023 plus 0032. Eryk's
+   job, not an agent's; signing ADR 0031 honestly took a real verification
+   pass, so this is not a batch operation.
+2. **The `git push` rule below is stale** — it says pushes are the maintainer's
+   act, yet Eryk directed ~12 across 2026-08-03/04. It has NOT been amended, so
+   it stands as written: never push on your own initiative; ask.
+3. **Phase 23 loose ends** — no plan leg in `scripts/smoke-selflearn.sh`, no
+   web-UI surface for learned plans, and the `adopt_learned_plan` branch in
+   `execute_plan` is unreviewed (it sits inside ADR 0030 generation /
+   exactly-once semantics, where a mistake is silent rather than loud).
 
-**Product backlog, from `docs/ROADMAP.md` "Deferred / backlog".** Plan
-distillation (the second self-learning slice — a learned plan re-validated like
-any plan, reversible per ADR 0016) · WASM for the agent / policy capabilities
-plus the component model and a real network host-fn · extension SDK + example
-gallery · packaging: `.dmg`, Developer ID signing, notarization (human/hardware
-blocked) · security: mTLS, OAuth/OIDC, OS-level subprocess containment.
+**Operational fact worth knowing before you push.** A push touching `crates/`
+costs ~14 minutes in the `container` job. The `cargo-chef` split does not help
+there: that job sets `cache-to: type=gha,mode=min`, which never exports
+intermediate stages, so the cook layer cannot survive between pushes. This is a
+deliberate trade-off protecting `publish-image.yml`'s `mode=max` entries in the
+shared 10 GB cache (see the comment at `ci.yml:95`) — a priced cost, not a bug.
+Sub-30s container runs are whole-image cache hits, not the split paying off.
+Measurement and the one untested alternative: BUILD-EVIDENCE, last entry.
 
-**Two things that need Eryk, not an agent.**
-1. **17 ADRs still carry `human_validated: false`**, including 0007–0023 — most
-   of the core. Signing one honestly (ADR 0031) took a real verification pass;
-   this is not a batch job.
-2. **The `git push` rule below is stale.** It says pushes are the maintainer's
-   act, but on 2026-08-03 Eryk explicitly directed ~8 pushes to `main` during
-   the CI repair. Either the rule needs amending or that was a one-off — a
-   fresh session should ASK rather than assume, and must not push on its own
-   initiative either way.
+**Smoke scripts stay out of CI, deliberately.** `scripts/smoke-*.sh` bind
+ports, spawn daemons and need cleanup; wiring them in would trade pipeline
+flakiness for a regression class nothing has actually hit. Wire one in when it
+catches something by hand — not before.
 
-**One measurement is pending and free.** The Docker build was split with
-`cargo-chef` so dependencies are their own cached layer; locally a one-line
-source edit rebuilt in 51s against a 254s cold cook. The next CI push that
-touches `crates/` WITHOUT touching `Cargo.lock` is the first real test of
-whether the GHA layer cache actually hits. Worth a glance at the `container`
-job's duration whenever that happens.
+**Product backlog** → `docs/ROADMAP.md` "Deferred / backlog": WASM for the
+agent/policy capabilities plus the component model and a network host-fn ·
+extension SDK + gallery · packaging (`.dmg`, signing, notarization —
+human/hardware blocked) · security (mTLS, OAuth/OIDC, OS-level containment).
 
 ## Where things live (keep the root clean)
 
