@@ -222,6 +222,21 @@ swappable policy engine, and it stays reliable even on small local models.
   before/after live series on gemma-3-27b (Fisher one-tailed p≈0.019),
   premature finish 0/24. Wide latitude, plan mode and the journal shape are
   untouched; exactly-once across resume re-proven post-change. Done.
+- **Phase 23 — plan distillation (ADR 0032).** The second self-learning slice,
+  deferred by ADR 0016 and now closed. A completed plan-mode run distils to its
+  LAST journaled generation (earlier ones failed and triggered a re-plan, so
+  learning from them would be learning failure); one run yields one artifact,
+  plan mode a plan and step mode a fact. Candidates are re-validated against
+  the LIVE action space before being offered, so a plan naming a departed tool
+  ceases to exist for the model — staleness handled by the action space, not by
+  a policy. The model adopts explicitly via `adopt_learned_plan`, offered on
+  generation zero only, and the adopted plan re-enters the identical
+  `plan::validate` floor. The journal records it BY VALUE, so `forget` removes
+  future influence without rewriting a finished run's history. Plan mode also
+  gained the retrieved context it never had. 280 hermetic tests (289 with
+  Postgres), CI green. Loose ends: no plan leg in `scripts/smoke-selflearn.sh`,
+  no web-UI surface for plans, adoption branch not independently reviewed.
+  Done.
 
 ## Phase 4 — the governed extension platform (delivered)
 
@@ -316,7 +331,7 @@ will be built. In rough priority.
   logs, the embeddings retrieval switch, ledger-dedupe scaling, auth — plus
   packaging (above) and deployment on real rootless-podman hardware. Necessary
   for real users; a sweep, not a headline.
-- **D · Governed self-learning** — *shipped as Phase 10 (ADR 0016; knowledge slice; plan distillation deferred).* The runtime distils reusable knowledge and
+- **D · Governed self-learning** — *complete: knowledge slice shipped as Phase 10 (ADR 0016), plan slice as Phase 23 (ADR 0032).* The runtime distils reusable knowledge and
   plans from past runs into memory — governed, provenance-tagged, and
   reversible, so learning can never silently corrupt behaviour. On-brand and
   ambitious; also the highest-risk.
@@ -342,10 +357,12 @@ block a launch; the core is complete.
   containment.
 - **Correctness-sensitive extensions.** Adaptive re-planning — *shipped as
   Phase 20 (ADR 0030)*. WASM for the memory capability — *shipped as Phase 16
-  (ADR 0024)*. Still deferred: plan distillation (the second self-learning
-  slice — a learned plan re-validated like any plan, reversible per ADR 0016),
-  and WASM for the agent / policy capabilities plus the component model and a
-  real network host-fn.
+  (ADR 0024)*. Plan distillation — *shipped as Phase 23 (ADR 0032): a learned
+  plan re-validated against the live action space, adopted only by explicit
+  model choice, journaled by value so forget cannot rewrite history. Loose
+  ends: no plan leg in `scripts/smoke-selflearn.sh`, no web-UI surface for
+  plans, adoption branch unreviewed.* Still deferred: WASM for the agent /
+  policy capabilities plus the component model and a real network host-fn.
 - **Governed shared-memory backend (Postgres + pgvector) — Done (ADR 0028; validated 7/7 on real Postgres: concurrency, A→B sharing, provenance + zero-residue forget, poisoned-fact-never-an-action).** A
   concurrent-safe shared memory backend behind the existing memory seam (ADR
   0005/0008/0024), so two independent kernels (desktop + a server) can share
