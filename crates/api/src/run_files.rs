@@ -19,7 +19,8 @@ use kernel_core::JournalEntry;
 
 /// The keys under which the bundled tools report a file they wrote, in their
 /// `Receipt` result objects (`read_source`/`extract_structure` → `saved_as`,
-/// `write_report` → `output`, `append_ledger` → `ledger`).
+/// `write_report` → `output`, `append_ledger` → `ledger`). Extensions use the
+/// same convention (e.g. the `zapisz_plik` WASM tool → `saved_as`, ADR 0034).
 const FILE_NAME_KEYS: [&str; 3] = ["saved_as", "output", "ledger"];
 
 /// Serving cap: a run artifact is a report, not a blob store. Anything larger

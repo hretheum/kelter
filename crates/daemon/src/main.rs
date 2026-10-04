@@ -659,6 +659,7 @@ async fn main() -> anyhow::Result<()> {
                 // ungranted capability cannot be instantiated.
                 let grants = wasmhost::Grants {
                     network: ext.permissions.network,
+                    workspace_write: ext.permissions.workspace_write,
                 };
                 tracing::info!(
                     "registry: WASM extension '{}' (in-process, sandboxed; grants: {:?})",
@@ -679,6 +680,21 @@ async fn main() -> anyhow::Result<()> {
                     grants,
                 )
                 .with_context(|| format!("failed to load WASM extension '{}'", ext.name))?;
+                let source = match endpoint.parameters {
+                    Some(p) => source.with_parameters(p),
+                    None => source,
+                };
+                // `workspace_write` on a WASM tool = the host-validated
+                // `kelter:fs` import over the run workspace — the same
+                // directory the bundled tools use. Without the grant the
+                // module cannot import it at all.
+                let source = if grants.workspace_write {
+                    source.with_workspace(&workspace_abs).with_context(|| {
+                        format!("WASM extension '{}': workspace unusable", ext.name)
+                    })?
+                } else {
+                    source
+                };
                 wasm_sources.push(wasmhost::arc(source));
             }
             (
@@ -689,8 +705,12 @@ async fn main() -> anyhow::Result<()> {
                 // sandboxed, persistent instance. Loading instantiates —
                 // an ungranted import refuses the daemon start loudly here,
                 // not on first retrieval.
+                // No filesystem for a memory backend (wasmhost never wires
+                // `workspace_write` there): a module that imports it fails
+                // to instantiate, loudly, at startup.
                 let grants = wasmhost::Grants {
                     network: ext.permissions.network,
+                    workspace_write: false,
                 };
                 tracing::info!(
                     "registry: WASM memory extension '{}' (in-process, sandboxed; grants: {:?})",

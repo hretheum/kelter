@@ -28,4 +28,8 @@ mkdir -p "$REPO_ROOT/examples/extensions/memstore-wasm"
 build memstore-wasm memstore_wasm.wasm "$REPO_ROOT/examples/extensions/memstore-wasm"
 build poisonmem poisonmem_wasm.wasm "$REPO_ROOT/examples/extensions/memstore-wasm"
 
+# zapisz_plik (K12 finding N1): a deployable extension, so it lives under
+# deploy/extensions/ — a directory you mount as [tools] extension_dirs.
+build zapisz-plik zapisz_plik.wasm "$REPO_ROOT/deploy/extensions/zapisz-plik"
+
 echo "done"

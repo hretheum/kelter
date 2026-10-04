@@ -1,0 +1,26 @@
+# zapisz_plik — write a text file into the run workspace (K12 finding N1).
+#
+# A WASM tool: runs IN-PROCESS through wasmtime, capability-sandboxed
+# (ADR 0011/0012). It gets exactly one capability, granted below:
+# `workspace_write` → the host defines the `kelter:fs.kelter_ws_write`
+# import, and the HOST validates every path (relative, no `..`, no symlink
+# escape, no overwrite unless `nadpisz = true`, 1 MiB hard cap). No network,
+# no other disk access. No operator trust entry is needed: it is not a
+# subprocess (wasm-sandboxed by construction).
+
+[extension]
+name = "zapisz-plik"
+description = "Zapisz plik tekstowy w katalogu roboczym (workspace). Podaj ścieżkę względną (np. raporty/wynik.md) i pełną treść. Istniejącego pliku nie nadpisuje, chyba że nadpisz=true. Limit treści: 256 KiB."
+provides = ["tools"]
+mechanism = "wasm"
+
+[permissions]
+workspace_write = true
+
+[wasm]
+# Built from examples/wasm-tools/zapisz-plik (checked in; rebuild with
+# scripts/build-wasm-demo.sh).
+module = "zapisz_plik.wasm"
+tool = "zapisz_plik"
+# Typed, flat arguments instead of the single `input` string.
+parameters = "schema.json"
