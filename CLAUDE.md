@@ -38,13 +38,13 @@ workspace).
 **Where the detail lives.** Ongoing status/roadmap → `docs/ROADMAP.md`
 (Eryk-owned — leave unstaged). Per-phase evidence + decisions →
 `docs/BUILD-EVIDENCE.md`. Architecture → `docs/architecture.md` /
-`architecture-overview.md`. Decisions → `docs/adr/` (0001–0034). The 2026-07-21
+`architecture-overview.md`. Decisions → `docs/adr/` (0001–0035). The 2026-07-21
 adversarial audit + its fix passes → `docs/audit/AUDIT-2026-07-21.md`.
 
-**Testing.** `cargo test --workspace` is hermetic — 314 tests, plus 9
+**Testing.** `cargo test --workspace` is hermetic — 319 tests, plus 9
 `pgstore` tests that are `#[ignore]`d because they need a real Postgres. To run
 those too: start a `pgvector/pgvector:pg16` container, export
-`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (323 total — the
+`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (328 total — the
 figure CI reports). CI does this via a `services:` block. Bare `cargo test`
 reports them as `9 ignored`, never as a green pass. `cargo clippy --workspace
 --all-targets -D warnings` and `cargo fmt --check` are the bar. web-ui:
@@ -83,7 +83,11 @@ action (no dispatched step that came back ok) ends in the new terminal status
 mode. ADR 0034 — WASM tools can get a host-validated `workspace_write`
 capability, typed flat `[wasm] parameters`, and an `{"ok": false}` failure
 convention; `deploy/extensions/zapisz-plik/` is the first user (a deployable
-extension root, mounted on K12 via the existing config volume).
+extension root, mounted on K12 via the existing config volume). ADR 0035 — a
+refused extension (invalid manifest, or `subprocess-unsandboxed` without a
+`[trust]` entry) is skipped with an ERROR log and listed in
+`skipped_extensions` on `GET /api/v1/tools`; the daemon starts. What is
+refused is unchanged.
 
 **Open items, in the order they'd bite.**
 1. **18 ADRs carry `human_validated: false`** — 0007–0023 plus 0032. Eryk's

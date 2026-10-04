@@ -14,12 +14,15 @@
 //!
 //! Governance is non-negotiable either way: extensions are untrusted by
 //! construction, and a manifest that declares anything this runtime cannot
-//! scope (unknown capability, unknown permission key) fails startup loudly
-//! instead of being silently ignored.
+//! scope (unknown capability, unknown permission key) is refused loudly
+//! instead of being silently ignored. Since ADR 0035 "refused" means the
+//! extension is SKIPPED — logged at ERROR and reported via the API — rather
+//! than aborting the whole daemon start: one bad directory must not disable
+//! the agent. The refused extension still never runs.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::client::ServerSpec;
 
@@ -214,6 +217,8 @@ pub struct WasmEndpoint {
 #[derive(Debug, Clone)]
 pub struct RegisteredExtension {
     pub name: String,
+    /// Path of the manifest this extension was loaded from.
+    pub manifest: String,
     pub capability: Capability,
     pub permissions: Permissions,
     pub trust: TrustMode,
@@ -296,8 +301,7 @@ pub enum ManifestError {
     WasmTrustMismatch(String, String),
     #[error(
         "extension '{0}' is a subprocess opted-in as `subprocess-unsandboxed`, but the operator \
-         policy does not allow it. Add it to [trust] allow_unsandboxed_subprocess in the daemon \
-         config to run it (this is an explicit trust decision — it does NOT sandbox the subprocess)"
+         policy does not allow it — it is not started (a manifest cannot authorise its own escape)"
     )]
     OperatorConsentRequired(String),
 }
@@ -517,6 +521,7 @@ pub fn load_manifest(manifest_path: &Path) -> Result<RegisteredExtension, Manife
 
     Ok(RegisteredExtension {
         name,
+        manifest: display,
         capability,
         permissions: manifest.permissions,
         trust,
@@ -524,13 +529,93 @@ pub fn load_manifest(manifest_path: &Path) -> Result<RegisteredExtension, Manife
     })
 }
 
-/// Scan directories for extension manifests: each immediate subdirectory
-/// (or the directory itself) containing `kelter-extension.toml` is an
-/// extension. Invalid manifests are reported, not silently skipped.
-pub fn discover(dirs: &[String]) -> (Vec<RegisteredExtension>, Vec<ManifestError>) {
-    let mut extensions = Vec::new();
-    let mut errors = Vec::new();
+impl ManifestError {
+    /// The extension name the error is about, when the manifest got far
+    /// enough to name one (an unreadable or unparseable file did not).
+    pub fn extension_name(&self) -> Option<&str> {
+        use ManifestError::*;
+        match self {
+            Io(..) | Parse(..) => None,
+            UnknownCapability(n, _)
+            | UnimplementedCapability(n, _)
+            | OneCapability(n, _)
+            | MissingSection(n, ..)
+            | NetworkRequired(n)
+            | BadCardUrl(n, _)
+            | UnknownMechanism(n, _)
+            | UnsupportedMechanism(n, ..)
+            | WasmToolNameRequired(n)
+            | WasmToolNameForbidden(n)
+            | BadWasmParameters(n, _)
+            | TrustNotDeclared(n)
+            | UnknownTrust(n, _)
+            | WasmTrustMismatch(n, _)
+            | OperatorConsentRequired(n) => Some(n),
+        }
+    }
+}
 
+/// Why the registry skipped an extension (ADR 0035). Serialized in
+/// `snake_case` for the API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipReason {
+    /// The manifest could not be read, parsed or validated.
+    InvalidManifest,
+    /// A valid `subprocess-unsandboxed` manifest the operator has not listed
+    /// in `[trust] allow_unsandboxed_subprocess` (ADR 0012's operator gate).
+    OperatorConsentRequired,
+}
+
+impl SkipReason {
+    /// The `snake_case` label, identical to the serialized form.
+    pub fn label(self) -> &'static str {
+        match self {
+            SkipReason::InvalidManifest => "invalid_manifest",
+            SkipReason::OperatorConsentRequired => "operator_consent_required",
+        }
+    }
+}
+
+/// An extension the registry refused to load. It is NOT run — skipping is
+/// the refusal (ADR 0012) without taking the rest of the daemon down with
+/// it (ADR 0035).
+#[derive(Debug, Clone, Serialize)]
+pub struct SkippedExtension {
+    /// `None` when the manifest was too broken to name the extension.
+    pub name: Option<String>,
+    pub manifest: String,
+    pub reason: SkipReason,
+    /// The full refusal, as it is also logged.
+    pub detail: String,
+    /// What the operator can do about it.
+    pub remedy: String,
+}
+
+impl SkippedExtension {
+    fn invalid(manifest: &Path, err: ManifestError) -> Self {
+        Self {
+            name: err.extension_name().map(str::to_string),
+            manifest: manifest.display().to_string(),
+            reason: SkipReason::InvalidManifest,
+            detail: err.to_string(),
+            remedy: "fix the manifest (or remove the extension directory) and restart the daemon"
+                .to_string(),
+        }
+    }
+}
+
+/// The registry outcome: what loads, and what was refused and why.
+#[derive(Debug, Default)]
+pub struct Registry {
+    pub extensions: Vec<RegisteredExtension>,
+    pub skipped: Vec<SkippedExtension>,
+}
+
+/// Every manifest path under `dirs`: each immediate subdirectory (or the
+/// directory itself) containing `kelter-extension.toml`.
+fn manifest_candidates(dirs: &[String]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
     for dir in dirs {
         let root = Path::new(dir);
         let mut candidates = vec![root.join(MANIFEST_NAME)];
@@ -542,15 +627,69 @@ pub fn discover(dirs: &[String]) -> (Vec<RegisteredExtension>, Vec<ManifestError
                 }
             }
         }
-        for manifest in candidates.into_iter().filter(|p| p.is_file()) {
-            match load_manifest(&manifest) {
-                Ok(ext) => extensions.push(ext),
-                Err(e) => errors.push(e),
-            }
+        out.extend(candidates.into_iter().filter(|p| p.is_file()));
+    }
+    out
+}
+
+/// Scan directories for extension manifests: each immediate subdirectory
+/// (or the directory itself) containing `kelter-extension.toml` is an
+/// extension. Invalid manifests are reported, not silently skipped.
+pub fn discover(dirs: &[String]) -> (Vec<RegisteredExtension>, Vec<ManifestError>) {
+    let mut extensions = Vec::new();
+    let mut errors = Vec::new();
+    for manifest in manifest_candidates(dirs) {
+        match load_manifest(&manifest) {
+            Ok(ext) => extensions.push(ext),
+            Err(e) => errors.push(e),
         }
     }
     extensions.sort_by(|a, b| a.name.cmp(&b.name));
     (extensions, errors)
+}
+
+/// Discover extensions AND apply the operator gate (ADR 0012, ADR 0035).
+///
+/// - An invalid manifest is skipped ([`SkipReason::InvalidManifest`]).
+/// - A `subprocess-unsandboxed` extension whose name is NOT in
+///   `allow_unsandboxed` is skipped ([`SkipReason::OperatorConsentRequired`]).
+///   The manifest is untrusted input and cannot authorise its own escape; a
+///   skipped extension is never started.
+/// - Everything else is returned for the daemon to wire up.
+///
+/// Never fails: the daemon logs each skip at ERROR and keeps starting with
+/// the remaining extensions. The caller's own configuration errors are not
+/// this function's concern and still abort the start.
+pub fn resolve(dirs: &[String], allow_unsandboxed: &[String]) -> Registry {
+    let mut registry = Registry::default();
+    for manifest in manifest_candidates(dirs) {
+        match load_manifest(&manifest) {
+            Ok(ext)
+                if ext.requires_operator_consent()
+                    && !allow_unsandboxed.iter().any(|n| n == &ext.name) =>
+            {
+                registry.skipped.push(SkippedExtension {
+                    detail: ManifestError::OperatorConsentRequired(ext.name.clone()).to_string(),
+                    remedy: format!(
+                        "add \"{}\" to [trust] allow_unsandboxed_subprocess in the daemon config \
+                         and restart — an explicit trust decision that does NOT sandbox the \
+                         subprocess (ADR 0012); or ship it as a WASM extension instead",
+                        ext.name
+                    ),
+                    name: Some(ext.name),
+                    manifest: ext.manifest,
+                    reason: SkipReason::OperatorConsentRequired,
+                });
+            }
+            Ok(ext) => registry.extensions.push(ext),
+            Err(e) => registry
+                .skipped
+                .push(SkippedExtension::invalid(&manifest, e)),
+        }
+    }
+    registry.extensions.sort_by(|a, b| a.name.cmp(&b.name));
+    registry.skipped.sort_by(|a, b| a.manifest.cmp(&b.manifest));
+    registry
 }
 
 #[cfg(test)]
@@ -787,9 +926,9 @@ mod tests {
     #[test]
     fn subprocess_opt_in_requires_operator_consent() {
         // The two-part gate: the manifest declaring opt-in makes
-        // `requires_operator_consent()` true; the daemon still has to allow
-        // it (tested at the daemon level). The manifest alone does NOT let
-        // it in.
+        // `requires_operator_consent()` true; the operator still has to allow
+        // it (`resolve`, tested below). The manifest alone does NOT let it
+        // in.
         let root = tmp();
         write_ext(
             &root,
@@ -974,5 +1113,99 @@ mod tests {
         let (exts, errors) = discover(&["/nonexistent/kelter-ext".to_string()]);
         assert!(exts.is_empty());
         assert!(errors.is_empty());
+    }
+
+    const WASM_OK: &str = "[extension]\nname = \"wc\"\nprovides = [\"tools\"]\nmechanism = \"wasm\"\n\n[wasm]\nmodule = \"wc.wasm\"\ntool = \"word_count\"\n";
+    const UNTRUSTED_SUB: &str = "[extension]\nname = \"wordstats\"\nprovides = [\"tools\"]\ntrust = \"subprocess-unsandboxed\"\n\n[server]\ncommand = \"./run.sh\"\n";
+
+    /// ADR 0035: a mix of a valid WASM tool, an un-allowed unsandboxed
+    /// subprocess and an unparseable manifest resolves to ONE registered
+    /// extension and TWO reported skips — nothing aborts.
+    #[test]
+    fn resolve_skips_untrusted_subprocess_and_broken_manifest() {
+        let root = tmp();
+        write_ext(&root, "wc", WASM_OK);
+        write_ext(&root, "wordstats", UNTRUSTED_SUB);
+        write_ext(&root, "broken", "[extension\nname = ");
+        let reg = resolve(&[root.to_string_lossy().into_owned()], &[]);
+
+        assert_eq!(reg.extensions.len(), 1, "{:?}", reg.extensions);
+        assert_eq!(reg.extensions[0].name, "wc");
+        assert_eq!(reg.extensions[0].trust, TrustMode::WasmSandboxed);
+
+        assert_eq!(reg.skipped.len(), 2, "{:?}", reg.skipped);
+        let broken = reg
+            .skipped
+            .iter()
+            .find(|s| s.reason == SkipReason::InvalidManifest)
+            .expect("broken manifest reported");
+        assert_eq!(broken.name, None);
+        assert!(broken.manifest.ends_with("broken/kelter-extension.toml"));
+        assert!(
+            broken.detail.contains("invalid manifest"),
+            "{}",
+            broken.detail
+        );
+
+        let untrusted = reg
+            .skipped
+            .iter()
+            .find(|s| s.reason == SkipReason::OperatorConsentRequired)
+            .expect("untrusted subprocess reported");
+        assert_eq!(untrusted.name.as_deref(), Some("wordstats"));
+        assert!(untrusted
+            .detail
+            .contains("operator policy does not allow it"));
+        assert!(
+            untrusted
+                .remedy
+                .contains("[trust] allow_unsandboxed_subprocess"),
+            "{}",
+            untrusted.remedy
+        );
+        assert!(untrusted.remedy.contains("\"wordstats\""));
+
+        // `label()` is what the API reports; it must match the serde form.
+        for s in &reg.skipped {
+            assert_eq!(serde_json::to_value(s.reason).unwrap(), s.reason.label());
+        }
+    }
+
+    /// The operator gate still works the other way: listing the extension
+    /// in `[trust] allow_unsandboxed_subprocess` lets it register.
+    #[test]
+    fn resolve_registers_subprocess_the_operator_allowed() {
+        let root = tmp();
+        write_ext(&root, "wordstats", UNTRUSTED_SUB);
+        let dirs = [root.to_string_lossy().into_owned()];
+
+        let reg = resolve(&dirs, &["wordstats".to_string()]);
+        assert!(reg.skipped.is_empty(), "{:?}", reg.skipped);
+        assert_eq!(reg.extensions.len(), 1);
+        assert_eq!(reg.extensions[0].trust, TrustMode::SubprocessUnsandboxed);
+
+        // Consent is per name: allowing a different extension is not consent.
+        let reg = resolve(&dirs, &["someone-else".to_string()]);
+        assert!(reg.extensions.is_empty());
+        assert_eq!(reg.skipped[0].reason, SkipReason::OperatorConsentRequired);
+    }
+
+    /// A semantically invalid (but parseable) manifest is skipped too, and
+    /// still names the extension.
+    #[test]
+    fn resolve_skips_invalid_manifest_with_its_name() {
+        let root = tmp();
+        write_ext(
+            &root,
+            "notrust",
+            "[extension]\nname = \"notrust\"\nprovides = [\"tools\"]\n\n[server]\ncommand = \"./run.sh\"\n",
+        );
+        let reg = resolve(&[root.to_string_lossy().into_owned()], &[]);
+        assert!(reg.extensions.is_empty());
+        assert_eq!(reg.skipped[0].reason, SkipReason::InvalidManifest);
+        assert_eq!(reg.skipped[0].name.as_deref(), Some("notrust"));
+        assert!(reg.skipped[0]
+            .detail
+            .contains("did not declare a trust mode"));
     }
 }

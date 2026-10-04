@@ -524,11 +524,37 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Capability registry: manifest-declared extensions, routed by the
-    // capability they provide (ADR 0008). Invalid manifests fail loudly.
-    let (extensions, manifest_errors) = mcp::extensions::discover(&cfg.tools.extension_dirs);
-    if let Some(err) = manifest_errors.first() {
-        anyhow::bail!("extension manifest error: {err}");
+    // capability they provide (ADR 0008). A refused extension — an invalid
+    // manifest, or a `subprocess-unsandboxed` one the operator has not
+    // allowed (ADR 0012) — is SKIPPED, loudly: logged at ERROR and reported
+    // on GET /api/v1/tools (ADR 0035). It never runs, but one bad directory
+    // no longer takes the whole daemon down.
+    let registry = mcp::extensions::resolve(
+        &cfg.tools.extension_dirs,
+        &cfg.trust.allow_unsandboxed_subprocess,
+    );
+    for skip in &registry.skipped {
+        tracing::error!(
+            extension = skip.name.as_deref().unwrap_or("<unnamed>"),
+            manifest = %skip.manifest,
+            reason = skip.reason.label(),
+            "registry: extension SKIPPED, not loaded: {} — to fix: {}",
+            skip.detail,
+            skip.remedy
+        );
     }
+    let skipped_extensions: Vec<api::SkippedExtension> = registry
+        .skipped
+        .iter()
+        .map(|s| api::SkippedExtension {
+            name: s.name.clone(),
+            manifest: s.manifest.clone(),
+            reason: s.reason.label().to_string(),
+            detail: s.detail.clone(),
+            remedy: s.remedy.clone(),
+        })
+        .collect();
+    let extensions = registry.extensions;
     let workspace_abs = std::fs::canonicalize(&cfg.tools.workspace)
         .or_else(|_| {
             std::fs::create_dir_all(&cfg.tools.workspace)
@@ -555,9 +581,10 @@ async fn main() -> anyhow::Result<()> {
         );
 
         // Operator-consent gate (ADR 0012), part two of the two-part opt-in.
-        // The manifest declaring `subprocess-unsandboxed` is NOT enough — the
-        // operator must list the extension here. A manifest cannot authorise
-        // its own escape.
+        // `resolve` already skipped every un-allowed `subprocess-unsandboxed`
+        // extension (ADR 0035); this re-check is defence in depth — reaching
+        // it means the registry broke its contract, so refuse to start
+        // rather than run an unconsented subprocess.
         if ext.requires_operator_consent()
             && !cfg
                 .trust
@@ -566,9 +593,8 @@ async fn main() -> anyhow::Result<()> {
                 .any(|n| n == &ext.name)
         {
             anyhow::bail!(
-                "extension '{}' opted into subprocess-unsandboxed, but the operator has not \
-                 allowed it. Add it to [trust] allow_unsandboxed_subprocess to run it — this is \
-                 an explicit trust decision and does NOT sandbox the subprocess (ADR 0012).",
+                "registry invariant broken: extension '{}' is subprocess-unsandboxed without \
+                 operator consent but was not skipped — refusing to start (ADR 0012)",
                 ext.name
             );
         }
@@ -738,9 +764,24 @@ async fn main() -> anyhow::Result<()> {
     // that would silently offer the model zero actions instead of bailing
     // loudly.
     if servers.is_empty() && wasm_sources.is_empty() && remote_agents.is_empty() {
+        // Skipped extensions (ADR 0035) are named here: when they were the
+        // only action sources, this config error is what the operator sees.
         anyhow::bail!(
             "no action sources configured — enable tools, a WASM or memory \
-             extension, or a remote agent"
+             extension, or a remote agent{}",
+            if skipped_extensions.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " ({} extension(s) were skipped — see the ERROR lines above: {})",
+                    skipped_extensions.len(),
+                    skipped_extensions
+                        .iter()
+                        .map(|s| s.name.clone().unwrap_or_else(|| s.manifest.clone()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
         );
     }
 
@@ -1273,13 +1314,14 @@ async fn main() -> anyhow::Result<()> {
         api::RunFilesService::new(&workspace_abs)
             .context("cannot initialize the run-files service on the tools workspace")?,
     );
-    let app = api::build_app_full(
+    let app = api::build_app_full_with_skipped(
         kernel,
         principals,
         Some(controller),
         skills_ctrl,
         Some(agents_ctrl),
         Some(run_files),
+        skipped_extensions,
     );
     let serve = async {
         match &cfg.tls {
