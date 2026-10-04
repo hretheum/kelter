@@ -55,13 +55,12 @@ jobs:
         working-directory: apps/web-ui
       - run: pnpm build
         working-directory: apps/web-ui
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1  # przypięte: ostatni zielony main (888f7d7); clippy 1.99 czerwieni main od 747b0fc
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
-      # clippy 1.99 (double_must_use) flaguje kod generowany przez #[async_trait] — to nie nasz kod.
-      - run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::double_must_use
+      - run: cargo clippy --workspace --all-targets -- -D warnings
       # --include-ignored so the pgstore tests above actually run. There are no
       # other #[ignore]d tests in the workspace, so this widens nothing else.
       - run: cargo test --workspace -- --include-ignored
@@ -115,7 +114,7 @@ jobs:
           cache-dependency-path: apps/web-ui/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile && pnpm build
         working-directory: apps/web-ui
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1  # przypięte: ostatni zielony main (888f7d7); clippy 1.99 czerwieni main od 747b0fc
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -139,7 +138,7 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: |
           cargo fmt --all --check
-          cargo clippy --all-targets -- -D warnings -A clippy::double_must_use
+          cargo clippy --all-targets -- -D warnings
       - name: Test the desktop crate
         working-directory: apps/desktop/src-tauri
         run: cargo test --all-targets
