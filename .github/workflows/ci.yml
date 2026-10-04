@@ -60,7 +60,8 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # clippy 1.99 (double_must_use) flaguje kod generowany przez #[async_trait] — to nie nasz kod.
+      - run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::double_must_use
       # --include-ignored so the pgstore tests above actually run. There are no
       # other #[ignore]d tests in the workspace, so this widens nothing else.
       - run: cargo test --workspace -- --include-ignored
@@ -138,7 +139,7 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: |
           cargo fmt --all --check
-          cargo clippy --all-targets -- -D warnings
+          cargo clippy --all-targets -- -D warnings -A clippy::double_must_use
       - name: Test the desktop crate
         working-directory: apps/desktop/src-tauri
         run: cargo test --all-targets
