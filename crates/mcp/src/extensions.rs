@@ -89,6 +89,12 @@ pub struct WasmSection {
     /// reserved-op protocol, not a named action).
     #[serde(default)]
     pub tool: Option<String>,
+    /// Optional typed arguments for a `tools` module: a JSON Schema file
+    /// (relative to the extension directory) describing a FLAT object of
+    /// scalar properties. Absent = the original single-string ABI
+    /// (`{"input": "..."}`). Refused for `memory`.
+    #[serde(default)]
+    pub parameters: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -199,6 +205,9 @@ pub struct WasmEndpoint {
     /// (validated at load), `None` for a `memory` module (fixed op protocol).
     pub tool: Option<String>,
     pub description: String,
+    /// The typed argument schema, loaded and checked flat at registration
+    /// (`[wasm] parameters`). `None` = single-string ABI.
+    pub parameters: Option<serde_json::Value>,
 }
 
 /// A manifest the registry accepted, routed by capability.
@@ -264,6 +273,11 @@ pub enum ManifestError {
     )]
     WasmToolNameForbidden(String),
     #[error(
+        "wasm extension '{0}' has an unusable [wasm] parameters schema: {1} — it must be a JSON \
+         object schema whose properties are all string/boolean/integer/number (flat, no nesting)"
+    )]
+    BadWasmParameters(String, String),
+    #[error(
         "extension '{0}' is a subprocess and did not declare a trust mode — refusing to load \
          (sandbox-by-default). Either use a sandboxed mechanism (mechanism = \"wasm\") or, to run \
          it as an untrusted subprocess with OS-level egress, declare `trust = \
@@ -286,6 +300,51 @@ pub enum ManifestError {
          config to run it (this is an explicit trust decision — it does NOT sandbox the subprocess)"
     )]
     OperatorConsentRequired(String),
+}
+
+/// Load a WASM tool's typed argument schema and hold it to the shallow-grammar
+/// rule (ADR 0011: nested object grammars are pathologically slow for small
+/// models under constrained decoding): an object whose properties are all
+/// scalars. `additionalProperties` is forced to `false` — a module never
+/// receives keys its schema did not declare.
+pub fn load_flat_parameters(path: &Path) -> Result<serde_json::Value, String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut schema: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
+    let obj = schema
+        .as_object_mut()
+        .ok_or("schema is not a JSON object")?;
+    if obj.get("type").and_then(|t| t.as_str()) != Some("object") {
+        return Err("top-level \"type\" must be \"object\"".into());
+    }
+    let props = obj
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .filter(|p| !p.is_empty())
+        .ok_or("\"properties\" must be a non-empty object")?;
+    for (k, v) in props {
+        let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if !matches!(ty, "string" | "boolean" | "integer" | "number") {
+            return Err(format!("property '{k}' has type '{ty}', not a scalar"));
+        }
+    }
+    if let Some(req) = obj.get("required") {
+        let req = req.as_array().ok_or("\"required\" must be an array")?;
+        for r in req {
+            let r = r.as_str().ok_or("\"required\" entries must be strings")?;
+            if !props.contains_key(r) {
+                return Err(format!("required '{r}' is not a declared property"));
+            }
+        }
+    }
+    obj.insert(
+        "additionalProperties".into(),
+        serde_json::Value::Bool(false),
+    );
+    // The kernel validates every proposal against this schema; make sure it
+    // compiles now (loud at startup), not on the first call.
+    jsonschema::validator_for(&schema).map_err(|e| format!("not a valid JSON Schema: {e}"))?;
+    Ok(schema)
 }
 
 /// Parse one manifest file into a registered extension.
@@ -368,10 +427,25 @@ pub fn load_manifest(manifest_path: &Path) -> Result<RegisteredExtension, Manife
             }
             let dir = manifest_path.parent().unwrap_or(Path::new("."));
             let module_path = dir.join(&wasm.module).to_string_lossy().into_owned();
+            let parameters = match (&wasm.parameters, capability) {
+                (None, _) => None,
+                (Some(_), Capability::Memory) => {
+                    return Err(ManifestError::BadWasmParameters(
+                        name,
+                        "a memory module serves the fixed op protocol and takes no parameters"
+                            .into(),
+                    ))
+                }
+                (Some(file), _) => Some(
+                    load_flat_parameters(&dir.join(file))
+                        .map_err(|e| ManifestError::BadWasmParameters(name.clone(), e))?,
+                ),
+            };
             ExtensionKind::Wasm(WasmEndpoint {
                 module_path,
                 tool: wasm.tool,
                 description: manifest.extension.description.clone(),
+                parameters,
             })
         }
         Capability::Tools | Capability::Memory => {
@@ -557,6 +631,100 @@ mod tests {
             ExtensionKind::Wasm(w) => {
                 assert!(w.module_path.ends_with("m.wasm"));
                 assert_eq!(w.tool.as_deref(), Some("word_count"));
+            }
+            other => panic!("expected wasm kind, got {other:?}"),
+        }
+    }
+
+    fn typed_wasm_manifest(provides: &str, schema: &str) -> (std::path::PathBuf, String) {
+        let root = tmp();
+        let tool_line = if provides == "tools" {
+            "tool = \"t\"\n"
+        } else {
+            ""
+        };
+        let dir = write_ext(
+            &root,
+            "typed",
+            &format!(
+                "[extension]\nname = \"typed\"\nprovides = [\"{provides}\"]\nmechanism = \"wasm\"\n\n\
+                 [wasm]\nmodule = \"m.wasm\"\n{tool_line}parameters = \"schema.json\"\n"
+            ),
+        );
+        std::fs::write(dir.join("schema.json"), schema).unwrap();
+        (root.clone(), root.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn wasm_tool_typed_parameters_load_flat_and_closed() {
+        let (_, root) = typed_wasm_manifest(
+            "tools",
+            r#"{"type":"object","properties":{"sciezka":{"type":"string"},"nadpisz":{"type":"boolean"}},"required":["sciezka"]}"#,
+        );
+        let (exts, errors) = discover(&[root]);
+        assert!(errors.is_empty(), "{errors:?}");
+        match &exts[0].kind {
+            ExtensionKind::Wasm(w) => {
+                let p = w.parameters.as_ref().expect("parameters loaded");
+                assert_eq!(p["properties"]["sciezka"]["type"], "string");
+                // Forced closed even though the file did not say so.
+                assert_eq!(p["additionalProperties"], false);
+            }
+            other => panic!("expected wasm kind, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wasm_tool_nested_or_broken_parameters_are_refused() {
+        for bad in [
+            r#"{"type":"object","properties":{"o":{"type":"object"}}}"#,
+            r#"{"type":"object","properties":{"a":{"type":"array"}}}"#,
+            r#"{"type":"object","properties":{}}"#,
+            r#"{"type":"string"}"#,
+            r#"{"type":"object","properties":{"a":{"type":"string"}},"required":["b"]}"#,
+            "not json",
+        ] {
+            let (_, root) = typed_wasm_manifest("tools", bad);
+            let (exts, errors) = discover(&[root]);
+            assert!(exts.is_empty(), "{bad} must be refused");
+            assert!(
+                errors[0].to_string().contains("parameters schema"),
+                "{bad}: {}",
+                errors[0]
+            );
+        }
+    }
+
+    #[test]
+    fn wasm_memory_with_parameters_is_refused() {
+        let (_, root) = typed_wasm_manifest(
+            "memory",
+            r#"{"type":"object","properties":{"a":{"type":"string"}}}"#,
+        );
+        let (exts, errors) = discover(&[root]);
+        assert!(exts.is_empty());
+        assert!(errors[0].to_string().contains("takes no parameters"));
+    }
+
+    /// The deployable extension shipped in-tree (deploy/extensions) must
+    /// always pass the registry — it is what K12 mounts.
+    #[test]
+    fn shipped_zapisz_plik_extension_registers() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../deploy/extensions");
+        let (exts, errors) = discover(&[root.to_string()]);
+        assert!(errors.is_empty(), "{errors:?}");
+        let ext = exts
+            .iter()
+            .find(|e| e.name == "zapisz-plik")
+            .expect("zapisz-plik discovered");
+        assert_eq!(ext.trust, TrustMode::WasmSandboxed);
+        assert!(ext.permissions.workspace_write);
+        assert!(!ext.permissions.network);
+        match &ext.kind {
+            ExtensionKind::Wasm(w) => {
+                assert_eq!(w.tool.as_deref(), Some("zapisz_plik"));
+                let p = w.parameters.as_ref().unwrap();
+                assert_eq!(p["required"], serde_json::json!(["sciezka", "tresc"]));
             }
             other => panic!("expected wasm kind, got {other:?}"),
         }

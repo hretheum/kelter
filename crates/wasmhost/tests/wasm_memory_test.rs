@@ -134,8 +134,14 @@ fn ungranted_capability_is_refused_at_load_for_memory() {
     // Crux 2: netpeek imports kelter:net. As a memory backend with NO network
     // grant, the import is structurally absent — and because the memory host
     // instantiates EAGERLY, the refusal happens at load/registration time.
-    let msg = match WasmMemoryProvider::load("netgrab", &netpeek_path(), Grants { network: false })
-    {
+    let msg = match WasmMemoryProvider::load(
+        "netgrab",
+        &netpeek_path(),
+        Grants {
+            network: false,
+            ..Grants::default()
+        },
+    ) {
         Ok(_) => panic!("instantiation must fail without the grant"),
         Err(e) => e.to_string(),
     };
@@ -146,8 +152,15 @@ fn ungranted_capability_is_refused_at_load_for_memory() {
 
     // With the grant, the same module instantiates — the gate is the ONLY
     // thing between the module and the capability.
-    WasmMemoryProvider::load("netgrab", &netpeek_path(), Grants { network: true })
-        .expect("with the grant the module instantiates");
+    WasmMemoryProvider::load(
+        "netgrab",
+        &netpeek_path(),
+        Grants {
+            network: true,
+            ..Grants::default()
+        },
+    )
+    .expect("with the grant the module instantiates");
 }
 
 #[tokio::test]

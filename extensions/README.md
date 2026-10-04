@@ -213,6 +213,29 @@ Because a WASM tool is a `tools`-capability action like any other, it also
 works as a `tool` node in [plan mode](../docs/adr/0010-plan-mode.md) with no
 extra work.
 
+### Writing files, typed arguments, reporting failure (ADR 0034)
+
+Three optional additions to the WASM tool ABI — a module using none of them
+behaves exactly as above:
+
+- **`[permissions] workspace_write = true`** gives the module ONE host import,
+  `kelter:fs.kelter_ws_write(path_ptr, path_len, data_ptr, data_len, flags) -> i32`,
+  writing into the run workspace. The **host** validates every call (relative
+  path, no `..`, no symlink escape, no overwrite unless `flags & 1`, 1 MiB
+  cap); without the grant the module cannot be instantiated.
+- **`[wasm] parameters = "schema.json"`** replaces the single `input` string
+  with a typed, *flat* argument object (string/boolean/integer/number
+  properties only — nesting is refused at load). The module receives the
+  validated arguments as JSON.
+- **`{"ok": false, "error": "..."}`** as a result makes the step *fail*
+  instead of succeeding with an error payload — so a refused action never
+  counts as the run's effective action ([ADR 0033](../docs/adr/0033-success-requires-an-effective-action.md)).
+
+Working example: [`../deploy/extensions/zapisz-plik/`](../deploy/extensions/zapisz-plik/)
+(source: [`../examples/wasm-tools/zapisz-plik/`](../examples/wasm-tools/zapisz-plik/)),
+a sandboxed "write this text to a file" tool, packaged as a deployable
+extension root — see [`../deploy/extensions/README.md`](../deploy/extensions/README.md).
+
 **Honest boundary:** WASM sandboxes the *WASM* mechanism. Subprocess
 extensions (the MCP tool/memory/agent examples above) still run as OS
 processes with OS-level network/disk access — WASM is a sandboxed

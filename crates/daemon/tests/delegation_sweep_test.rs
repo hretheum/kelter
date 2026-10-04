@@ -191,8 +191,9 @@ async fn timeout_sweeper_denies_and_resumes() {
     let run = kernel.execute_run(run_id).await.unwrap();
     assert_eq!(
         run.status,
-        RunStatus::Completed,
-        "a timed-out ask resolves to Deny and the run finishes without delegating — never hangs"
+        RunStatus::Incomplete,
+        "a timed-out ask resolves to Deny and the run finishes without delegating — never hangs \
+         (and, having done nothing effective, never as Completed: ADR 0033)"
     );
     assert_eq!(
         state.send_calls.load(Ordering::SeqCst),

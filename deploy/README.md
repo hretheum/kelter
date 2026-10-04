@@ -34,6 +34,11 @@ journalctl --user -u kelter -f
 # survive logout: loginctl enable-linger $USER
 ```
 
+Extensions: to add the deployable WASM extensions (e.g. `zapisz_plik`, a
+sandboxed file writer), copy them under `~/.config/kelter/extensions/` and set
+`[tools] extension_dirs = ["/data/config/extensions"]` — the existing config
+mount carries them, no unit change. Details: [`extensions/README.md`](extensions/README.md).
+
 Validation: `scripts/validate-quadlet.sh` runs static checks anywhere and
 `quadlet -dryrun` where podman is installed. **On a dev machine without
 podman it prints the exact commands instead of pretending** — running them

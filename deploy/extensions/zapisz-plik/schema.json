@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "sciezka": {
+      "type": "string",
+      "description": "Ścieżka pliku względem workspace, z '/' jako separatorem, np. raporty/wynik.md. Bez '..' i bez ścieżek absolutnych."
+    },
+    "tresc": {
+      "type": "string",
+      "description": "Pełna treść pliku (tekst UTF-8)."
+    },
+    "nadpisz": {
+      "type": "boolean",
+      "description": "true = zastąp istniejący plik. Domyślnie false: istniejący plik nie zostanie zmieniony."
+    }
+  },
+  "required": ["sciezka", "tresc"],
+  "additionalProperties": false
+}

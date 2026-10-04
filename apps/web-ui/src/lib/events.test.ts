@@ -12,6 +12,7 @@ import {
   axisFor,
   axisSteps,
   ingestEnvelope,
+  ingestReplay,
 } from "./events";
 import type { RunEvent, RunEventEnvelope } from "./api";
 
@@ -84,5 +85,27 @@ describe("ingestEnvelope — forward-only ordered stream", () => {
     expect(axisFor(RUN).lastSeq).toBe(5);
     const step = axisSteps(axisFor(RUN)).find((s) => s.step === 0);
     expect(step?.progress.map((p) => p.note)).toEqual(["thinking"]);
+  });
+});
+
+/* ADR 0033: a run that finished without any successful action has its own
+ * terminal — it must never fold into the axis as "completed". */
+describe("incomplete terminal (ADR 0033)", () => {
+  it("live event sets an incomplete terminal with the model's output and the kernel's reason", () => {
+    ingestEnvelope(
+      env(1, { type: "incomplete", output: { summary: "e-mail sent" }, reason: "no action" })
+    );
+    expect(axisFor(RUN).terminal).toEqual({
+      kind: "incomplete",
+      output: { summary: "e-mail sent" },
+      reason: "no action",
+    });
+  });
+
+  it("journal replay of an incomplete terminal is not read as completed", () => {
+    ingestReplay(RUN, { task: "t", policy: "p" }, [
+      { kind: "terminal", status: "incomplete", output: { summary: "x" }, error: "no action" },
+    ]);
+    expect(axisFor(RUN).terminal?.kind).toBe("incomplete");
   });
 });

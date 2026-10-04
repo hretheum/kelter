@@ -449,7 +449,9 @@ async fn step_mode_events_carry_no_branch() {
     );
     let mut events = k.subscribe();
     let run = k.run_task("step mode".into()).await.unwrap();
-    assert_eq!(run.status, RunStatus::Completed);
+    // Finishing with no action behind it is Incomplete (ADR 0033); this test
+    // only cares that the run reached a terminal state through step mode.
+    assert_eq!(run.status, RunStatus::Incomplete);
 
     let mut saw_proposed = false;
     while let Ok(env) = events.try_recv() {

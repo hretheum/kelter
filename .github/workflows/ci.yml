@@ -55,7 +55,7 @@ jobs:
         working-directory: apps/web-ui
       - run: pnpm build
         working-directory: apps/web-ui
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1  # przypięte: ostatni zielony main (888f7d7); clippy 1.99 czerwieni main od 747b0fc
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -114,7 +114,7 @@ jobs:
           cache-dependency-path: apps/web-ui/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile && pnpm build
         working-directory: apps/web-ui
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1  # przypięte: ostatni zielony main (888f7d7); clippy 1.99 czerwieni main od 747b0fc
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2

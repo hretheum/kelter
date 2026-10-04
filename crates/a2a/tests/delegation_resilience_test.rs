@@ -212,7 +212,8 @@ async fn retry_counts_toward_p2_budget() {
 
     assert_eq!(
         run.status,
-        RunStatus::Completed,
+        // Every dial failed or was refused: no effective action (ADR 0033).
+        RunStatus::Incomplete,
         "the model falls through to finish"
     );
     assert_eq!(
@@ -352,7 +353,8 @@ async fn fallback_to_untrusted_agent_is_refused_not_skipped() {
     let run_id = kernel.create_run("t".into()).await.unwrap();
     let run = kernel.execute_run(run_id).await.unwrap();
 
-    assert_eq!(run.status, RunStatus::Completed);
+    // No successful action behind `finish` → Incomplete, not Completed (ADR 0033).
+    assert_eq!(run.status, RunStatus::Incomplete);
     assert_eq!(primary_state.send_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         untrusted_fb_state.send_calls.load(Ordering::SeqCst),
@@ -431,7 +433,8 @@ async fn circuit_breaker_trips_cools_down_and_recovers() {
         let kernel = make_kernel(source.clone(), delegation_gate.clone());
         let run_id = kernel.create_run("t".into()).await.unwrap();
         let run = kernel.execute_run(run_id).await.unwrap();
-        assert_eq!(run.status, RunStatus::Completed);
+        // The dial failed: no effective action (ADR 0033).
+        assert_eq!(run.status, RunStatus::Incomplete);
     }
     assert_eq!(state.send_calls.load(Ordering::SeqCst), 3);
 
@@ -439,7 +442,8 @@ async fn circuit_breaker_trips_cools_down_and_recovers() {
     let kernel = make_kernel(source.clone(), delegation_gate.clone());
     let run_id = kernel.create_run("t".into()).await.unwrap();
     let run = kernel.execute_run(run_id).await.unwrap();
-    assert_eq!(run.status, RunStatus::Completed);
+    // Refused without dialing: no effective action (ADR 0033).
+    assert_eq!(run.status, RunStatus::Incomplete);
     assert_eq!(
         state.send_calls.load(Ordering::SeqCst),
         3,
@@ -607,7 +611,8 @@ async fn circuit_open_skips_to_fallback_but_budget_refusal_aborts_entirely() {
         let run_id = kernel.create_run("t".into()).await.unwrap();
         let run = kernel.execute_run(run_id).await.unwrap();
 
-        assert_eq!(run.status, RunStatus::Completed);
+        // The one dial failed and the fallback was never tried (ADR 0033).
+        assert_eq!(run.status, RunStatus::Incomplete);
         assert_eq!(primary_state.send_calls.load(Ordering::SeqCst), 1);
         assert_eq!(
             fallback_state.send_calls.load(Ordering::SeqCst),

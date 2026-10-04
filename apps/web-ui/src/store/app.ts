@@ -148,7 +148,7 @@ function connectWs() {
   socket.onmessage = (msg) => {
     const env = JSON.parse(msg.data) as RunEventEnvelope;
     ingestEnvelope(env);
-    if (["created", "completed", "failed"].includes(env.event.type)) {
+    if (["created", "completed", "failed", "incomplete"].includes(env.event.type)) {
       void refreshRuns();
     }
   };
@@ -247,6 +247,10 @@ function replayFromSteps(run: Run) {
   } else if (run.status === "failed" && !axis.terminal) {
     ingestReplay(run.id, { task: run.task, policy: run.policy }, [
       { kind: "terminal", status: "failed", error: run.error ?? "failed" },
+    ]);
+  } else if (run.status === "incomplete" && !axis.terminal) {
+    ingestReplay(run.id, { task: run.task, policy: run.policy }, [
+      { kind: "terminal", status: "incomplete", output: run.output ?? null, error: run.error },
     ]);
   } else if (run.status === "canceled" && !axis.terminal) {
     ingestReplay(run.id, { task: run.task, policy: run.policy }, [

@@ -177,7 +177,10 @@ impl RunStore for InMemoryRunStore {
             .filter(|r| {
                 matches!(
                     r.status,
-                    RunStatus::Completed | RunStatus::Failed | RunStatus::Canceled
+                    RunStatus::Completed
+                        | RunStatus::Failed
+                        | RunStatus::Incomplete
+                        | RunStatus::Canceled
                 )
             })
             .map(|r| (r.id, r.created_at))

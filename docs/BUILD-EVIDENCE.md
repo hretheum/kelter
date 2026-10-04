@@ -2593,3 +2593,67 @@ and in `publish-image.yml`, which does use `mode=max`. It buys the per-push
 `scope=` would let it use `mode=max` without evicting the publish cache — the
 two would still compete for the same 10 GB, so this is a hypothesis, not a
 recommendation. Recorded as an open question rather than presented as a fix.
+
+## 2026-10-04 — K12 acceptance fixes: N2 "success without action" (ADR 0033), N1 `zapisz_plik` (ADR 0034)
+
+Two findings from the K12 acceptance run (engine `local:gemma-3-27b`, step mode).
+
+**N2.** An infeasible task ("send an e-mail", no such tool) ended `completed`:
+the model proposed `finish` at step 0. The kernel turned any validated `finish`
+into success. Now the kernel decides: success needs at least one *effective*
+step (dispatched to an `ActionSource`, came back ok); otherwise the run ends in
+the new terminal status `incomplete`, keeping the model's summary as unverified
+output and the kernel's reason in `error`. Same predicate in plan mode (a
+review-only plan is `incomplete`). A2A inbound maps it to `TASK_STATE_FAILED`
+with no artifact; reflection writes it as `Failure`, so distillation never
+learns from it. No DB migration (status is TEXT); the retention query's
+terminal list gained `'incomplete'`.
+
+Seventeen existing assertions across eight test files expected `completed`
+after a run that had done nothing effective (refused/denied delegation, denied
+skill, rejected out-of-space action, failed tool, then `finish`). Each was read
+and updated individually with a comment; where an action did succeed (allowed
+delegation, recovered circuit), the assertion still says `completed`.
+
+**N1.** No plain "write this text to a file" tool existed (`write_report`
+renders from a structure file), so the model used `append_ledger`. Added the
+WASM extension `zapisz_plik` in `deploy/extensions/zapisz-plik/`, which needed
+three additive WASM-ABI extensions: a host-validated `kelter:fs` write import
+behind `workspace_write`, typed flat `[wasm] parameters`, and `{"ok": false}`
+as a failed step. One integration catch on the way: the run-files API only
+serves files named under `saved_as`/`output`/`ledger` in a receipt, so the
+tool reports `saved_as` — without it, K12 scenario 03's "file available via
+the run files API" would have failed with the file present on disk.
+
+**Verified (this tree):**
+
+- `cargo test --workspace -- --include-ignored` with
+  `KELTER_TEST_POSTGRES_URL` against `pgvector/pgvector:pg16` (pulled via
+  `mirror.gcr.io`, Docker Hub rate-limited the session): **323 passed, 0
+  failed, 0 ignored** (was 289; +34 new).
+- Bare `cargo test --workspace`: **314 passed, 9 ignored**.
+- `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all
+  --check`: clean.
+- `pnpm --dir apps/web-ui test`: 2 files, **13 tests** (was 11); `pnpm build`
+  clean.
+- Guest crate `examples/wasm-tools/zapisz-plik`: `cargo test` 6 passed;
+  `cargo clippy --target wasm32-unknown-unknown --release -- -D warnings`
+  clean; module imports only `kelter:fs` (no WASI).
+- Desktop (`apps/desktop/src-tauri`, excluded workspace — `RunStatus` and
+  `RunEvent` gained variants): `cargo fmt --all --check`, `cargo clippy
+  --all-targets -- -D warnings`, `cargo test --all-targets` — see the PR for
+  the output.
+- A real `kelter` daemon (debug build) with `extension_dirs =
+  [deploy/extensions]` against a scripted stand-in for llama.cpp's
+  `/v1/chat/completions` (a fixed decision table — evidence of kernel/API
+  behaviour, not of model quality): the extension registered (`grants:
+  Grants { network: false, workspace_write: true }`, `wasm tools online:
+  zapisz_plik`); "Wyślij e-mail…" with `finish` at step 0 → `status:
+  incomplete`, `steps: []`; "Utwórz raport…" → `zapisz_plik` ok → `status:
+  completed`, and `GET /api/v1/runs/{id}/files` lists `raporty/k12.md`.
+  SQLite `runs.status` held `'incomplete'` and `'completed'`.
+
+**Not verified here.** The run on K12 itself with the real model (the
+acceptance harness's job, after the image is rebuilt and the extension
+directory mounted), and CI. `scripts/smoke-*.sh` were not run (they need a
+real local model).

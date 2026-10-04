@@ -46,6 +46,11 @@ pub fn state_for(status: RunStatus) -> &'static str {
         RunStatus::Running => "TASK_STATE_WORKING",
         RunStatus::Completed => "TASK_STATE_COMPLETED",
         RunStatus::Failed => "TASK_STATE_FAILED",
+        // ADR 0033: the run ended without any effective action, so the
+        // kernel withheld success. A2A has no "unverified" state, and a
+        // caller must never read this as COMPLETED — FAILED is the honest
+        // mapping; the kernel's reason rides along in the status message.
+        RunStatus::Incomplete => "TASK_STATE_FAILED",
         RunStatus::Canceled => "TASK_STATE_CANCELED",
         // ADR 0021: paused awaiting a human's skill-activation decision — the
         // canonical A2A state for "the agent needs additional input before
@@ -245,6 +250,25 @@ mod tests {
         assert_eq!(state_for(RunStatus::Completed), "TASK_STATE_COMPLETED");
         assert_eq!(state_for(RunStatus::Failed), "TASK_STATE_FAILED");
         assert_eq!(state_for(RunStatus::Canceled), "TASK_STATE_CANCELED");
+        assert_eq!(state_for(RunStatus::Incomplete), "TASK_STATE_FAILED");
+    }
+
+    #[test]
+    fn incomplete_task_is_failed_with_reason_and_no_artifact() {
+        // ADR 0033: the model's unverified summary must not be served as a
+        // result artifact — only the kernel's reason, as a status message.
+        let run = run_with(
+            RunStatus::Incomplete,
+            Some(json!({"summary": "email sent"})),
+            Some("finished without executing any action".into()),
+        );
+        let task = task_json(&run);
+        assert_eq!(task["status"]["state"], "TASK_STATE_FAILED");
+        assert_eq!(
+            task["status"]["message"]["parts"][0]["text"],
+            "finished without executing any action"
+        );
+        assert_eq!(task["artifacts"].as_array().unwrap().len(), 0);
     }
 
     #[test]

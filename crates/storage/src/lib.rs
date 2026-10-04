@@ -251,7 +251,7 @@ impl RunStore for SqliteRunStore {
             let mut stmt = conn
                 .prepare(
                     "SELECT id, created_at FROM runs
-                     WHERE status IN ('completed', 'failed', 'canceled')
+                     WHERE status IN ('completed', 'failed', 'incomplete', 'canceled')
                      ORDER BY created_at DESC",
                 )
                 .map_err(backend_err)?;
@@ -671,7 +671,12 @@ mod tests {
             store.put(r).await.unwrap();
         }
         // Terminal statuses must NOT appear in unfinished_runs.
-        for status in [RunStatus::Completed, RunStatus::Failed, RunStatus::Canceled] {
+        for status in [
+            RunStatus::Completed,
+            RunStatus::Failed,
+            RunStatus::Incomplete,
+            RunStatus::Canceled,
+        ] {
             store.put(run(status)).await.unwrap();
         }
 

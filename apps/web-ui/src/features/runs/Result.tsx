@@ -37,6 +37,7 @@ function CopyButton({ value, label }: { value: unknown; label: string }) {
 const TONE = {
   completed: { badge: "success" as const, glyph: STATUS_GLYPH.completed, label: "Completed" },
   failed: { badge: "danger" as const, glyph: STATUS_GLYPH.failed, label: "Failed" },
+  incomplete: { badge: "warning" as const, glyph: STATUS_GLYPH.incomplete, label: "Incomplete" },
   canceled: { badge: "quiet" as const, glyph: STATUS_GLYPH.canceled, label: "Canceled" },
 };
 
@@ -45,7 +46,10 @@ export function Result({ run, onNewRun }: { run: Run; onNewRun: () => void }) {
   const { axis } = useAxis(run.id);
   const steps = axisSteps(axis);
   const [recordOpen, setRecordOpen] = useState(false);
-  const status = (run.status === "completed" || run.status === "failed" || run.status === "canceled"
+  const status = (run.status === "completed" ||
+  run.status === "failed" ||
+  run.status === "incomplete" ||
+  run.status === "canceled"
     ? run.status
     : "completed") as keyof typeof TONE;
   const tone = TONE[status];
@@ -54,13 +58,24 @@ export function Result({ run, onNewRun }: { run: Run; onNewRun: () => void }) {
   useEffect(() => {
     if (status === "failed") {
       announce(`Run failed: ${(run.error ?? "").slice(0, 80)}`, "assertive");
+    } else if (status === "incomplete") {
+      announce("Run incomplete: no action succeeded", "assertive");
     } else if (status === "completed") {
       announce("Run completed");
     }
   }, [run.id, status, run.error]);
 
-  const output = axis.terminal?.kind === "completed" ? axis.terminal.output : run.output;
-  const error = run.error ?? (axis.terminal?.kind === "failed" ? axis.terminal.error : null);
+  const output =
+    axis.terminal?.kind === "completed" || axis.terminal?.kind === "incomplete"
+      ? axis.terminal.output
+      : run.output;
+  const error =
+    run.error ??
+    (axis.terminal?.kind === "failed"
+      ? axis.terminal.error
+      : axis.terminal?.kind === "incomplete"
+        ? axis.terminal.reason
+        : null);
   // Prose-first result rendering (ADR 0029): the summary as readable text,
   // the rest of the payload behind a disclosure — never a raw dump up front.
   const view = outputView(output);
@@ -128,6 +143,28 @@ export function Result({ run, onNewRun }: { run: Run; onNewRun: () => void }) {
             <pre className="mt-1 max-h-96 overflow-auto rounded-md border border-danger/40 bg-danger/5 p-3 font-mono text-caption whitespace-pre-wrap break-words">
               {error ?? "failed"}
             </pre>
+            <Button variant="secondary" size="sm" className="mt-3" onClick={onNewRun}>
+              New run
+            </Button>
+          </section>
+        )}
+
+        {status === "incomplete" && (
+          /* ADR 0033: the model said "done", but nothing it ran succeeded —
+           * show the kernel's verdict first and the claim only as unverified. */
+          <section className="mt-4" aria-label="Incomplete">
+            <h3 className="text-callout font-medium text-warning">
+              Finished without any successful action — not counted as done.
+            </h3>
+            <p className="mt-1 text-body text-muted-foreground">{error ?? "incomplete"}</p>
+            {view.prose && (
+              <>
+                <h4 className="mt-3 text-caption font-medium text-muted-foreground">
+                  The model's own summary (unverified)
+                </h4>
+                <p className="mt-1 text-body whitespace-pre-wrap">{view.prose}</p>
+              </>
+            )}
             <Button variant="secondary" size="sm" className="mt-3" onClick={onNewRun}>
               New run
             </Button>

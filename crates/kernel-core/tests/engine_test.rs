@@ -251,8 +251,14 @@ async fn tool_failure_is_fed_back_not_fatal() {
 
     let run = kernel.run_task("failing tool".into()).await.unwrap();
 
-    // The failed tool call is recorded as a step, run still reaches finish.
-    assert_eq!(run.status, RunStatus::Completed);
+    // The failed tool call is recorded as a step, run still reaches finish —
+    // but with no successful action behind it the kernel withholds success
+    // (ADR 0033): `finish` after only failures is Incomplete, not Completed.
+    assert_eq!(run.status, RunStatus::Incomplete);
+    assert_eq!(
+        run.output.as_ref().unwrap()["summary"],
+        "gave up gracefully"
+    );
     assert_eq!(run.steps.len(), 1);
     assert!(!run.steps[0].ok);
     assert_eq!(run.steps[0].result["error"], "tool error: disk full");

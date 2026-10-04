@@ -19,6 +19,8 @@
 
 use std::sync::Arc;
 
+pub mod workspace;
+
 use async_trait::async_trait;
 use kernel_core::{
     ActionSchema, ActionSource, ActionSpec, ExecutionContext, ExecutionError, Latitude,
@@ -46,6 +48,10 @@ pub enum WasmError {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Grants {
     pub network: bool,
+    /// `kelter:fs.kelter_ws_write` — write text files inside the run
+    /// workspace, host-validated (see [`workspace`]). Tools only; requires a
+    /// workspace to be attached ([`WasmToolSource::with_workspace`]).
+    pub workspace_write: bool,
 }
 
 /// Per-instance host state (kept minimal; carries nothing ambient).
@@ -59,6 +65,11 @@ pub struct WasmToolSource {
     name: String,
     tool: String,
     description: String,
+    /// Typed argument schema (flat object) declared by the manifest. `None`
+    /// = the original single-string ABI (`{"input": "..."}`).
+    parameters: Option<serde_json::Value>,
+    /// Backing for the `workspace_write` grant.
+    workspace: Option<Arc<workspace::WorkspaceWriter>>,
 }
 
 impl WasmToolSource {
@@ -95,7 +106,30 @@ impl WasmToolSource {
             name,
             tool: tool.into(),
             description: description.into(),
+            parameters: None,
+            workspace: None,
         })
+    }
+
+    /// Expose a typed, flat argument object instead of the single `input`
+    /// string. The guest then receives the validated arguments object,
+    /// serialized as JSON, as its input. The schema must already have passed
+    /// the registry's flatness check (`mcp::extensions`).
+    pub fn with_parameters(mut self, parameters: serde_json::Value) -> Self {
+        self.parameters = Some(parameters);
+        self
+    }
+
+    /// Attach the workspace directory backing the `workspace_write` grant.
+    pub fn with_workspace(mut self, root: impl AsRef<std::path::Path>) -> Result<Self, WasmError> {
+        let w = workspace::WorkspaceWriter::new(root.as_ref()).map_err(|e| {
+            WasmError::Engine(format!(
+                "workspace '{}' unusable: {e}",
+                root.as_ref().display()
+            ))
+        })?;
+        self.workspace = Some(Arc::new(w));
+        Ok(self)
     }
 }
 
@@ -104,8 +138,63 @@ impl WasmToolSource {
 /// is simply absent, so a module importing it cannot be instantiated.
 /// Generic over the host state so the tool host (`HostState`) and the
 /// memory host (`MemHostState`, which carries store limits) share ONE gate.
-fn linker_for<T: 'static>(engine: &Engine, grants: Grants) -> Result<Linker<T>, WasmError> {
+fn linker_for<T: 'static>(
+    engine: &Engine,
+    grants: Grants,
+    workspace: Option<Arc<workspace::WorkspaceWriter>>,
+) -> Result<Linker<T>, WasmError> {
     let mut linker = Linker::new(engine);
+    if grants.workspace_write {
+        // Granted but nothing to write into is a wiring bug — refuse loudly
+        // rather than define an import that can only fail.
+        let ws = workspace.ok_or_else(|| {
+            WasmError::Engine("workspace_write granted but no workspace attached".into())
+        })?;
+        linker
+            .func_wrap(
+                workspace::FS_IMPORT_MODULE,
+                workspace::FS_WRITE_FN,
+                move |mut caller: wasmtime::Caller<'_, T>,
+                      path_ptr: i32,
+                      path_len: i32,
+                      data_ptr: i32,
+                      data_len: i32,
+                      flags: i32|
+                      -> i32 {
+                    let Some(mem) = caller
+                        .get_export("memory")
+                        .and_then(wasmtime::Extern::into_memory)
+                    else {
+                        return workspace::code::BAD_ARGS;
+                    };
+                    let data = mem.data(&caller);
+                    // Guest-supplied offsets are untrusted: bounds-check as
+                    // unsigned, never index with a raw negative.
+                    let slice = |ptr: i32, len: i32| {
+                        let (p, l) = (ptr as u32 as usize, len as u32 as usize);
+                        data.get(p..p.checked_add(l)?)
+                    };
+                    let (Some(path), Some(content)) =
+                        (slice(path_ptr, path_len), slice(data_ptr, data_len))
+                    else {
+                        return workspace::code::BAD_ARGS;
+                    };
+                    let Ok(path) = std::str::from_utf8(path) else {
+                        return workspace::code::INVALID_PATH;
+                    };
+                    let overwrite = flags & workspace::FLAG_OVERWRITE != 0;
+                    match ws.write(path, content, overwrite) {
+                        Ok(workspace::WriteOutcome::Created) => workspace::code::CREATED,
+                        Ok(workspace::WriteOutcome::Overwritten) => workspace::code::OVERWRITTEN,
+                        Err(e) => {
+                            tracing::info!(path, "wasm workspace write refused: {e}");
+                            e.code()
+                        }
+                    }
+                },
+            )
+            .map_err(|e| WasmError::Engine(e.to_string()))?;
+    }
     if grants.network {
         // A real network capability would live here. For this slice it is a
         // stub — the point is the *gate*: it exists only when granted.
@@ -126,6 +215,7 @@ fn run_guest(
     engine: &Engine,
     module: &Module,
     grants: Grants,
+    workspace: Option<Arc<workspace::WorkspaceWriter>>,
     name: &str,
     input: &str,
 ) -> Result<serde_json::Value, ExecutionError> {
@@ -134,8 +224,8 @@ fn run_guest(
         .set_fuel(CALL_FUEL)
         .map_err(|e| ExecutionError::Tool(format!("set_fuel: {e}")))?;
 
-    let linker =
-        linker_for(engine, grants).map_err(|e| ExecutionError::Substrate(e.to_string()))?;
+    let linker = linker_for(engine, grants, workspace)
+        .map_err(|e| ExecutionError::Substrate(e.to_string()))?;
 
     // Instantiation is where the sandbox bites: a module importing an
     // ungranted capability fails here with an "unknown import" error.
@@ -179,25 +269,46 @@ fn run_guest(
         .ok_or_else(|| ExecutionError::Tool("wasm result out of bounds".into()))?;
     let text = std::str::from_utf8(out)
         .map_err(|e| ExecutionError::Tool(format!("wasm result not utf-8: {e}")))?;
-    serde_json::from_str(text)
-        .map_err(|e| ExecutionError::Tool(format!("wasm result not valid JSON: {e}: {text}")))
+    let value: serde_json::Value = serde_json::from_str(text)
+        .map_err(|e| ExecutionError::Tool(format!("wasm result not valid JSON: {e}: {text}")))?;
+    guest_failure(&value).map_or(Ok(value), Err)
+}
+
+/// Guest-reported failure (ABI convention, additive): a top-level
+/// `{"ok": false, "error": "..."}` result is a FAILED step, not a successful
+/// one carrying an error payload. Without this, a refused write would be
+/// journaled as `ok` — and count toward the success predicate (ADR 0033).
+/// Results without `"ok": false` (every pre-existing module) are unchanged.
+fn guest_failure(value: &serde_json::Value) -> Option<ExecutionError> {
+    if value.get("ok") != Some(&serde_json::Value::Bool(false)) {
+        return None;
+    }
+    let msg = value
+        .get("error")
+        .and_then(|e| e.as_str())
+        .unwrap_or("wasm tool reported failure");
+    Some(ExecutionError::Tool(msg.to_string()))
 }
 
 #[async_trait]
 impl ActionSource for WasmToolSource {
     async fn action_schema(&self, _latitude: Latitude) -> Result<ActionSchema, ExecutionError> {
         // Deliberately shallow: one string input (a nested/object grammar is
-        // pathologically slow for a small model, per Phase 4c).
+        // pathologically slow for a small model, per Phase 4c) — or a
+        // manifest-declared FLAT object of scalars, held to the same rule.
+        let parameters = self.parameters.clone().unwrap_or_else(|| {
+            serde_json::json!({
+                "type": "object",
+                "properties": { INPUT_ARG: { "type": "string" } },
+                "required": [INPUT_ARG],
+                "additionalProperties": false
+            })
+        });
         Ok(ActionSchema {
             actions: vec![ActionSpec {
                 name: self.tool.clone(),
                 description: self.description.clone(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": { INPUT_ARG: { "type": "string" } },
-                    "required": [INPUT_ARG],
-                    "additionalProperties": false
-                }),
+                parameters,
             }],
         })
     }
@@ -213,10 +324,16 @@ impl ActionSource for WasmToolSource {
                 action.action()
             )));
         }
-        let input = action.arguments()[INPUT_ARG]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
+        // Typed tools get the whole validated arguments object as JSON; the
+        // original ABI gets the bare `input` string, exactly as before.
+        let input = if self.parameters.is_some() {
+            action.arguments().to_string()
+        } else {
+            action.arguments()[INPUT_ARG]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        };
 
         // wasmtime is synchronous; run the guest on a blocking thread so we
         // never stall the async runtime. Engine/Module/Grants are cheap
@@ -224,10 +341,13 @@ impl ActionSource for WasmToolSource {
         let engine = self.engine.clone();
         let module = self.module.clone();
         let grants = self.grants;
+        let workspace = self.workspace.clone();
         let name = self.name.clone();
-        tokio::task::spawn_blocking(move || run_guest(&engine, &module, grants, &name, &input))
-            .await
-            .map_err(|e| ExecutionError::Tool(format!("wasm task join: {e}")))?
+        tokio::task::spawn_blocking(move || {
+            run_guest(&engine, &module, grants, workspace, &name, &input)
+        })
+        .await
+        .map_err(|e| ExecutionError::Tool(format!("wasm task join: {e}")))?
     }
 }
 
@@ -332,7 +452,14 @@ impl WasmMemoryProvider {
             .set_fuel(CALL_FUEL)
             .map_err(|e| WasmError::Engine(e.to_string()))?;
 
-        let linker = linker_for::<MemHostState>(&engine, grants)?;
+        // Memory backends get no filesystem: `workspace_write` is a tools
+        // capability, so it is never wired here (a module importing it fails
+        // to instantiate, as any ungranted import does).
+        let grants = Grants {
+            workspace_write: false,
+            ..grants
+        };
+        let linker = linker_for::<MemHostState>(&engine, grants, None)?;
         let instance = linker.instantiate(&mut store, &module).map_err(|e| {
             WasmError::Engine(format!(
                 "wasm memory backend '{name}' could not be instantiated (a required \
@@ -505,6 +632,17 @@ mod tests {
         )
     }
 
+    #[test]
+    fn guest_ok_false_is_a_failure_everything_else_is_not() {
+        let err = guest_failure(&serde_json::json!({"ok": false, "error": "nope"})).unwrap();
+        assert!(err.to_string().contains("nope"));
+        assert!(guest_failure(&serde_json::json!({"ok": false})).is_some());
+        // Pre-existing result shapes are untouched.
+        assert!(guest_failure(&serde_json::json!({"ok": true})).is_none());
+        assert!(guest_failure(&serde_json::json!({"words": 3})).is_none());
+        assert!(guest_failure(&serde_json::json!({"ok": "false"})).is_none());
+    }
+
     #[tokio::test]
     async fn pure_compute_wasm_tool_runs_in_process() {
         let src = WasmToolSource::load(
@@ -544,7 +682,10 @@ mod tests {
             &netpeek_path(),
             "net_peek",
             "tries the network",
-            Grants { network: false },
+            Grants {
+                network: false,
+                ..Grants::default()
+            },
         )
         .expect("module loads (compilation is fine; instantiation is gated)");
         let schema = src.action_schema(Latitude::Standard).await.unwrap();
@@ -579,7 +720,10 @@ mod tests {
             &netpeek_path(),
             "net_peek",
             "tries the network",
-            Grants { network: true },
+            Grants {
+                network: true,
+                ..Grants::default()
+            },
         )
         .unwrap();
         let schema = src.action_schema(Latitude::Standard).await.unwrap();

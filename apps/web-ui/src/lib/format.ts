@@ -51,5 +51,6 @@ export const STATUS_GLYPH: Record<string, string> = {
   awaiting_delegation_input: "◉",
   completed: "✓",
   failed: "✕",
+  incomplete: "◇",
   canceled: "⊘",
 };

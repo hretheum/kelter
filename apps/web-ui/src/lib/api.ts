@@ -76,6 +76,9 @@ export type RunStatus =
   | "awaiting_delegation_input"
   | "completed"
   | "failed"
+  /* ADR 0033: finished without a single successful action — the kernel kept
+   * the model's summary as `output` but withheld success; `error` says why. */
+  | "incomplete"
   | "canceled";
 
 export interface StepRecord {
@@ -168,6 +171,7 @@ export type RunEvent =
   | { type: "reflection_written"; episode_id: string }
   | { type: "completed"; output: unknown }
   | { type: "failed"; error: string }
+  | { type: "incomplete"; output: unknown; reason: string }
   | ({ type: "skill_activation_requested" } & PendingSkillActivationUi)
   | {
       type: "skill_activation_decided";

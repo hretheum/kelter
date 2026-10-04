@@ -247,8 +247,9 @@ async fn trusted_only_default_gates_untrusted_delegation() {
     let run2 = kernel2.execute_run(run_id2).await.unwrap();
     assert_eq!(
         run2.status,
-        RunStatus::Completed,
-        "the model falls through to finish"
+        RunStatus::Incomplete,
+        "the model falls through to finish — with the delegation refused, nothing effective \
+         ran, so the kernel withholds success (ADR 0033)"
     );
     assert_eq!(
         untrusted_state.send_calls.load(Ordering::SeqCst),
@@ -325,7 +326,14 @@ async fn ask_pauses_and_all_three_decisions_resolve_correctly() {
             .await
             .unwrap();
         let run = kernel.execute_run(run_id).await.unwrap();
-        assert_eq!(run.status, RunStatus::Completed);
+        // Deny means nothing effective ran before `finish` → Incomplete (ADR
+        // 0033); an allowed delegation succeeded → Completed.
+        let expected = if decision == AgentDelegationDecision::Deny {
+            RunStatus::Incomplete
+        } else {
+            RunStatus::Completed
+        };
+        assert_eq!(run.status, expected, "{decision:?}");
 
         match decision {
             AgentDelegationDecision::Deny => {

@@ -404,7 +404,8 @@ async fn skill_urging_an_out_of_space_action_is_rejected_by_the_kernel() {
         run.steps.iter().all(|s| s.action != "wipe_disk"),
         "an out-of-space action must never execute"
     );
-    assert_eq!(run.status, RunStatus::Completed);
+    // The urged action was rejected and nothing else ran (ADR 0033).
+    assert_eq!(run.status, RunStatus::Incomplete);
 }
 
 #[tokio::test]
@@ -589,7 +590,8 @@ async fn invariant_holds_under_model_self_activation() {
         "an out-of-space action must never execute, even via model self-activation — activation \
          is knowledge, never capability"
     );
-    assert_eq!(run.status, RunStatus::Completed);
+    // The urged action was rejected and nothing else ran (ADR 0033).
+    assert_eq!(run.status, RunStatus::Incomplete);
 }
 
 /// (c) Self-activation is run-scoped and ephemeral: it never mutates the
@@ -767,7 +769,9 @@ async fn deactivate_removes_instructions_next_step() {
     kernel.execute_run(run_id).await.unwrap();
     let run = kernel.store().get(run_id).await.unwrap();
 
-    assert_eq!(run.status, RunStatus::Completed);
+    // activate/deactivate are kernel-owned and grant nothing: with no tool
+    // call behind `finish`, the run is Incomplete (ADR 0033).
+    assert_eq!(run.status, RunStatus::Incomplete);
     assert!(
         run.active_skills.is_empty(),
         "the run ends with the skill deactivated"
