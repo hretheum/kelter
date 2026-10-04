@@ -52,6 +52,7 @@ export interface AxisState {
   terminal:
     | { kind: "completed"; output: unknown }
     | { kind: "failed"; error: string }
+    | { kind: "incomplete"; output: unknown; reason: string }
     | { kind: "canceled"; error: string | null }
     | null;
   reflections: number;
@@ -156,6 +157,9 @@ export function applyEvent(axis: AxisState, ev: RunEvent): void {
     case "failed":
       axis.terminal = { kind: "failed", error: ev.error };
       break;
+    case "incomplete":
+      axis.terminal = { kind: "incomplete", output: ev.output, reason: ev.reason };
+      break;
     case "skill_activation_requested":
       axis.pendingSkillActivation = {
         step: ev.step,
@@ -242,6 +246,12 @@ export function applyJournalEntry(axis: AxisState, entry: JournalEntry): void {
         axis.terminal = { kind: "completed", output: entry.output ?? null };
       } else if (entry.status === "failed") {
         axis.terminal = { kind: "failed", error: entry.error ?? "failed" };
+      } else if (entry.status === "incomplete") {
+        axis.terminal = {
+          kind: "incomplete",
+          output: entry.output ?? null,
+          reason: entry.error ?? "incomplete",
+        };
       } else if (entry.status === "canceled") {
         axis.terminal = { kind: "canceled", error: entry.error ?? null };
       }

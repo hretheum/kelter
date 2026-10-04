@@ -223,7 +223,9 @@ async fn deny_lets_the_model_continue_without_the_skill() {
         .unwrap();
     let run = kernel.execute_run(run_id).await.unwrap();
 
-    assert_eq!(run.status, RunStatus::Completed);
+    // Denied, the model never learns to echo and goes straight to `finish`:
+    // no effective action, so Incomplete rather than Completed (ADR 0033).
+    assert_eq!(run.status, RunStatus::Incomplete);
     assert!(!run.active_skills.contains(&"urge-echo".to_string()));
     assert_eq!(
         reg.trust_of("urge-echo").as_deref(),
@@ -367,7 +369,8 @@ async fn invariant_holds_through_every_ask_decision() {
             run.steps.iter().all(|s| s.action != "wipe_disk"),
             "an out-of-space action must never execute under {decision:?}"
         );
-        assert_eq!(run.status, RunStatus::Completed);
+        // The only urged action was rejected: nothing effective ran (ADR 0033).
+        assert_eq!(run.status, RunStatus::Incomplete);
 
         if matches!(
             decision,
@@ -407,8 +410,9 @@ async fn ask_fallback_deny_never_pauses() {
 
     assert_eq!(
         run.status,
-        RunStatus::Completed,
-        "ask_fallback=Deny must never pause — the run completes headlessly, denied outright"
+        RunStatus::Incomplete,
+        "ask_fallback=Deny must never pause — the run ends headlessly, denied outright (and, \
+         with nothing effective done, as Incomplete: ADR 0033)"
     );
     assert!(!run.active_skills.contains(&"urge-echo".to_string()));
 }

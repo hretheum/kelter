@@ -8,6 +8,8 @@
 //!   the latitude knob.
 //! - [`engine`] — the run state machine: retries, persistence, events,
 //!   gated reflection.
+//! - [`outcome`] — the success predicate: which steps let a run complete
+//!   (ADR 0033).
 //! - [`store`] — run persistence trait + in-memory implementation.
 
 pub mod action;
@@ -17,6 +19,7 @@ pub mod engine;
 pub mod journal;
 pub mod learned;
 pub mod oracle;
+pub mod outcome;
 pub mod plan;
 pub mod redact;
 pub mod skill_gate;

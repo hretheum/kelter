@@ -43,6 +43,7 @@ const STATUS_CLS: Record<string, string> = {
   awaiting_delegation_input: "text-warning",
   completed: "text-success",
   failed: "text-danger",
+  incomplete: "text-warning",
   canceled: "text-muted-foreground",
 };
 

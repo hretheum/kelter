@@ -17,6 +17,7 @@ use crate::action::{ActionSchema, ActionSpec, ValidatedAction};
 use crate::delegation_gate::{AgentDelegationDecision, DelegationDecisionOutcome, DelegationGate};
 use crate::journal::{fold_step, JournalEntry, Usage};
 use crate::oracle::{Latitude, PolicyContext, PolicyOracle};
+use crate::outcome;
 use crate::skill_gate::{ActivationAuthorization, SkillActivationDecision};
 use crate::store::RunStore;
 use memory::{Episode, EpisodeOutcome, MemoryProvider, Provenance};
@@ -352,6 +353,13 @@ pub enum RunStatus {
     Running,
     Completed,
     Failed,
+    /// Terminal (ADR 0033): the model proposed `finish` (or a plan ran to
+    /// the end) but the run executed no *effective* action — nothing the
+    /// kernel dispatched to a tool/agent came back ok. The kernel withholds
+    /// success: the model's summary is kept as `output`, unverified, and
+    /// `error` says why. Like every terminal status, `unfinished_runs`
+    /// excludes it and retention may prune it.
+    Incomplete,
     /// Terminal: cancellation was requested (e.g. A2A `CancelTask`) and
     /// honoured before the run reached its own conclusion. A canceled run is
     /// finished — `unfinished_runs` excludes it, so a restart never resumes it.
@@ -559,6 +567,13 @@ pub enum RunEvent {
     },
     Failed {
         error: String,
+    },
+    /// Terminal (ADR 0033): the run finished without a single effective
+    /// action, so the kernel did not grant success. `output` is the model's
+    /// own (unverified) summary, `reason` the kernel's verdict.
+    Incomplete {
+        output: Option<serde_json::Value>,
+        reason: String,
     },
     /// A fresh `activate_skill` proposal was gated `AskHuman` (ADR 0021) —
     /// the run has paused. Carries everything a client needs to render the
@@ -2743,12 +2758,23 @@ impl Kernel {
             };
 
             // 3. Terminal action is handled by the kernel, not a tool.
+            // The model proposes `finish`; the kernel decides whether the
+            // run earned success (ADR 0033): with no effective step behind
+            // it, the claim is kept as output but the status is Incomplete.
             if validated.action() == FINISH_ACTION {
-                terminal = Some((
-                    RunStatus::Completed,
-                    Some(validated.arguments().clone()),
-                    None,
-                ));
+                terminal = Some(if outcome::effective_steps(&run.steps) > 0 {
+                    (
+                        RunStatus::Completed,
+                        Some(validated.arguments().clone()),
+                        None,
+                    )
+                } else {
+                    (
+                        RunStatus::Incomplete,
+                        Some(validated.arguments().clone()),
+                        Some(outcome::no_effect_reason(&run.steps)),
+                    )
+                });
                 break;
             }
 
@@ -3194,6 +3220,16 @@ impl Kernel {
         match (&run.status, output, error) {
             (RunStatus::Completed, Some(out), _) => {
                 self.emit(run_id, seq, RunEvent::Completed { output: out });
+            }
+            (RunStatus::Incomplete, out, err) => {
+                self.emit(
+                    run_id,
+                    seq,
+                    RunEvent::Incomplete {
+                        output: out,
+                        reason: err.unwrap_or_else(|| "unknown".into()),
+                    },
+                );
             }
             (_, _, err) => {
                 self.emit(
@@ -4220,6 +4256,14 @@ impl Kernel {
                         "summary": summary,
                         "nodes": node_outputs,
                     }));
+                    // Same success predicate as step mode (ADR 0033): a plan
+                    // whose every node is a review dispatched nothing.
+                    if outcome::effective_steps(&run.steps) == 0 {
+                        let reason = outcome::no_effect_reason(&run.steps);
+                        return self
+                            .finalize_run(run, RunStatus::Incomplete, output, Some(reason), seq)
+                            .await;
+                    }
                     return self
                         .finalize_run(run, RunStatus::Completed, output, None, seq)
                         .await;
@@ -4324,10 +4368,16 @@ impl Kernel {
         }
         run.steps.push(StepRecord {
             index: step,
-            action: node
-                .action
-                .clone()
-                .unwrap_or_else(|| format!("{:?}", node.node_type).to_lowercase()),
+            // A review node dispatches nothing whatever `action` it carries,
+            // so it is always recorded under the kernel-owned name — a review
+            // must never pass for an executed tool (ADR 0033).
+            action: if node.node_type == crate::plan::NodeType::Review {
+                outcome::REVIEW_STEP_ACTION.to_string()
+            } else {
+                node.action
+                    .clone()
+                    .unwrap_or_else(|| format!("{:?}", node.node_type).to_lowercase())
+            },
             arguments: node.arguments.clone(),
             result,
             ok,

@@ -201,11 +201,13 @@ async fn run_metrics_recorder(
                     }
                 }
                 RunEvent::Rejected { .. } => m.validation_rejections.add(1, &[]),
-                RunEvent::Completed { .. } | RunEvent::Failed { .. } => {
-                    let outcome = if matches!(env.event, RunEvent::Completed { .. }) {
-                        "completed"
-                    } else {
-                        "failed"
+                RunEvent::Completed { .. }
+                | RunEvent::Failed { .. }
+                | RunEvent::Incomplete { .. } => {
+                    let outcome = match env.event {
+                        RunEvent::Completed { .. } => "completed",
+                        RunEvent::Incomplete { .. } => "incomplete",
+                        _ => "failed",
                     };
                     m.runs_finished.add(1, &[KeyValue::new("outcome", outcome)]);
                     if let Some(t) = starts.remove(&env.run_id) {
