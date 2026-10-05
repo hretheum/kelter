@@ -11,8 +11,9 @@ A working, durable agent-orchestration runtime. The deterministic kernel
 and every proposed action is schema-validated before it can execute
 (`ValidatedAction` has no public constructor but `ActionSchema::validate`, and
 derives `Serialize` but **not** `Deserialize` — it is unforgeable). Around that
-core: durable journal + crash-resume (ADR 0007), MCP tool substrate + a
-capability registry (ADR 0002/0008), governed A2A delegation out+in with
+core: durable journal + crash-resume (ADR 0007) whose run history also
+carries refusals and resumes as informational entries (ADR 0036), MCP tool
+substrate + a capability registry (ADR 0002/0008), governed A2A delegation out+in with
 trust/policy/ask + retry/circuit-breaker + streamed progress (ADR
 0009/0013/0022/0023/0026/0027), plan mode (ADR 0010), WASM-sandboxed extensions
 incl. a memory backend (ADR 0011/0024), advisory skills with model
@@ -38,17 +39,17 @@ workspace).
 **Where the detail lives.** Ongoing status/roadmap → `docs/ROADMAP.md`
 (Eryk-owned — leave unstaged). Per-phase evidence + decisions →
 `docs/BUILD-EVIDENCE.md`. Architecture → `docs/architecture.md` /
-`architecture-overview.md`. Decisions → `docs/adr/` (0001–0035). The 2026-07-21
+`architecture-overview.md`. Decisions → `docs/adr/` (0001–0036). The 2026-07-21
 adversarial audit + its fix passes → `docs/audit/AUDIT-2026-07-21.md`.
 
-**Testing.** `cargo test --workspace` is hermetic — 319 tests, plus 9
+**Testing.** `cargo test --workspace` is hermetic — 339 tests, plus 9
 `pgstore` tests that are `#[ignore]`d because they need a real Postgres. To run
 those too: start a `pgvector/pgvector:pg16` container, export
-`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (328 total — the
+`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (348 total — the
 figure CI reports). CI does this via a `services:` block. Bare `cargo test`
 reports them as `9 ignored`, never as a green pass. `cargo clippy --workspace
 --all-targets -D warnings` and `cargo fmt --check` are the bar. web-ui:
-`pnpm --dir apps/web-ui test` (vitest — 2 files, 13 tests) + `pnpm build`;
+`pnpm --dir apps/web-ui test` (vitest — 2 files, 14 tests) + `pnpm build`;
 both run in CI since 2026-08-03.
 
 **The excluded-workspace hazard — read this before touching shared types.**
@@ -89,6 +90,19 @@ refused extension (invalid manifest, or `subprocess-unsandboxed` without a
 `skipped_extensions` on `GET /api/v1/tools`; the daemon starts. What is
 refused is unchanged.
 
+**2026-10-05: refusals and resumes in the journal (ADR 0036, KR0.5).** Every
+`RunEvent::Rejected` site (17, inventoried in the ADR) goes through
+`Kernel::reject`, which also journals `kind: "rejected"` with an explicit
+`subject` (`proposal` inline / this step's `decision` / `plan_node` /
+`none`) — no `seq + 1` pairing. A resumed execution journals
+`kind: "resumed"` (process `session`, `at_ms`, `cause`, `replayed_steps`).
+Both are **informational**: `fold_step` and every replay/exactly-once scan
+ignore them (`JournalEntry::is_informational`), proven by with/without
+invariance tests. WS `rejected` gained only `proposal_seq`. If you add a
+journal scan, keep it kind-specific so it cannot start reading them.
+`scripts/smoke-journal-history.sh` checks both against the real daemon with a
+scripted model stub.
+
 **Open items, in the order they'd bite.**
 1. **18 ADRs carry `human_validated: false`** — 0007–0023 plus 0032. Eryk's
    job, not an agent's; signing ADR 0031 honestly took a real verification
@@ -96,7 +110,12 @@ refused is unchanged.
 2. **The `git push` rule below is stale** — it says pushes are the maintainer's
    act, yet Eryk directed ~12 across 2026-08-03/04. It has NOT been amended, so
    it stands as written: never push on your own initiative; ask.
-3. **Phase 23 loose ends** — no plan leg in `scripts/smoke-selflearn.sh`, no
+3. **Downgrade past ADR 0036 breaks per run** — a binary at/before `a143922`
+   cannot deserialize a journal holding `rejected`/`resumed` rows (500 on
+   `/events`, no resume, `distill` errors). The ADR lists the options
+   (documented `DELETE` rollback vs a catch-all variant); the choice is
+   Eryk's.
+4. **Phase 23 loose ends** — no plan leg in `scripts/smoke-selflearn.sh`, no
    web-UI surface for learned plans, and the `adopt_learned_plan` branch in
    `execute_plan` is unreviewed (it sits inside ADR 0030 generation /
    exactly-once semantics, where a mistake is silent rather than loud).

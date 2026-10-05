@@ -2715,3 +2715,95 @@ hit the `( cd … && "$BIN" … ) &` subshell, not the daemon. Fixed with `exec`
 **Not verified here.** A run on K12 itself. No web-UI surface for skipped
 extensions — the API field and the ERROR line are the only signals; a monitor
 on `skipped_extensions != []` is the suggested alert.
+
+## 2026-10-05 — refusals and resumes in the journal (ADR 0036, KR0.5)
+
+The run history (`GET /api/v1/runs/{id}/events`) held only what was decided
+and done. An export of 142 deployed runs had `decision`, `intent`, `receipt`,
+`note`, `terminal`, `trust_posture` — zero refusals; refusals and the resume
+marker existed only on the live WS stream, and Glassbox paired a `rejected`
+with the `proposed` at `seq - 1`, which is wrong whenever a delegation retry
+or fallback is refused after its proposal was accepted.
+
+**What changed.** All 17 `RunEvent::Rejected` sites (table with
+`a143922` → current line numbers in ADR 0036) go through one helper,
+`Kernel::reject`, which journals `kind: "rejected"` (`step`, `attempt`,
+`source`, `subject`, `reason`, optional `action`/`arguments`/`branch`,
+`at_ms`) and emits the unchanged live event plus one additive field,
+`proposal_seq`. `subject` is the linkage: `proposal` (refused proposal
+inline, bounded to 8 KiB, scrubbed), `decision` (this step's journaled
+`Decision`), `plan_node` (node `branch` of generation `step / 100`), `none`
+(failed model call). No path needed a heuristic or a change to `seq`. A
+resumed execution journals `kind: "resumed"` (`at_step`, process `session`,
+`cause`, `replayed_steps`, `at_ms`); the daemon logs its session id at
+startup. The resume predicate changed from `!journal.is_empty()` (true for
+every API run, because of the caller note) to "a recorded step or any
+non-`Note` entry". Both kinds are informational: `fold_step` ignores them
+explicitly, every other scan is kind-specific, the `resumed` row is appended
+after the snapshot replay reads, and both appends are best-effort. Web UI:
+replay folds `rejected` into the step's retry list (same dedupe key as live).
+Postgres (`pgstore`) holds no journal — nothing to change there.
+
+**History, before → after** (same scripted model, real daemon, real SQLite,
+real ledger MCP server; full files in `docs/evidence/adr-0036/`):
+
+```
+a run with a schema-invalid proposal, then a duplicate
+  a143922: note decision intent receipt decision terminal
+  now:     note rejected decision intent receipt rejected decision terminal
+           {"kind":"rejected","step":0,"attempt":0,"source":"schema","subject":"proposal",
+            "reason":"arguments for 'append_ledger' violate the schema: 5 is not of type \"string\" (at /entry)",
+            "action":"append_ledger","arguments":{"entry":5},"at_ms":1791206397570}
+a run killed after its side effect (KELTER_CRASH_POINT=after_execute:append_ledger), restarted
+  a143922: note decision intent receipt decision terminal
+  now:     note decision intent resumed receipt decision terminal
+           {"kind":"resumed","at_step":0,"session":"4c7bc684-…","cause":"interrupted",
+            "replayed_steps":[0],"at_ms":1791206398962}
+           receipt: {"deduped":true,…} — ledger has exactly 1 line
+```
+
+**Verified (this tree, Rust 1.97.0 local — CI pins 1.97.1):**
+
+- `cargo test --workspace -- --include-ignored` with
+  `KELTER_TEST_POSTGRES_URL` against a local PostgreSQL 16 + pgvector (Docker
+  daemon unavailable in this session): **348 passed, 0 failed, 0 ignored**
+  (was 328; +20: 17 in `kernel-core/tests/journal_rejections_resumes_test.rs`,
+  2 in `storage/tests/journal_informational_test.rs`, 1 in `api/tests`).
+  Before the new tests existed, the 328 pre-existing tests passed on the
+  changed kernel with no assertion touched — durability, plan resilience,
+  delegation resilience/governance, ask/decide included.
+- Bare `cargo test --workspace`: **339 passed, 9 ignored**.
+- `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all
+  --check`: clean.
+- `pnpm --dir apps/web-ui test`: 2 files, **14** tests (+1: journaled
+  refusals fold and dedupe against live); `pnpm build` clean.
+- Desktop (`apps/desktop/src-tauri`; `kernel-core` gained a `JournalEntry`
+  variant pair and a `RunEvent::Rejected` field, no struct literal of either
+  in the desktop): `cargo fmt --all --check` clean, `cargo clippy
+  --all-targets -- -D warnings` clean, `cargo test --all-targets` 2 passed
+  (after installing the CI's GTK/WebKit dev packages locally).
+- Coverage of the inventory: each of the 17 sites is hit by a test that
+  asserts its `source`, `subject`, `step`/`attempt`, inline payload or
+  reference, and (live) that `proposal_seq` names a `Proposed` of the same
+  step and action. The retry/fallback cases assert the referenced `Decision`
+  and `Intent` precede the entry and the `Receipt` follows it, and that the
+  first refusal sits at exactly `accepted_seq + 1` — the case adjacency got
+  wrong.
+- Replay invariance: the same crashed journal (step mode at three crash
+  points, plan mode mid-plan) resumed with and without informational entries
+  interleaved everywhere gives an identical run record, output, model-call
+  count, model-visible context, tool executions and non-informational
+  journal.
+- `scripts/smoke-journal-history.sh`: PASS (both legs, with assertions,
+  including that the `resumed` session is the restarted process's and not
+  the crashed one's).
+- Downgrade, measured: the `a143922` binary on a database the new binary
+  wrote → `GET /events` **500** `unknown variant 'rejected'` /
+  `unknown variant 'resumed'` for runs holding the new rows; after the ADR's
+  rollback `DELETE` (5 rows) both return 200.
+
+**Not verified here.** The no-origin branch of sites 9 and 15 (unreachable
+without a misconfigured action source; same code path as the tested limit
+refusals). A run on K12 itself, and the export of the 142 runs against this
+binary. The downgrade policy is open for Eryk (ADR 0036, "Compatibility").
+Glassbox's parser is unchanged — a separate task after merge.
