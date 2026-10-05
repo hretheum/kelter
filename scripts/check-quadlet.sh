@@ -24,6 +24,10 @@
 # Options: --dropins DIR (default deploy/k12/kelter.container.d; "none" for
 # the bare canonical unit), --quadlet BIN (default: the usual libexec paths).
 set -euo pipefail
+# macOS tar (bsdtar) adds AppleDouble ._* files with xattrs to archives; quadlet on
+# the host then fails to parse ._kelter.container. Never send them.
+export COPYFILE_DISABLE=1
+
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 UNIT="$REPO_ROOT/deploy/kelter.container"
@@ -100,7 +104,7 @@ if [ -n "$SSH_TARGET" ]; then
   # Ship render.sh + the staged repo side as one tar stream; render there.
   # (--host-dir with --ssh is a path ON the host; no ~ expansion — use $HOME.)
   # shellcheck disable=SC2029  # $host_arg is meant to expand client-side
-  RAW="$(tar -C "$SHIP" -cf - . | ssh "$SSH_TARGET" \
+  RAW="$(tar --no-xattrs -C "$SHIP" -cf - . | ssh "$SSH_TARGET" \
     "d=\$(mktemp -d) && tar -C \"\$d\" -xf - && sh \"\$d/render.sh\" \"\$d/repo\" \"$host_arg\"; rm -rf \"\$d\"")" \
     || die "ssh to $SSH_TARGET failed"
 else

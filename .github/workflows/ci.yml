@@ -76,7 +76,7 @@ jobs:
     name: quadlet unit (dry-run)
     runs-on: ubuntu-latest
     env:
-      QUADLET_PODMAN_TAG: v6.1.3
+      QUADLET_PODMAN_TAG: v5.8.2  # = podman --version on K12 (2026-10-05)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
