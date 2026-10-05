@@ -2715,3 +2715,57 @@ hit the `( cd … && "$BIN" … ) &` subshell, not the daemon. Fixed with `exec`
 **Not verified here.** A run on K12 itself. No web-UI surface for skipped
 extensions — the API field and the ERROR line are the only signals; a monitor
 on `skipped_extensions != []` is the suggested alert.
+
+## 2026-10-05 — CI back on a current toolchain: clippy 1.99 lints fixed at the source, pin moved 1.97.1 → 1.99.0
+
+**Why.** Stable 1.99's clippy turned `main` red on 747b0fc without any code
+change; CI had been pinned to `dtolnay/rust-toolchain@1.97.1` (both the
+`check` and `desktop` jobs) as a stopgap. This entry removes the reason for the
+stopgap instead of living with it.
+
+**Every new lint, collected by iterating to clean** (`cargo +1.99 clippy
+--workspace --all-targets --keep-going -- -D warnings`, then the same in
+`apps/desktop/src-tauri`):
+
+1. `clippy::double_must_use` — `crates/memory/src/embeddings.rs`
+   (`EmbeddingBackend`) and `crates/memory/src/lib.rs` (`MemoryProvider`),
+   one error per async method (4 in total). Not our code: `async-trait`
+   0.1.89 pushes a bare `#[must_use]` onto every generated method, whose
+   return type (`Pin<Box<dyn Future>>`) is already `#[must_use]`. 0.1.92 no
+   longer emits that attribute (checked in its `src/expand.rs`), so the fix
+   is the upgrade — no `#[allow]` anywhere. The workspace requirement is
+   raised to `async-trait = "0.1.92"` so a downgrade cannot reintroduce it;
+   both `Cargo.lock`s (root and desktop) move to 0.1.92 and pull in
+   `syn 3.0.6` (MSRV 1.71 for both; `cargo +1.95 check --workspace
+   --all-targets` passes, so the `rust:1.95` Dockerfile is unaffected).
+2. `clippy::result_large_err` — `run_files_preamble` in
+   `crates/api/src/lib.rs` returned `Result<_, Response>` (axum `Response` is
+   ≥128 bytes). The `Err` is now `Box<Response>`; the two handlers unbox with
+   `return *rejection`. `auth_gate(..)?` keeps working via `From<T> for
+   Box<T>`. `auth_gate` itself already carried a narrow, pre-existing
+   `#[allow(clippy::result_large_err)]` and was not flagged; left as is.
+
+Once `memory` compiled, nothing further surfaced: `api` was the only other
+crate with a new lint, and the desktop crate's own code had none.
+
+**Pin, not `@stable`.** `@1.99.0` (branch verified to exist via `git
+ls-remote`). Reproducibility wins here: the failure mode actually observed was
+"main goes red with zero diff", and with a pin a toolchain bump becomes its own
+PR that has to fix whatever the new lints flag — exactly this one. The cost is
+learning about new lints later; that is accepted. No `-A` flags in `ci.yml`.
+
+**Verified (this tree, Rust 1.99.0):**
+
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
+  warnings`: clean.
+- `cargo test --workspace -- --include-ignored` with
+  `KELTER_TEST_POSTGRES_URL` against a local PostgreSQL 16 + pgvector 0.6.0
+  (Docker daemon unavailable in this session; extension dropped first so the
+  migration's own `CREATE EXTENSION` runs, as in CI): **328 passed, 0 failed,
+  0 ignored** — unchanged.
+- `pnpm --dir apps/web-ui test`: 2 files, 13 tests; `pnpm build` clean.
+- Desktop (`apps/desktop/src-tauri`): `cargo fmt --all --check` clean,
+  `cargo clippy --all-targets -- -D warnings` clean, `cargo test
+  --all-targets` 2 passed.
+
+**Not verified here.** The macOS desktop leg and the `container` job — CI only.
