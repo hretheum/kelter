@@ -87,7 +87,10 @@ export function verificationView(run: Run): VerificationView {
   if (run.verification === "contract") {
     return { ...none, tone: "verified", text: "Verified by the success contract." };
   }
-  if (run.verification === "none") {
+  // `verification` absent/null on a completed run = it ended before ADR 0037:
+  // judged by the ADR 0033 floor only, so unverified too (maintainer's
+  // decision, 2026-10-05) and confirmable the same way.
+  if (run.verification === "none" || run.verification == null) {
     if (run.confirmation) {
       return {
         ...none,
@@ -103,5 +106,5 @@ export function verificationView(run: Run): VerificationView {
       canConfirm: true,
     };
   }
-  return none; // pre-ADR-0037 run, or an older daemon: nothing to say
+  return none;
 }

@@ -44,14 +44,14 @@ workspace).
 `architecture-overview.md`. Decisions → `docs/adr/` (0001–0037). The 2026-07-21
 adversarial audit + its fix passes → `docs/audit/AUDIT-2026-07-21.md`.
 
-**Testing.** `cargo test --workspace` is hermetic — 370 tests, plus 9
+**Testing.** `cargo test --workspace` is hermetic — 371 tests, plus 9
 `pgstore` tests that are `#[ignore]`d because they need a real Postgres. To run
 those too: start a `pgvector/pgvector:pg16` container, export
-`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (379 total — the
+`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (380 total — the
 figure CI reports). CI does this via a `services:` block. Bare `cargo test`
 reports them as `9 ignored`, never as a green pass. `cargo clippy --workspace
 --all-targets -D warnings` and `cargo fmt --check` are the bar. web-ui:
-`pnpm --dir apps/web-ui test` (vitest — 2 files, 18 tests) + `pnpm build`;
+`pnpm --dir apps/web-ui test` (vitest — 2 files, 19 tests) + `pnpm build`;
 both run in CI since 2026-08-03.
 
 **The excluded-workspace hazard — read this before touching shared types.**
@@ -113,9 +113,11 @@ predicate (ADR 0033 floor, then the contract); unmet → `incomplete` naming the
 failed conditions. Every judged run carries `verification: contract|none`.
 `distill` takes only `Run::learnable()` runs — contract-verified, or confirmed
 via `POST/DELETE /runs/{id}/confirmation` (journaled, informational
-`success_confirmation_decided`; revoke forgets what that run taught), or
-pre-ADR. **Consequence:** without contracts or confirmations, `distill` now
-learns nothing new. `scripts/smoke-success-contract.sh` drives it on the real
+`success_confirmation_decided`; revoke forgets what that run taught). Runs
+that ended before ADR 0037 count as unverified too (Eryk, 2026-10-05) —
+confirmable, not learnable until confirmed; already-learned artifacts stay.
+**Consequence:** without contracts or confirmations, `distill` learns nothing
+new. "Human" = holder of an API token (named in the ADR). `scripts/smoke-success-contract.sh` drives it on the real
 daemon. If you add a learning path, gate it on `Run::learnable()`.
 
 **Open items, in the order they'd bite.**
@@ -130,10 +132,10 @@ daemon. If you add a learning path, gate it on `Run::learnable()`.
    `/events`, no resume, `distill` errors). The ADR lists the options
    (documented `DELETE` rollback vs a catch-all variant); the choice is
    Eryk's.
-4. **ADR 0037 decisions left to Eryk** — pre-ADR `completed` runs count as
-   learnable (compatible default; one line in `Run::learnable` flips it), and
-   reflection episodes still record an unverified `completed` as `Success`.
-   The web UI shows/confirms verification but cannot submit a contract yet.
+4. **ADR 0037 follow-ups** — reflection episodes still record an unverified
+   `completed` as `Success`; Eryk wants a separate PR (an `Unverified`
+   outcome that reflection/retrieval do not treat as success). The web UI
+   shows/confirms verification but cannot submit a contract yet.
 5. **Phase 23 loose ends** — no plan leg in `scripts/smoke-selflearn.sh`, no
    web-UI surface for learned plans, and the `adopt_learned_plan` branch in
    `execute_plan` is unreviewed (it sits inside ADR 0030 generation /

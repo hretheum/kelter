@@ -9,7 +9,7 @@ provenance_metadata:
 
 # ADR 0037: The success contract, and `verification` on every success
 
-Status: accepted (historical-data rule proposed below — Eryk to confirm) · Date: 2026-10-05 · Builds on: ADR 0001 (kernel decides), ADR 0033 (success requires an effective action) · Touches: ADR 0007/0036 (journal), ADR 0010/0030 (plan mode), ADR 0013 (A2A inbound), ADR 0016/0032 (self-learning), ADR 0018 (principals), ADR 0021/0023 (human decisions)
+Status: accepted (historical-data rule decided by the maintainer, 2026-10-05) · Date: 2026-10-05 · Builds on: ADR 0001 (kernel decides), ADR 0033 (success requires an effective action) · Touches: ADR 0007/0036 (journal), ADR 0010/0030 (plan mode), ADR 0013 (A2A inbound), ADR 0016/0032 (self-learning), ADR 0018 (principals), ADR 0021/0023 (human decisions)
 
 ## Context
 
@@ -137,8 +137,8 @@ from the same trace.
 `Kernel::distill` (facts and plans) now admits a run iff `Run::learnable()`:
 
 - `status == completed` **and**
-- `verification == contract`, **or** `verification == none` with a human
-  `confirmation`, **or** `verification` absent (historical, below).
+- `verification == contract`, **or** a human `confirmation` (for an
+  unverified run: `verification == none`, or absent — historical, below).
 
 Confirmation is a human decision with the ADR 0021/0023 shape:
 
@@ -148,10 +148,12 @@ Confirmation is a human decision with the ADR 0021/0023 shape:
   `kind: "success_confirmation_decided"` `{ decision: confirm|revoke,
   principal, at_ms }` **before** changing the run record, emits WS
   `success_confirmation_decided`, and returns the run.
-- Only an unverified `completed` run can be confirmed (`409` otherwise): a
+- Only an unverified `completed` run (`Run::is_unverified_success`:
+  `verification` `none` or absent) can be confirmed (`409` otherwise): a
   contract-verified run needs nothing; an `incomplete` run cannot be
   confirmed into success (that would be a human overriding the kernel's
-  verdict, a different feature); a historical run is already learnable.
+  verdict, a different feature). Confirming does not invent a verification
+  basis: `verification` stays as it was.
   Confirming twice / revoking nothing is `409` — every journaled decision
   changes state.
 - **Revoking also forgets** every learned fact or plan whose
@@ -166,6 +168,17 @@ schema, and is reachable only through the authenticated API. A model that
 proposes `confirm_run` is refused as an unknown action; a `finish` that
 claims "verified" changes nothing (tested).
 
+**Known boundary: "a human" means "a holder of an API token".** The kernel
+records the principal `auth_gate` resolves from the bearer token (ADR 0018);
+it cannot tell a person from a program holding that token. An API client
+running as an agent — including an orchestrating model given the token — can
+technically confirm. What this ADR guarantees is narrower: the *model inside
+this run* has no path, and every confirmation is attributed to a principal
+in the journal. With one operator that is acceptable; a deployment that
+hands tokens to automation should give it a named principal (so its
+confirmations are distinguishable) and, if needed, a later ADR can restrict
+confirmation to designated principals.
+
 **Retention / `forget` do not collide.** Pruning a run removes its
 confirmation with its journal; learned artifacts already survive their
 source run's pruning (unchanged). `forget` of an artifact does not touch the
@@ -177,16 +190,26 @@ from it again, exactly as for any other learnable run today.
 resume, replay or exactly-once scan, listed in `fold_step`'s explicit
 ignore arm.
 
-### 5. Historical data — proposal: pre-ADR runs stay learnable
+### 5. Historical data — pre-ADR runs are unverified (maintainer's decision)
 
 A `completed` run written before this change has no `verification` key. It
-is treated as **learnable, exactly as before** — otherwise the change would
-retroactively drop every existing run out of future distillation (already
-learned artifacts are untouched either way). Those runs were judged by
-ADR 0033 only, i.e. they *are* unverified; the alternative ("pre-change =
-unverified, confirm to learn") is one line in `Run::learnable` (`None =>
-false`). The default here is the compatible one, as KR1.1 proposed. **Eryk
-decides; this ADR leaves it at "compatible".**
+was judged by the ADR 0033 floor only, so it **is** unverified, and it is
+treated exactly like `verification: none`: **not learnable until a human
+confirms it**, and confirmable through the same endpoint (tested:
+`pre_adr_0037_completed_runs_are_unverified_until_confirmed`). Decided by
+Eryk on 2026-10-05 over the compatible alternative this ADR first proposed
+("pre-change = learnable as before").
+
+What this does and does not touch:
+- **Already-learned facts and plans stay.** The gate only changes what
+  *future* distillation reads; nothing in the learned store is removed by
+  upgrading (tested: `already_learned_artifacts_survive_the_gate`).
+- Future `distill` calls skip every old `completed` run until it is
+  confirmed. A deployment that wants an old run's lesson re-learned confirms
+  it; the `already` check still prevents a duplicate if it was learned before.
+- Revoking a confirmation of an old run forgets every artifact learned from
+  that run alone — including one distilled before this ADR. Revoke means
+  "this success was not real"; its lesson goes with it.
 
 ### 6. A2A inbound (ADR 0013)
 
@@ -224,6 +247,9 @@ as status message and no artifact (ADR 0033).
   the record of who confirmed. Before running an older binary:
   `DELETE FROM journal WHERE json_extract(entry, '$.kind') = 'success_confirmation_decided';`
   An older binary also learns from unverified runs again, since it has no gate.
+- **Upgrade:** after this change `distill` learns nothing from runs that
+  ended before it until they are confirmed (section 5); existing learned
+  artifacts are untouched.
 - **Desktop** (`apps/desktop/src-tauri`) constructs a `Run` literal in a
   test; updated, and its fmt/clippy/test re-run.
 

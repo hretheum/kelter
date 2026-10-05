@@ -2954,8 +2954,9 @@ failing condition in `error`. Every judged run carries `verification`
 (`contract` | `none`) on the run, the terminal journal entry, the terminal
 event and the history response; `contract_report` says which conditions
 held. `distill` (facts and plans) takes only `Run::learnable()` runs:
-contract-verified, human-confirmed, or pre-ADR (no `verification` key —
-compatible default, Eryk to confirm). `POST`/`DELETE
+contract-verified or human-confirmed. Pre-ADR runs (no `verification` key)
+are unverified like `verification: none` and confirmable the same way —
+Eryk's decision on the PR, 2026-10-05; already-learned artifacts stay. `POST`/`DELETE
 /api/v1/runs/{id}/confirmation` confirms / revokes (bearer, principal from
 the token), journaled as informational `success_confirmation_decided`;
 revoke forgets what was distilled from that run alone. A2A inbound: state
@@ -2972,7 +2973,7 @@ contract-failed incomplete.
 | the predicate | `crates/kernel-core/src/outcome.rs:96` | `effective_steps` | floor, then `contract::evaluate` |
 | terminal journal + event | `crates/kernel-core/src/engine.rs:3590` (`finalize_run`) | status/output/error | + `verification`, `contract_report` |
 | crash after terminal | `crates/kernel-core/src/engine.rs:2281` | restores status | + restores verdict |
-| learning filter | `crates/kernel-core/src/engine.rs:1231` → `Run::learnable` (`:504`) | `status == Completed` | verified or confirmed (or pre-ADR) |
+| learning filter | `crates/kernel-core/src/engine.rs` `distill` → `Run::learnable` | `status == Completed` | contract-verified or confirmed |
 | A2A inbound mapping | `crates/a2a/src/server.rs:53`, `:91` | Incomplete → FAILED | unchanged + metadata |
 | contract validation | `crates/kernel-core/src/engine.rs:1417` | — | 422 via `KernelError::InvalidRequest` |
 
@@ -3000,7 +3001,8 @@ journal         {"kind":"success_confirmation_decided","decision":"confirm","pri
 
 - `cargo test --workspace --no-fail-fast -- --include-ignored` with
   `KELTER_TEST_POSTGRES_URL` against `pgvector/pgvector:pg16` in Docker:
-  **379 passed, 0 failed, 0 ignored** (was 348; +31: 7 `contract` unit,
+  **379 passed, 0 failed, 0 ignored** at the first push (380 after the
+  follow-up below) (was 348; +31: 7 `contract` unit,
   4 `outcome` unit, 16 `kernel-core/tests/success_contract_test.rs`, 3
   `api/tests/api_test.rs`, 1 `a2a` unit).
 - Before the new tests were added, the changed kernel failed exactly 3
@@ -3034,3 +3036,18 @@ journal         {"kind":"success_confirmation_decided","decision":"confirm","pri
 run before distilling) needs a real local model — not run. No run on K12.
 The downgrade `DELETE` in ADR 0037 is written by analogy with ADR 0036's
 measured one, not measured. Glassbox's parser is unchanged — separate task.
+
+**Follow-up on the PR (Eryk, 2026-10-05).** (1) Pre-ADR `completed` runs are
+now unverified, not learnable: `Run::learnable` = contract-verified or
+confirmed; `Run::is_unverified_success` (`verification` `none` or absent)
+gates confirmation, so `POST /confirmation` works for old runs. New tests:
+`pre_adr_0037_completed_runs_are_unverified_until_confirmed` (replaces
+`…_stay_learnable`, which asserted the old proposal),
+`already_learned_artifacts_survive_the_gate`; web-ui `verificationView`
+treats a completed run without `verification` as unverified (+1 vitest,
+19 total). (2) Reflection episodes for unverified successes — a separate PR
+after this merge, per Eryk. (3) ADR 0037 names the boundary: "a human" is
+whoever holds an API token; the model inside a run has no path.
+Re-run after the change: `cargo test --workspace --no-fail-fast --
+--include-ignored` **380 passed, 0 failed** (379 − 1 replaced + 2 new); clippy 1.99 / fmt clean; desktop unchanged
+(no type changed); `scripts/smoke-success-contract.sh` PASS.

@@ -79,12 +79,19 @@ describe("verificationView (ADR 0037)", () => {
     expect(v.canRevoke).toBe(true);
   });
 
-  it("never offers confirmation for contract-verified, legacy or incomplete runs", () => {
+  it("treats a pre-ADR-0037 completed run (no verification) as unverified", () => {
+    for (const run of [{ ...base }, { ...base, verification: null }]) {
+      const v = verificationView(run);
+      expect(v.tone).toBe("unverified");
+      expect(v.canConfirm).toBe(true);
+    }
+  });
+
+  it("never offers confirmation for contract-verified or incomplete runs", () => {
     for (const run of [
       { ...base, verification: "contract" as const },
-      { ...base },
-      { ...base, verification: null },
       { ...base, status: "incomplete" as const, verification: "none" as const },
+      { ...base, status: "failed" as const },
     ]) {
       const v = verificationView(run);
       expect(v.canConfirm).toBe(false);

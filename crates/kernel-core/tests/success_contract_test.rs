@@ -503,8 +503,10 @@ async fn plan_distillation_is_gated_the_same_way() {
 }
 
 #[tokio::test]
-async fn pre_adr_0037_completed_runs_stay_learnable() {
-    // A run record written before ADR 0037 has no `verification` key at all.
+async fn pre_adr_0037_completed_runs_are_unverified_until_confirmed() {
+    // Maintainer's decision (2026-10-05): a run record written before ADR
+    // 0037 (no `verification` key at all) was judged by the ADR 0033 floor
+    // only, so it is unverified — not learnable until a human confirms it.
     let h = harness(Scripted::steps(vec![]), RunMode::Step);
     let id = uuid::Uuid::new_v4();
     let legacy: Run = serde_json::from_value(json!({
@@ -519,17 +521,50 @@ async fn pre_adr_0037_completed_runs_stay_learnable() {
     }))
     .unwrap();
     assert_eq!(legacy.verification, None);
-    assert!(legacy.learnable());
+    assert!(legacy.is_unverified_success());
+    assert!(!legacy.learnable());
     h.store.put(legacy).await.unwrap();
     let report = h.kernel.distill(10).await.unwrap();
+    assert_eq!(report.facts_created + report.plans_created, 0);
+
+    // Manual confirmation works for it, exactly as for `verification: none`.
+    let (confirmed, _) = h
+        .kernel
+        .decide_success_confirmation(id, ConfirmationDecision::Confirm, "eryk")
+        .await
+        .unwrap();
+    assert_eq!(confirmed.confirmation.unwrap().principal, "eryk");
+    // The confirmation does not invent a verification basis.
+    assert_eq!(confirmed.verification, None);
+    let report = h.kernel.distill(10).await.unwrap();
     assert_eq!(report.source_run_ids, vec![id]);
-    // ...and a confirmation does not apply to it.
-    assert!(matches!(
-        h.kernel
-            .decide_success_confirmation(id, ConfirmationDecision::Confirm, "eryk")
-            .await,
-        Err(KernelError::InvalidState(_))
-    ));
+    assert_eq!(report.facts_created, 1);
+}
+
+#[tokio::test]
+async fn already_learned_artifacts_survive_the_gate() {
+    // Facts distilled from a legacy run before ADR 0037 stay: the gate only
+    // changes what FUTURE distillation reads.
+    let h = harness(Scripted::steps(vec![]), RunMode::Step);
+    let id = uuid::Uuid::new_v4();
+    h.learned
+        .put(kernel_core::LearnedFact {
+            id: uuid::Uuid::new_v4(),
+            fact: "an old lesson".into(),
+            task_context: "legacy task".into(),
+            provenance: kernel_core::LearnedProvenance {
+                source_run_ids: vec![id],
+                distilled_at: 0,
+                model: "mock".into(),
+                level: kernel_core::LEARNED_LEVEL.into(),
+                human_validated: false,
+                batch_id: uuid::Uuid::new_v4(),
+            },
+        })
+        .await
+        .unwrap();
+    h.kernel.distill(10).await.unwrap();
+    assert_eq!(h.kernel.list_learned().await.unwrap().len(), 1);
 }
 
 #[tokio::test]

@@ -473,7 +473,8 @@ pub struct Run {
     /// How the kernel reached its success verdict (ADR 0037): `contract` or
     /// `none`. Set on every `completed`/`incomplete` run decided by this
     /// version; `null` while the run is in flight, for `failed`/`canceled`,
-    /// and for runs that ended before ADR 0037 (learnable as before).
+    /// and for runs that ended before ADR 0037 (a `completed` one is then
+    /// unverified: learnable only once confirmed).
     #[serde(default)]
     pub verification: Option<Verification>,
     /// The kernel's per-condition evaluation of `success_contract` (ADR
@@ -497,17 +498,20 @@ pub struct RunConfirmation {
 }
 
 impl Run {
+    /// A `completed` run whose success no contract verified (ADR 0037):
+    /// `verification: none`, or a run that ended before ADR 0037 (no
+    /// `verification` at all — judged by the ADR 0033 floor only, so just as
+    /// unverified; maintainer's decision, 2026-10-05).
+    pub fn is_unverified_success(&self) -> bool {
+        self.status == RunStatus::Completed && self.verification != Some(Verification::Contract)
+    }
+
     /// May distillation (ADR 0016/0032) learn from this run? Only a
-    /// `completed` run whose success is verified by a contract or confirmed
-    /// by a human — or one that ended before ADR 0037 (`verification` absent),
-    /// which stays learnable exactly as it was (ADR 0037, historical data).
+    /// `completed` run whose success a contract verified, or an unverified
+    /// one (pre-ADR-0037 runs included) that a human confirmed.
     pub fn learnable(&self) -> bool {
         self.status == RunStatus::Completed
-            && match self.verification {
-                Some(Verification::Contract) => true,
-                Some(Verification::None) => self.confirmation.is_some(),
-                None => true,
-            }
+            && (self.verification == Some(Verification::Contract) || self.confirmation.is_some())
     }
 }
 
@@ -1226,8 +1230,8 @@ impl Kernel {
             if facts_created + plans_created >= limit {
                 break;
             }
-            // ADR 0037: only verified (contract) or human-confirmed successes
-            // — plus pre-ADR-0037 runs, learnable as before.
+            // ADR 0037: only contract-verified or human-confirmed successes
+            // (pre-ADR-0037 runs count as unverified).
             if !run.learnable() || already.contains(&run.id) {
                 continue;
             }
@@ -1686,12 +1690,12 @@ impl Kernel {
     /// There is no model path to this: it is not an action, it is never in
     /// any action schema, and only the authenticated API calls it.
     ///
-    /// Refused (`InvalidState`) unless the run is `completed` with
-    /// `verification: none`: a contract-verified run needs no confirmation, an
-    /// `incomplete`/`failed` run cannot be confirmed into success, and a
-    /// pre-ADR-0037 run is already learnable. Confirming twice, or revoking
-    /// what is not confirmed, is refused too — every journaled decision
-    /// changes state.
+    /// Refused (`InvalidState`) unless the run is an unverified success
+    /// ([`Run::is_unverified_success`] — `verification: none`, or a run that
+    /// ended before ADR 0037): a contract-verified run needs no confirmation,
+    /// and an `incomplete`/`failed` run cannot be confirmed into success.
+    /// Confirming twice, or revoking what is not confirmed, is refused too —
+    /// every journaled decision changes state.
     ///
     /// Revoking also forgets every learned artifact (fact or plan) distilled
     /// from this run alone, so a revoked success leaves no learning behind;
@@ -1703,7 +1707,7 @@ impl Kernel {
         principal: &str,
     ) -> Result<(Run, Vec<Uuid>), KernelError> {
         let mut run = self.store.get(run_id).await?;
-        if run.status != RunStatus::Completed || run.verification != Some(Verification::None) {
+        if !run.is_unverified_success() {
             return Err(KernelError::InvalidState(format!(
                 "run {run_id} is not an unverified completed run (status {:?}, verification \
                  {:?}) — only those can be confirmed",
