@@ -96,7 +96,10 @@ escape — each part lives on a different side of the trust boundary:
 - **Operator side (daemon, `crates/daemon/src/config.rs` + `main.rs`).** A
   declared subprocess-unsandboxed extension loads only if the operator lists it
   in `[trust] allow_unsandboxed_subprocess`. Missing consent → the daemon
-  refuses to start, naming the extension and the exact config key to add. The
+  refuses the extension, naming it and the exact config key to add. (Amended
+  by ADR 0035, 2026-10-04: the refusal skips that one extension — ERROR log +
+  `skipped_extensions` on `GET /api/v1/tools` — instead of aborting the whole
+  daemon start; what is refused is unchanged.) The
   refusal message states plainly that allowing it does **not** sandbox the
   subprocess.
 - **Transparency.** The resolved per-extension trust posture is journaled once

@@ -2,10 +2,13 @@
 # Extension trust posture smoke (Phase 6, ADR 0012). Proves the sandbox-by-
 # default policy and the TWO-PART opt-in for an unsandboxed subprocess:
 #   A) a subprocess extension with NO trust declaration → registry REFUSES
-#      to start the daemon (loud), sandbox-by-default;
+#      it (loud), sandbox-by-default; since ADR 0035 the refusal SKIPS the
+#      extension (ERROR log + /api/v1/tools skipped_extensions) and the
+#      daemon still starts;
 #   B) MONEY SHOT part 1 — the manifest opts in (trust =
 #      "subprocess-unsandboxed") but the OPERATOR has not allowed it → still
-#      REFUSED (a manifest cannot authorise its own escape);
+#      REFUSED (a manifest cannot authorise its own escape) — skipped, not
+#      started, reported;
 #   C) MONEY SHOT part 2 — manifest opt-in AND operator consent → loads;
 #   D) a WASM tool with NO opt-in still loads (sandbox-by-default, no
 #      regression); and its run journals the trust posture (honest labels).
@@ -63,38 +66,56 @@ extension_dirs = ["$1"]
 EOF
 }
 
-# start_expect_fail <config> <grep> : daemon must EXIT non-zero with grep in log
-start_expect_fail() {
-  local cfg="$1" needle="$2" logf="$WORK/fail-$$.log"
-  set +e
-  ( cd "$WORK" && "$BIN" --config "$cfg" > "$logf" 2>&1 )
-  local rc=$?
-  set -e
-  [ "$rc" -ne 0 ] || { cat "$logf"; die "daemon started but should have refused"; }
-  grep -q "$needle" "$logf" || { cat "$logf"; die "expected refusal containing '$needle'"; }
+# start_expect_skip <config> <grep> <name>: daemon must START (ADR 0035),
+# log the refusal at ERROR with grep in it, report <name> in
+# /api/v1/tools skipped_extensions, and NOT offer it as a tool source.
+start_expect_skip() {
+  local cfg="$1" needle="$2" name="$3" logf="$WORK/skip-$$-$3.log"
+  ( cd "$WORK" && RUST_LOG=info exec "$BIN" --config "$cfg" > "$logf" 2>&1 ) &
+  local pid=$!
+  for _ in $(seq 1 60); do
+    curl -fsS "$BASE/healthz" >/dev/null 2>&1 && break
+    kill -0 "$pid" 2>/dev/null || { cat "$logf"; die "daemon exited — a refused extension must be skipped, not abort the start"; }
+    sleep 0.3
+  done
+  grep "ERROR" "$logf" | grep -q "$needle" || { cat "$logf"; die "expected an ERROR skip line containing '$needle'"; }
+  curl -fsS "$BASE/api/v1/tools" -H "Authorization: Bearer ${TOKEN}" | python3 -c '
+import json,sys
+name = sys.argv[1]
+t = json.load(sys.stdin)
+sk = t.get("skipped_extensions", [])
+assert any(s.get("name") == name for s in sk), f"{name} not reported as skipped: {sk}"
+' "$name" || { kill "$pid"; die "skip of '$name' not visible via /api/v1/tools"; }
+  grep -q "operator-trusted subprocess" "$logf" && { kill "$pid"; die "a skipped extension was started"; }
+  kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
   LAST_FAIL_LOG="$logf"
 }
 
-# ---- A: subprocess with NO trust declaration → refused ------------------
+# Legs A/B need SOME action source to remain once the extension is skipped
+# (otherwise "no action sources" is a legitimate config error): the bundled
+# reference tools stay on.
+make_config_bundled() { make_config "$@" | sed 's/^bundled_tools = false$/bundled_tools = true/'; }
+
+# ---- A: subprocess with NO trust declaration → refused (skipped) --------
 log "=== A: subprocess without a trust declaration is refused (sandbox-by-default) ==="
 make_ext "notrust" ""
-make_config "$WORK/notrust" "" > "$WORK/a.toml"
-start_expect_fail "$WORK/a.toml" "did not declare a trust mode"
-log "  refused: $(grep -o "extension 'notrust'.*trust mode" "$LAST_FAIL_LOG" | head -1)"
+make_config_bundled "$WORK/notrust" "" > "$WORK/a.toml"
+start_expect_skip "$WORK/a.toml" "did not declare a trust mode" "notrust"
+log "  skipped: $(grep -o "extension 'notrust'.*trust mode" "$LAST_FAIL_LOG" | head -1)"
 A_LOG="$LAST_FAIL_LOG"
 
 # ---- B: manifest opt-in but NO operator consent → still refused ---------
 log "=== B: manifest opt-in WITHOUT operator consent is still refused ==="
 make_ext "optin" 'trust = "subprocess-unsandboxed"'
-make_config "$WORK/optin" "" > "$WORK/b.toml"     # NO [trust] operator allow
-start_expect_fail "$WORK/b.toml" "operator has not allowed it"
-log "  refused: a manifest cannot authorise its own escape"
+make_config_bundled "$WORK/optin" "" > "$WORK/b.toml"     # NO [trust] operator allow
+start_expect_skip "$WORK/b.toml" "operator policy does not allow it" "optin"
+log "  skipped, never started: a manifest cannot authorise its own escape"
 B_LOG="$LAST_FAIL_LOG"
 
 # ---- C: manifest opt-in AND operator consent → loads --------------------
 log "=== C: manifest opt-in AND operator consent → loads ==="
 make_config "$WORK/optin" $'[trust]\nallow_unsandboxed_subprocess = ["optin"]' > "$WORK/c.toml"
-( cd "$WORK" && RUST_LOG=info "$BIN" --config "$WORK/c.toml" > "$WORK/c.log" 2>&1 ) &
+( cd "$WORK" && RUST_LOG=info exec "$BIN" --config "$WORK/c.toml" > "$WORK/c.log" 2>&1 ) &
 CPID=$!
 for _ in $(seq 1 60); do
   curl -fsS "$BASE/healthz" >/dev/null 2>&1 && break
@@ -132,7 +153,7 @@ workspace = "$WORK/dwork"
 bundled_tools = false
 extension_dirs = ["$WORK/wasm"]
 EOF
-( cd "$WORK" && RUST_LOG=info "$BIN" --config "$WORK/d.toml" > "$WORK/d.log" 2>&1 ) &
+( cd "$WORK" && RUST_LOG=info exec "$BIN" --config "$WORK/d.toml" > "$WORK/d.log" 2>&1 ) &
 DPID=$!
 for _ in $(seq 1 60); do
   curl -fsS "$BASE/healthz" >/dev/null 2>&1 && break
@@ -179,4 +200,4 @@ if [ -n "$EVIDENCE_DIR" ]; then
   [ -n "${RUNJSON:-}" ] && printf '%s' "$RUNJSON" | scrub > "$EVIDENCE_DIR/trust-run.json"
 fi
 
-log "PASS: sandbox-by-default + two-part opt-in (manifest AND operator) + honest labelling + journaled posture"
+log "PASS: sandbox-by-default (refusals skip, daemon starts — ADR 0035) + two-part opt-in (manifest AND operator) + honest labelling + journaled posture"

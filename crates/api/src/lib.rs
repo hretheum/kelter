@@ -279,6 +279,26 @@ pub struct ApiState {
     /// `/api/v1/runs/{id}/files*` routes report 404, the SAME
     /// capability-flag convention as `skills`/`agents`.
     files: Option<Arc<RunFilesService>>,
+    /// Extensions the registry refused at startup (ADR 0035) — reported on
+    /// `GET /api/v1/tools` so an operator sees a skip without reading logs.
+    skipped_extensions: Arc<Vec<SkippedExtension>>,
+}
+
+/// An extension the daemon's registry skipped at startup (ADR 0035): it is
+/// NOT running. The API mirror of `mcp::extensions::SkippedExtension`, kept
+/// here so the HTTP contract crate does not depend on the tool substrate.
+#[derive(Debug, Clone, Serialize)]
+pub struct SkippedExtension {
+    /// `None` when the manifest was too broken to name the extension.
+    pub name: Option<String>,
+    /// Path of the refused manifest.
+    pub manifest: String,
+    /// `invalid_manifest` | `operator_consent_required`.
+    pub reason: String,
+    /// The refusal, as logged.
+    pub detail: String,
+    /// What the operator can do about it.
+    pub remedy: String,
 }
 
 pub fn router(kernel: Arc<Kernel>, token: String) -> Router {
@@ -344,6 +364,29 @@ pub fn router_full(
     agents: Option<Arc<dyn AgentsController>>,
     files: Option<Arc<RunFilesService>>,
 ) -> Router {
+    router_full_with_skipped(
+        kernel,
+        principals,
+        config,
+        skills,
+        agents,
+        files,
+        Vec::new(),
+    )
+}
+
+/// [`router_full`] plus the extensions the registry skipped at startup (ADR
+/// 0035), reported on `GET /api/v1/tools` — the daemon's real-wiring path.
+#[allow(clippy::too_many_arguments)]
+pub fn router_full_with_skipped(
+    kernel: Arc<Kernel>,
+    principals: Principals,
+    config: Option<Arc<dyn ModelConfigController>>,
+    skills: Option<Arc<dyn SkillsController>>,
+    agents: Option<Arc<dyn AgentsController>>,
+    files: Option<Arc<RunFilesService>>,
+    skipped_extensions: Vec<SkippedExtension>,
+) -> Router {
     let state = ApiState {
         kernel,
         principals: Arc::new(principals),
@@ -353,6 +396,7 @@ pub fn router_full(
         skills,
         agents,
         files,
+        skipped_extensions: Arc::new(skipped_extensions),
     };
     Router::new()
         .route("/healthz", get(health))
@@ -498,6 +542,28 @@ pub fn build_app_full(
     files: Option<Arc<RunFilesService>>,
 ) -> Router {
     router_full(kernel, principals, config, skills, agents, files)
+}
+
+/// [`build_app_full`] plus the extensions the registry skipped at startup
+/// (ADR 0035) — what the daemon actually calls.
+pub fn build_app_full_with_skipped(
+    kernel: Arc<Kernel>,
+    principals: Principals,
+    config: Option<Arc<dyn ModelConfigController>>,
+    skills: Option<Arc<dyn SkillsController>>,
+    agents: Option<Arc<dyn AgentsController>>,
+    files: Option<Arc<RunFilesService>>,
+    skipped_extensions: Vec<SkippedExtension>,
+) -> Router {
+    router_full_with_skipped(
+        kernel,
+        principals,
+        config,
+        skills,
+        agents,
+        files,
+        skipped_extensions,
+    )
 }
 
 pub async fn serve_with_principals(
@@ -748,7 +814,9 @@ async fn list_runs(State(state): State<ApiState>, headers: HeaderMap) -> Respons
 
 /// The action space as currently offered to the policy — which tools (and
 /// extensions) are live. Useful for demos and for verifying an extension
-/// registered without recompiling anything.
+/// registered without recompiling anything. `skipped_extensions` (ADR 0035,
+/// additive) lists the extensions the registry refused at startup; it is
+/// always present, `[]` when nothing was skipped.
 async fn list_tools(State(state): State<ApiState>, headers: HeaderMap) -> Response {
     let _principal = match auth_gate(&state, &headers, None) {
         Ok(p) => p,
@@ -766,7 +834,11 @@ async fn list_tools(State(state): State<ApiState>, headers: HeaderMap) -> Respon
                     })
                 })
                 .collect();
-            Json(serde_json::json!({ "tools": tools })).into_response()
+            Json(serde_json::json!({
+                "tools": tools,
+                "skipped_extensions": *state.skipped_extensions,
+            }))
+            .into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }

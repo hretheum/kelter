@@ -2657,3 +2657,61 @@ the run files API" would have failed with the file present on disk.
 acceptance harness's job, after the image is rebuilt and the extension
 directory mounted), and CI. `scripts/smoke-*.sh` were not run (they need a
 real local model).
+
+## 2026-10-04 — refused extensions are skipped, not fatal (ADR 0035)
+
+K12 acceptance: an extension `wordstats` with `trust =
+"subprocess-unsandboxed"` and no `[trust] allow_unsandboxed_subprocess` entry
+aborted the daemon start (`Error: extension 'wordstats' opted into
+subprocess-unsandboxed, but the operator has not allowed it…`, exit 1, systemd
+restart loop). Any unparseable manifest did the same. Owner decision: skip the
+extension, start the daemon; ADR 0012's security posture unchanged.
+
+**What changed.** `mcp::extensions::resolve(dirs, allow_unsandboxed)` applies
+manifest validation AND the operator gate and returns the extensions to wire
+plus `SkippedExtension { name?, manifest, reason, detail, remedy }`
+(`invalid_manifest` | `operator_consent_required`). The daemon logs each skip
+at ERROR (name, manifest path, reason, the exact `[trust]` entry to add) and
+keeps its own consent check as a fail-closed tripwire. `GET /api/v1/tools`
+gained an additive `skipped_extensions` array (always present, `[]` when
+none) via new `router_full_with_skipped` / `build_app_full_with_skipped`; the
+existing builders are untouched. Daemon-config errors still abort; "no action
+sources configured" now names the skipped extensions when they were the only
+sources. A valid manifest whose WASM module fails to load still aborts —
+recorded in ADR 0035 as out of scope, the obvious next candidate.
+
+`scripts/smoke-trust.sh` legs A/B were rewritten from "daemon exits non-zero"
+to "daemon healthy + ERROR line + reported in `skipped_extensions` + never
+started". The script also leaked every daemon it started in legs C/D: `kill`
+hit the `( cd … && "$BIN" … ) &` subshell, not the daemon. Fixed with `exec`;
+`pgrep kelter` is empty after a run.
+
+**Verified (this tree, Rust 1.97.1 — the CI pin):**
+
+- `cargo test --workspace -- --include-ignored` with
+  `KELTER_TEST_POSTGRES_URL` against a local PostgreSQL 16 + pgvector (Docker
+  unavailable in this session): **328 passed, 0 failed, 0 ignored** (was 323;
+  +5: three `resolve_*` registry tests in `mcp`, two daemon tests in
+  `crates/daemon/tests/extension_skip_test.rs`).
+- Bare `cargo test --workspace`: **319 passed, 9 ignored**.
+- `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all
+  --check`: clean.
+- `pnpm --dir apps/web-ui test`: 2 files, 13 tests; `pnpm build` clean (no UI
+  change — the additive field is ignored by `loadTools`).
+- Desktop (`apps/desktop/src-tauri`; `api` gained public items, no existing
+  signature changed): `cargo fmt --all --check` clean, `cargo clippy
+  --all-targets -- -D warnings` clean, `cargo test --all-targets` 2 passed.
+- The daemon tests spawn the real `kelter` binary. Mix case: WASM
+  `wordcount-wasm` + `memstore-wasm`, un-allowed `wordstats` subprocess (a
+  `/bin/sh` script that would touch a marker file if started), and
+  `[extension\nname = …` → daemon healthy, `word_count` offered, two entries in
+  `skipped_extensions`, exactly two ERROR `SKIPPED` lines, marker file absent.
+  Consent case: `wordstats` pointed at the real `tools-server` and listed in
+  `[trust]` → registers, its tools are offered, `skipped_extensions == []`,
+  the honest "operator-trusted subprocess" warning is logged.
+- `scripts/smoke-trust.sh`: PASS (legs A–D; D without llama-server, so
+  registration + labelling only).
+
+**Not verified here.** A run on K12 itself. No web-UI surface for skipped
+extensions — the API field and the ERROR line are the only signals; a monitor
+on `skipped_extensions != []` is the suggested alert.
