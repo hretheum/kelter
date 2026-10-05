@@ -8,9 +8,9 @@
  * gap-fill, and historical viewing share ONE code path — merging is idempotent
  * because everything is keyed by step index.
  *
- * Honest scope (design/07 D-1): the journal holds decisions/receipts/terminal,
- * not rejected proposals or rationale — those are live-WS-only. A replayed
- * axis therefore has proposals + results but no retry detail. */
+ * Honest scope (design/07 D-1): the journal holds decisions/receipts/terminal
+ * and, since ADR 0036, refusals — so a replayed axis has proposals, results
+ * and retry detail. Rationale stays live-WS-only. */
 
 import type {
   AgentView,
@@ -256,8 +256,21 @@ export function applyJournalEntry(axis: AxisState, entry: JournalEntry): void {
         axis.terminal = { kind: "canceled", error: entry.error ?? null };
       }
       break;
-    // intent / note / trust_posture / plan_proposed: durable bookkeeping the
-    // axis does not render (design/03 R-3).
+    case "rejected": {
+      // ADR 0036: the journaled twin of the live `rejected` event — same
+      // attempt+reason dedupe as applyEvent, so replay + live never double.
+      // A refused proposal never becomes the step's action.
+      const s = stepOf(axis, entry.step);
+      const dup = s.rejections.some(
+        (r) => r.attempt === entry.attempt && r.reason === entry.reason
+      );
+      if (!dup) s.rejections.push({ reason: entry.reason, attempt: entry.attempt });
+      if (entry.branch) s.branch = entry.branch;
+      break;
+    }
+    // intent / note / trust_posture / plan_proposed / resumed: durable
+    // bookkeeping the axis does not render (design/03 R-3).
+    case "resumed":
     case "intent":
     case "note":
     case "trust_posture":

@@ -676,3 +676,156 @@ async fn cancel_stops_a_live_run_and_writes_canceled() {
         .unwrap();
     assert_eq!(again["status"], "canceled");
 }
+
+/// Proposes invalid `echo` arguments once, then a valid echo, then finish.
+struct OneRejectionOracle(std::sync::atomic::AtomicUsize);
+
+#[async_trait]
+impl PolicyOracle for OneRejectionOracle {
+    async fn propose(
+        &self,
+        context: &PolicyContext,
+        _schema: &ActionSchema,
+    ) -> Result<Proposal, PolicyError> {
+        let n = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let (action, arguments) = match (n, context.steps.is_empty()) {
+            (0, _) => ("echo", json!({"msg": "typo"})),
+            (_, true) => ("echo", json!({"message": "hi"})),
+            _ => ("finish", json!({"summary": "echoed"})),
+        };
+        Ok(ProposedAction {
+            action: action.into(),
+            arguments,
+            rationale: None,
+        }
+        .into())
+    }
+    fn describe(&self) -> String {
+        "mock:one-rejection".into()
+    }
+}
+
+async fn fetch_events(addr: SocketAddr, token: &str, run_id: &str) -> serde_json::Value {
+    let client = reqwest::Client::new();
+    let mut body = serde_json::Value::Null;
+    for _ in 0..50 {
+        body = client
+            .get(format!("http://{addr}/api/v1/runs/{run_id}/events"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if body["status"] == "completed" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    body
+}
+
+/// ADR 0036: the run history carries refusals (with the refused proposal
+/// inline) and resumes (with session, time and the replayed step).
+#[tokio::test]
+async fn run_events_include_rejections_and_resumes() {
+    let store = Arc::new(kernel_core::InMemoryRunStore::new());
+    let kernel = Arc::new(Kernel::new(
+        Arc::new(OneRejectionOracle(Default::default())),
+        Arc::new(EchoTools),
+        Arc::new(InMemoryProvider::new()),
+        store.clone(),
+        KernelConfig::default(),
+    ));
+    let token = "test-token-123".to_string();
+    let app = api::router(kernel.clone(), token.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    // 1. A live run through the API with one refused proposal.
+    let run_id = reqwest::Client::new()
+        .post(format!("http://{addr}/api/v1/runs"))
+        .bearer_auth(&token)
+        .json(&json!({"task": "echo with a typo first"}))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let body = fetch_events(addr, &token, &run_id).await;
+    assert_eq!(body["status"], "completed", "{body}");
+    let journal = body["journal"].as_array().unwrap();
+    let rejected: Vec<&serde_json::Value> =
+        journal.iter().filter(|e| e["kind"] == "rejected").collect();
+    assert_eq!(rejected.len(), 1, "{body}");
+    let r = rejected[0];
+    assert_eq!(r["step"], 0);
+    assert_eq!(r["attempt"], 0);
+    assert_eq!(r["source"], "schema");
+    assert_eq!(r["subject"], "proposal");
+    assert_eq!(r["action"], "echo");
+    assert_eq!(r["arguments"], json!({"msg": "typo"}));
+    assert!(r["at_ms"].as_u64().unwrap() > 0);
+    let pos = |kind: &str| journal.iter().position(|e| e["kind"] == kind).unwrap();
+    assert!(pos("rejected") < pos("decision"), "{body}");
+    // A first execution is not a resume — even with the API's caller note
+    // journaled before it.
+    assert!(journal.iter().all(|e| e["kind"] != "resumed"), "{body}");
+
+    // 2. A run killed after its side effect, picked up again (as the
+    // daemon's startup sweep does).
+    let crashed = kernel.create_run("echo then crash".into()).await.unwrap();
+    for e in [
+        kernel_core::JournalEntry::Decision {
+            step: 0,
+            action: "echo".into(),
+            arguments: json!({"message": "hi"}),
+            usage: None,
+        },
+        kernel_core::JournalEntry::Intent {
+            step: 0,
+            action: "echo".into(),
+            arguments: json!({"message": "hi"}),
+            idempotency_key: format!("{crashed}:0"),
+        },
+        kernel_core::JournalEntry::Receipt {
+            step: 0,
+            ok: true,
+            result: json!({"echoed": "hi"}),
+        },
+    ] {
+        kernel_core::RunStore::append_journal(store.as_ref(), crashed, e)
+            .await
+            .unwrap();
+    }
+    kernel.execute_run(crashed).await.unwrap();
+    let body = fetch_events(addr, &token, &crashed.to_string()).await;
+    assert_eq!(body["status"], "completed", "{body}");
+    let journal = body["journal"].as_array().unwrap();
+    let resumed: Vec<&serde_json::Value> =
+        journal.iter().filter(|e| e["kind"] == "resumed").collect();
+    assert_eq!(resumed.len(), 1, "{body}");
+    let r = resumed[0];
+    assert_eq!(r["at_step"], 0);
+    assert_eq!(r["cause"], "interrupted");
+    assert_eq!(r["replayed_steps"], json!([0]));
+    assert_eq!(
+        r["session"],
+        kernel_core::journal::execution_session_id().to_string()
+    );
+    assert!(r["at_ms"].as_u64().unwrap() > 0);
+    // Exactly-once: no second receipt for step 0.
+    assert_eq!(
+        journal
+            .iter()
+            .filter(|e| e["kind"] == "receipt" && e["step"] == 0)
+            .count(),
+        1
+    );
+}

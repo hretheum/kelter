@@ -1,32 +1,73 @@
-# Quadlet unit: run the kernel under systemd with Podman.
+# Quadlet unit: run the kernel under systemd with rootless Podman.
+#
+# This is the ONE canonical unit (decision D19). Every deployment installs it
+# unchanged; whatever is specific to a deployment lives in Quadlet drop-ins
+# (`kelter.container.d/*.conf`) next to it — for K12 see deploy/k12/.
+#
 # Install: copy to ~/.config/containers/systemd/kelter.container
+# (plus the deployment's kelter.container.d/ directory, if any)
 # then: systemctl --user daemon-reload && systemctl --user start kelter
+#
+# Drop-in semantics (podman's quadlet generator, verified against its source):
+# single-value keys (Image=, UserNS=, Memory=, …) take the LAST value, so a
+# drop-in overrides them; list keys (Network=, EnvironmentFile=, Volume=,
+# PublishPort=, …) ACCUMULATE, so a drop-in can only add. That is why this
+# unit sets no Network= and no EnvironmentFile= at all: a default here could
+# never be taken back by a drop-in.
 [Unit]
 Description=kelter daemon (deterministic agent kernel)
 Wants=network-online.target
 After=network-online.target
+# Never stop retrying. Without this, systemd's default start limit (5 starts
+# in 10 s) gives up for good after a burst of failed starts — e.g. a config
+# error fixed a minute later, or the image not pulled yet after boot — and the
+# unit stays down until someone runs `systemctl --user reset-failed`. Restart
+# pacing comes from RestartSec= below instead.
+StartLimitIntervalSec=0
 
 [Container]
+# Deployment-specific — override in a drop-in. The default is the image you
+# build locally from this checkout (`podman build -t localhost/kelter:latest .`),
+# never pulled from a registry. A deployment that pulls pins an immutable tag
+# (`ghcr.io/hretheum/kelter:sha-<commit>`), never `:latest` — see deploy/k12/.
 Image=localhost/kelter:latest
 ContainerName=kelter
-PublishPort=7466:7466
+# Loopback ONLY. The daemon is designed for localhost / private networks
+# (SECURITY.md); reach it through an ssh tunnel
+# (`ssh -L 7466:127.0.0.1:7466 <host>`), never by publishing on all
+# interfaces. PublishPort= accumulates across drop-ins, so a deployment that
+# truly needs another address adds it — it cannot silently widen this one.
+PublishPort=127.0.0.1:7466:7466
+# Config (+ extensions under /data/config/extensions — ADR 0034/0035, see
+# deploy/extensions/README.md) read-only; the run workspace; and the durable
+# store. The SQLite store MUST live on the state volume — point the config at
+# it with `[storage] path = "/data/state/kelter.db"` — or every container
+# restart (Quadlet runs with --rm) silently starts from an empty store.
 Volume=%h/.config/kelter:/data/config:ro,Z
 Volume=kelter-work:/data/work:Z
+Volume=kelter-state:/data/state:Z
 Exec=--config /data/config/config.toml
 # Bound the container's log growth at the platform (ADR 0017): the daemon logs
-# to stdout (twelve-factor — no in-app file logging), and podman rotates it.
-# k8s-file with max-size/max-file caps total log at max-file × max-size (here
-# 3 × 10 MB = 30 MB). To send logs to the system journal instead, use
-# `LogDriver=journald` and cap via journald (SystemMaxUse=) — see
-# docs/observability.md.
-LogDriver=k8s-file
-LogOpt=max-size=10mb
-LogOpt=max-file=3
-# Only needed when [policy] engine = "openrouter:<model>"; keep the key in
-# an env file outside the repo, never in the unit itself. Podman skips it if
-# absent (local engine needs no key); create an empty file to be safe on
-# stricter podman builds.
-EnvironmentFile=%h/.config/kelter/env
+# to stdout (twelve-factor — no in-app file logging), and the platform caps it.
+# journald, not k8s-file: under rootless podman, k8s-file with
+# LogOpt=max-size/max-file did not apply max-file on K12, so the cap did not
+# hold. journald holds the cap host-wide via an explicit
+# SystemMaxUse= in journald.conf — see docs/observability.md. Logs:
+# `journalctl --user -u kelter`.
+LogDriver=journald
+
+# Deployment-specific, deliberately NOT set here (add in a drop-in):
+#  - UserNS= — the rootless default maps the image's `kelter` user (uid 999)
+#    to a subordinate uid that cannot read a 0600 config owned by the host
+#    user; `UserNS=keep-id:uid=999,gid=999` fixes that, but keep-id is
+#    rootless-only, so it cannot be a universal default.
+#  - Network= — the default podman network suffices for a remote engine. A
+#    local model server listening on the host's loopback is NOT reachable via
+#    host.containers.internal; put both containers on one podman network
+#    (`Network=<that network>`) and address the model by container name.
+#  - EnvironmentFile= — only needed when [policy] engine = "openrouter:<model>";
+#    keep the key in an env file outside the repo, never in a unit. Podman
+#    refuses to start if a listed env file is missing, so it is opt-in.
 
 # Container hardening (audit finding 10-a, docs/audit/AUDIT-2026-07-21.md):
 # the unit previously had no memory ceiling, no privilege-escalation
@@ -40,7 +81,7 @@ EnvironmentFile=%h/.config/kelter/env
 # Reasonable-but-adjustable for a single-tenant homelab deployment, not
 # derived from a load measurement — same honest framing as the delegation
 # limits' defaults (ADR 0022/0023). Raise it if a real workload needs more.
-Memory=512m
+Memory=512M
 # The daemon runs as a non-root user already (Dockerfile `USER kelter`) and
 # never needs to gain privileges at runtime — no setuid tools, no capability
 # changes.
@@ -51,15 +92,21 @@ NoNewPrivileges=true
 # daemon (a hang) into a killed process, which THEN trips Restart=on-failure
 # below — closing the gap where Restart=on-failure alone only reacts to a
 # non-zero exit, never to an unresponsive process that never exits.
+# HealthStartPeriod=20s (was 10s; 20s is what K12 runs and was accepted with):
+# the daemon opens the store, prunes (ADR 0017) and loads extensions before
+# /healthz answers, so the grace period has to cover a cold start.
 HealthCmd=curl -fsS http://127.0.0.1:7466/healthz || exit 1
 HealthInterval=30s
 HealthTimeout=3s
 HealthRetries=3
-HealthStartPeriod=10s
+HealthStartPeriod=20s
 HealthOnFailure=kill
 
 [Service]
 Restart=on-failure
+# Pace restarts (the default 100 ms is a hot loop against a persistent
+# failure); with StartLimitIntervalSec=0 above this is the only brake.
+RestartSec=10
 
 [Install]
 WantedBy=default.target

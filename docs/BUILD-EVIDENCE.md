@@ -2769,3 +2769,171 @@ learning about new lints later; that is accepted. No `-A` flags in `ci.yml`.
   --all-targets` 2 passed.
 
 **Not verified here.** The macOS desktop leg and the `container` job — CI only.
+
+## 2026-10-05 — one canonical Quadlet unit; K12 differences as drop-ins (D19)
+
+**Problem.** `deploy/kelter.container` and the unit K12 actually runs had
+drifted apart. The K12 unit (accepted 2026-10-05: 29/29 acceptance scenarios,
+twice in a row) differed in: `StartLimitIntervalSec=0`, a registry image
+pinned by SHA, loopback-only publish, `UserNS=keep-id`, `Network=llm-net`, a
+`kelter-state` volume, `LogDriver=journald` (no `LogOpt=`),
+`HealthStartPeriod=20s`, `RestartSec=10` and no `EnvironmentFile=`. Every K12 install was a hand edit of the repo unit.
+
+**Decision D19.** One canonical unit in the repo, installed unchanged; what is
+deployment-specific lives in Quadlet drop-ins.
+
+- `deploy/kelter.container` now carries K12's accepted values as the defaults
+  (loopback publish, `kelter-state`, journald, `StartLimitIntervalSec=0`,
+  `RestartSec=10`, `HealthStartPeriod=20s`, `Memory=512M`); the reasoning of
+  the old comments (ADR 0017 log cap, audit 10-a hardening, ADR 0024's
+  in-process cap) is kept. `Image=` keeps a safe default
+  (`localhost/kelter:latest`, a local build, never pulled).
+- `deploy/k12/kelter.container.d/`: `10-image.conf`
+  (`ghcr.io/hretheum/kelter:sha-a143922`), `20-network.conf` (`llm-net`),
+  `30-userns.conf` (`keep-id:uid=999,gid=999`). Upgrading K12 = editing
+  `10-image.conf`. Install/upgrade steps: `deploy/k12/README.md`.
+- **Drop-in semantics decided the shape**, read from podman's source
+  (`cmd/quadlet/main.go: loadUnitDropins`, `pkg/systemd/parser`): drop-ins
+  merge in file-name order; single-value keys (`Image`, `UserNS`, `Memory`) use
+  the last value, list keys (`Network`, `EnvironmentFile`, `PublishPort`,
+  `Volume`) accumulate. So the canonical unit sets no `Network=` and no
+  `EnvironmentFile=` — a default there could never be taken back by a
+  drop-in. `scripts/validate-quadlet.sh` enforces this statically.
+- `scripts/check-quadlet.sh`: renders repo unit + drop-ins and the unit
+  installed on the host with the **host's** `quadlet -dryrun -user` (locally,
+  or `--ssh core@k12`, which ships the repo side as a tar stream), normalizes
+  (comments, `SourcePath=`, the raw `[X-Container]` echo dropped; the `podman
+  run` argv split into sorted flag/value pairs, so order is irrelevant) and
+  diffs. 0 = equivalent, 1 = drift, 2 = could not check.
+- CI job `quadlet`: Ubuntu's podman 4.9.3 is too old to judge this unit (its
+  generator rejects `Memory=` — and rejected the *old* repo unit already, on
+  `LogOpt=`), so the job builds `cmd/quadlet` from a pinned podman tag
+  (`v6.1.3`, cached) and runs `scripts/validate-quadlet.sh`.
+- `docs/observability.md`: journald is the recommended driver under rootless
+  podman — `k8s-file`'s `max-file` was not applied on K12, so the cap only
+  existed on paper — with an explicit `SystemMaxUse=` in a journald.conf
+  drop-in.
+
+**Verified (this session).** podman 4.9.3 from Ubuntu; `quadlet` built from
+podman `v6.1.3` and `v5.8.8` source (`CGO_ENABLED=0 go build -mod=vendor
+./cmd/quadlet`).
+
+- `scripts/validate-quadlet.sh` with 6.1.3 and with 5.8.8: PASS (static
+  checks, dry-run of the bare unit, dry-run of unit + K12 drop-ins, comparator
+  self-test: identical install → 0, extra drop-in → 1).
+- The K12 unit reconstructed from the acceptance values as one monolithic
+  file vs repo unit + `deploy/k12` drop-ins, `scripts/check-quadlet.sh
+  --host-dir`: **OK, 42 normalized lines equal**, on 6.1.3 and 5.8.8. The
+  generated `ExecStart` is in fact byte-identical, flag order included:
+
+  ```
+  /usr/bin/podman run --name kelter --replace --rm --log-driver journald --cgroups=split --memory 512M --network llm-net --sdnotify=conmon -d --security-opt=no-new-privileges --userns keep-id:uid=999,gid=999 -v %h/.config/kelter:/data/config:ro,Z -v kelter-work:/data/work:Z -v kelter-state:/data/state:Z --publish 127.0.0.1:7466:7466 --health-cmd "curl\x20-fsS\x20http://127.0.0.1:7466/healthz\x20||\x20exit\x201" --health-interval 30s --health-on-failure kill --health-retries 3 --health-start-period 20s --health-timeout 3s ghcr.io/hretheum/kelter:sha-a143922 --config /data/config/config.toml
+  ```
+- Drift detection: changing `HealthStartPeriod` on the "host" side → exit 1
+  with a one-line diff; removing `StartLimitIntervalSec=0` → exit 1
+  (`[Unit]` lines are compared too, not only `ExecStart`).
+- `--ssh` path exercised with a stand-in `ssh` that runs the remote command
+  locally: same results (0 / 1).
+- `shellcheck` clean on both scripts. No Rust change: `cargo fmt --all
+  --check` clean; clippy/tests left to CI (unchanged code).
+
+**Not verified here.** `scripts/check-quadlet.sh` against the real K12 — the
+host side above is a reconstruction from the acceptance values, not K12's
+file. First real run against K12 (2026-10-05, `scripts/check-quadlet.sh --ssh k12`,
+host podman 5.8.2): the only difference was `[Unit] Description=` — the
+`podman run` argv, volumes, health check and `[Service]` were identical. Running
+it from a Mac also exposed AppleDouble `._*` files in the tar stream (quadlet
+refused them); fixed with `COPYFILE_DISABLE=1` + `tar --no-xattrs`.
+`QUADLET_PODMAN_TAG` in `ci.yml` is pinned to v5.8.2 = K12.
+
+## 2026-10-05 — refusals and resumes in the journal (ADR 0036, KR0.5)
+
+The run history (`GET /api/v1/runs/{id}/events`) held only what was decided
+and done. An export of 142 deployed runs had `decision`, `intent`, `receipt`,
+`note`, `terminal`, `trust_posture` — zero refusals; refusals and the resume
+marker existed only on the live WS stream, and Glassbox paired a `rejected`
+with the `proposed` at `seq - 1`, which is wrong whenever a delegation retry
+or fallback is refused after its proposal was accepted.
+
+**What changed.** All 17 `RunEvent::Rejected` sites (table with
+`a143922` → current line numbers in ADR 0036) go through one helper,
+`Kernel::reject`, which journals `kind: "rejected"` (`step`, `attempt`,
+`source`, `subject`, `reason`, optional `action`/`arguments`/`branch`,
+`at_ms`) and emits the unchanged live event plus one additive field,
+`proposal_seq`. `subject` is the linkage: `proposal` (refused proposal
+inline, bounded to 8 KiB, scrubbed), `decision` (this step's journaled
+`Decision`), `plan_node` (node `branch` of generation `step / 100`), `none`
+(failed model call). No path needed a heuristic or a change to `seq`. A
+resumed execution journals `kind: "resumed"` (`at_step`, process `session`,
+`cause`, `replayed_steps`, `at_ms`); the daemon logs its session id at
+startup. The resume predicate changed from `!journal.is_empty()` (true for
+every API run, because of the caller note) to "a recorded step or any
+non-`Note` entry". Both kinds are informational: `fold_step` ignores them
+explicitly, every other scan is kind-specific, the `resumed` row is appended
+after the snapshot replay reads, and both appends are best-effort. Web UI:
+replay folds `rejected` into the step's retry list (same dedupe key as live).
+Postgres (`pgstore`) holds no journal — nothing to change there.
+
+**History, before → after** (same scripted model, real daemon, real SQLite,
+real ledger MCP server; full files in `docs/evidence/adr-0036/`):
+
+```
+a run with a schema-invalid proposal, then a duplicate
+  a143922: note decision intent receipt decision terminal
+  now:     note rejected decision intent receipt rejected decision terminal
+           {"kind":"rejected","step":0,"attempt":0,"source":"schema","subject":"proposal",
+            "reason":"arguments for 'append_ledger' violate the schema: 5 is not of type \"string\" (at /entry)",
+            "action":"append_ledger","arguments":{"entry":5},"at_ms":1791206397570}
+a run killed after its side effect (KELTER_CRASH_POINT=after_execute:append_ledger), restarted
+  a143922: note decision intent receipt decision terminal
+  now:     note decision intent resumed receipt decision terminal
+           {"kind":"resumed","at_step":0,"session":"4c7bc684-…","cause":"interrupted",
+            "replayed_steps":[0],"at_ms":1791206398962}
+           receipt: {"deduped":true,…} — ledger has exactly 1 line
+```
+
+**Verified (this tree, Rust 1.97.0 local — CI pins 1.97.1):**
+
+- `cargo test --workspace -- --include-ignored` with
+  `KELTER_TEST_POSTGRES_URL` against a local PostgreSQL 16 + pgvector (Docker
+  daemon unavailable in this session): **348 passed, 0 failed, 0 ignored**
+  (was 328; +20: 17 in `kernel-core/tests/journal_rejections_resumes_test.rs`,
+  2 in `storage/tests/journal_informational_test.rs`, 1 in `api/tests`).
+  Before the new tests existed, the 328 pre-existing tests passed on the
+  changed kernel with no assertion touched — durability, plan resilience,
+  delegation resilience/governance, ask/decide included.
+- Bare `cargo test --workspace`: **339 passed, 9 ignored**.
+- `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all
+  --check`: clean.
+- `pnpm --dir apps/web-ui test`: 2 files, **14** tests (+1: journaled
+  refusals fold and dedupe against live); `pnpm build` clean.
+- Desktop (`apps/desktop/src-tauri`; `kernel-core` gained a `JournalEntry`
+  variant pair and a `RunEvent::Rejected` field, no struct literal of either
+  in the desktop): `cargo fmt --all --check` clean, `cargo clippy
+  --all-targets -- -D warnings` clean, `cargo test --all-targets` 2 passed
+  (after installing the CI's GTK/WebKit dev packages locally).
+- Coverage of the inventory: each of the 17 sites is hit by a test that
+  asserts its `source`, `subject`, `step`/`attempt`, inline payload or
+  reference, and (live) that `proposal_seq` names a `Proposed` of the same
+  step and action. The retry/fallback cases assert the referenced `Decision`
+  and `Intent` precede the entry and the `Receipt` follows it, and that the
+  first refusal sits at exactly `accepted_seq + 1` — the case adjacency got
+  wrong.
+- Replay invariance: the same crashed journal (step mode at three crash
+  points, plan mode mid-plan) resumed with and without informational entries
+  interleaved everywhere gives an identical run record, output, model-call
+  count, model-visible context, tool executions and non-informational
+  journal.
+- `scripts/smoke-journal-history.sh`: PASS (both legs, with assertions,
+  including that the `resumed` session is the restarted process's and not
+  the crashed one's).
+- Downgrade, measured: the `a143922` binary on a database the new binary
+  wrote → `GET /events` **500** `unknown variant 'rejected'` /
+  `unknown variant 'resumed'` for runs holding the new rows; after the ADR's
+  rollback `DELETE` (5 rows) both return 200.
+
+**Not verified here.** The no-origin branch of sites 9 and 15 (unreachable
+without a misconfigured action source; same code path as the tested limit
+refusals). A run on K12 itself, and the export of the 142 runs against this
+binary. The downgrade policy is open for Eryk (ADR 0036, "Compatibility").
+Glassbox's parser is unchanged — a separate task after merge.

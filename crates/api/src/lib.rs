@@ -865,9 +865,9 @@ async fn get_run(
 /// GET /api/v1/runs/{id}/events (D-1, design/06 §1a): the run's full ordered
 /// journal (ADR 0007), replayed for the historical execution axis. Read-only,
 /// bearer-gated, no new storage — this returns exactly what the kernel already
-/// journaled. Honest scope note: `rejected` proposals and rationale are never
-/// journaled (they are live-WS-only), so replay carries decisions
-/// (`proposed`), receipts (`executed`), notes and the terminal record.
+/// journaled. Since ADR 0036 that includes refusals (`rejected`, with what
+/// was refused) and resumes (`resumed`, with session, time and the replayed
+/// steps) — both informational. Rationale stays live-WS-only.
 async fn get_run_events(
     State(state): State<ApiState>,
     headers: HeaderMap,

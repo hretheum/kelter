@@ -145,6 +145,165 @@ pub enum JournalEntry {
         prompt: String,
         requested_at: u64,
     },
+    /// INFORMATIONAL (ADR 0036): the kernel refused something at `step` —
+    /// a model proposal, an automated retry/fallback of an accepted
+    /// delegation, or a plan node. Mirrors a live `RunEvent::Rejected`
+    /// one-for-one. `subject` says what was refused, so a reader never has to
+    /// guess by adjacency: `proposal` carries the refused proposal inline
+    /// (`action`/`arguments`, bounded — it is journaled nowhere else);
+    /// `decision` points at this step's journaled `Decision`; `plan_node`
+    /// points at node `branch` of the plan generation `step` belongs to;
+    /// `none` means no proposal exists (the model call itself failed).
+    ///
+    /// Never read by resume: `fold_step`, the replay path and every
+    /// exactly-once seed ignore it, and it never reaches the model's context.
+    Rejected {
+        step: u32,
+        attempt: u32,
+        source: RejectionSource,
+        subject: RejectionSubject,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        arguments: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+        /// Wall-clock milliseconds since the Unix epoch.
+        at_ms: u64,
+    },
+    /// INFORMATIONAL (ADR 0036): an execution picked this run up from durable
+    /// state left by an earlier one. `session` identifies the executing
+    /// process (one id per kernel process, [`execution_session_id`]);
+    /// `at_step` is where execution continues (step mode: the first step not
+    /// yet recorded; plan mode: the active generation's step base);
+    /// `replayed_steps` lists the steps whose decision — a journaled
+    /// `Decision` (or the original proposal behind a resolved human ask) in
+    /// step mode, the journaled `PlanProposed` in plan mode — this execution
+    /// takes from the journal instead of querying the model.
+    ///
+    /// Never read by resume (same contract as `Rejected`).
+    Resumed {
+        at_step: u32,
+        session: String,
+        cause: ResumeCause,
+        replayed_steps: Vec<u32>,
+        /// Wall-clock milliseconds since the Unix epoch.
+        at_ms: u64,
+    },
+}
+
+/// Which kernel rule refused (ADR 0036). One value per distinct mechanism;
+/// the human-readable `reason` carries the specifics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RejectionSource {
+    /// The policy call failed (transport, parse) — no proposal exists.
+    PolicyError,
+    /// The proposal failed action-schema validation.
+    Schema,
+    /// The anti-stall / duplicate rule (ADR 0031 epoch window).
+    Duplicate,
+    /// Delegation budget, depth or cycle limit (ADR 0022), or an a2a action
+    /// with no resolvable origin.
+    DelegationLimit,
+    /// The agent-trust `DelegationGate` refused (ADR 0023). In an automated
+    /// retry/fallback an `AskHuman` outcome is also a refusal.
+    DelegationGate,
+    /// The skill self-activation gate denied (ADR 0020).
+    SkillGate,
+    /// The target agent's circuit is open (ADR 0023): a sanctioned fallback
+    /// skipped, or a plan node refused before dialing.
+    CircuitOpen,
+    /// A step-mode delegation attempt failed and the resilience loop retries
+    /// (ADR 0023).
+    DelegationRetry,
+    /// A plan node attempt failed and is re-admitted (ADR 0030).
+    NodeRetry,
+    /// A revised plan failed plan validation (ADR 0030).
+    PlanValidation,
+    /// A recorded operator Deny for a plan-mode delegation ask (ADR 0025),
+    /// consumed on resume.
+    OperatorDenied,
+}
+
+/// What a `Rejected` entry refers to (ADR 0036). See [`JournalEntry::Rejected`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RejectionSubject {
+    /// A fresh model proposal, never accepted; carried inline.
+    Proposal,
+    /// This step's accepted, journaled `Decision`.
+    Decision,
+    /// Node `branch` of the plan generation that `step` belongs to.
+    PlanNode,
+    /// Nothing was proposed (the model call failed).
+    None,
+}
+
+/// Why an execution resumed (ADR 0036), derived from the journal alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResumeCause {
+    /// The last execution-relevant entry resolves a human pause (a skill or
+    /// delegation decision, or a delegation continuation input).
+    PauseResolved,
+    /// The previous execution stopped without a terminal entry and without a
+    /// pause — a crash, kill or daemon restart.
+    Interrupted,
+}
+
+/// Upper bound on a refused proposal's serialized `arguments` (ADR 0036). A
+/// weak model can emit arbitrarily large garbage; the journal keeps a
+/// bounded preview instead.
+pub const MAX_REJECTED_ARGUMENTS_BYTES: usize = 8 * 1024;
+/// Characters of the serialized arguments kept when they are truncated.
+pub const REJECTED_ARGUMENTS_PREVIEW_CHARS: usize = 1024;
+/// Upper bound on a `Rejected` entry's `reason`, in characters.
+pub const MAX_REJECTION_REASON_CHARS: usize = 2000;
+
+/// Bound (and scrub) a refused proposal's arguments for the journal.
+pub fn bounded_rejected_arguments(arguments: &serde_json::Value) -> serde_json::Value {
+    let scrubbed = crate::redact::scrub_json(arguments);
+    let raw = scrubbed.to_string();
+    if raw.len() <= MAX_REJECTED_ARGUMENTS_BYTES {
+        return scrubbed;
+    }
+    let preview: String = raw.chars().take(REJECTED_ARGUMENTS_PREVIEW_CHARS).collect();
+    serde_json::json!({
+        "truncated": true,
+        "bytes": raw.len(),
+        "preview": preview,
+    })
+}
+
+/// Bound (and scrub) a rejection reason for the journal.
+pub fn bounded_rejection_reason(reason: &str) -> String {
+    let scrubbed = crate::redact::scrub_secrets(reason);
+    if scrubbed.chars().count() <= MAX_REJECTION_REASON_CHARS {
+        return scrubbed;
+    }
+    let cut: String = scrubbed.chars().take(MAX_REJECTION_REASON_CHARS).collect();
+    format!("{cut}…")
+}
+
+/// This process's execution-session id (ADR 0036): generated once, on first
+/// use, and shared by every kernel in the process — so `Resumed` entries from
+/// two executions of one run differ exactly when the process did.
+pub fn execution_session_id() -> uuid::Uuid {
+    static SESSION: std::sync::OnceLock<uuid::Uuid> = std::sync::OnceLock::new();
+    *SESSION.get_or_init(uuid::Uuid::new_v4)
+}
+
+impl JournalEntry {
+    /// True for entries that exist only to inform readers (ADR 0036) and that
+    /// no resume, replay or exactly-once logic may depend on.
+    pub fn is_informational(&self) -> bool {
+        matches!(
+            self,
+            JournalEntry::Rejected { .. } | JournalEntry::Resumed { .. }
+        )
+    }
 }
 
 impl JournalEntry {
@@ -158,8 +317,10 @@ impl JournalEntry {
             | JournalEntry::SkillActivationDecided { step, .. }
             | JournalEntry::AgentDelegationRequested { step, .. }
             | JournalEntry::AgentDelegationDecided { step, .. }
-            | JournalEntry::AgentDelegationInputRequested { step, .. } => Some(*step),
+            | JournalEntry::AgentDelegationInputRequested { step, .. }
+            | JournalEntry::Rejected { step, .. } => Some(*step),
             JournalEntry::TrustPosture { .. }
+            | JournalEntry::Resumed { .. }
             | JournalEntry::PlanProposed { .. }
             | JournalEntry::Terminal { .. } => None,
         }
@@ -305,6 +466,9 @@ pub fn fold_step(journal: &[JournalEntry], step_index: u32) -> StepJournal {
                     }
                 }
             }
+            // Informational entries (ADR 0036) never shape resume — listed
+            // explicitly so a future arm above cannot start matching them.
+            JournalEntry::Rejected { .. } | JournalEntry::Resumed { .. } => {}
             _ => {}
         }
     }
