@@ -97,8 +97,9 @@ pub enum EpisodeOutcome {
     Success,
     Failure,
     /// The run ended `completed` but nothing verified it — no contract, no
-    /// human confirmation yet (ADR 0038). Retrieved into context, marked as
-    /// such, never presented as a success pattern.
+    /// human confirmation yet (ADR 0038). Kept in history and readable
+    /// through the API, but NEVER retrieved into model context — see
+    /// [`MemoryProvider::retrieve`] and [`in_model_context`].
     Unverified,
 }
 
@@ -179,7 +180,12 @@ pub trait MemoryProvider: Send + Sync {
     /// `(id, version)` replaces that version (idempotent re-write). A lower
     /// version never displaces a higher one.
     async fn write(&self, episode: Episode) -> Result<(), MemoryError>;
-    /// Rank the CURRENT version of each episode against `task`.
+    /// Rank the CURRENT version of each episode against `task` — this is what
+    /// enters the model's context. Contract (ADR 0038, maintainer's
+    /// decision): an episode whose current version is `unverified` is never
+    /// returned (and does not take part in ranking); once a human confirms it
+    /// (a `success` version) it is. Every backend applies
+    /// [`in_model_context`].
     async fn retrieve(&self, task: &str, limit: usize) -> Result<Vec<RankedContext>, MemoryError>;
     async fn upsert(&self, item: GraphUpsert) -> Result<(), MemoryError>;
     /// Every stored version of every episode of `run_id`, ordered by
@@ -190,6 +196,13 @@ pub trait MemoryProvider: Send + Sync {
         let _ = run_id;
         Err(MemoryError::Unsupported("episode history"))
     }
+}
+
+/// May this episode reach the model's context? Everything but an
+/// `unverified` one (ADR 0038). The single predicate every backend's
+/// `retrieve` filters with.
+pub fn in_model_context(e: &Episode) -> bool {
+    e.outcome != EpisodeOutcome::Unverified
 }
 
 /// The current version of each episode in `history` (highest `version` per
@@ -257,21 +270,12 @@ impl InMemoryProvider {
     }
 }
 
-/// One-line summary of an episode for prompt context. An unverified episode
-/// is marked so the model never reads it as a success pattern (ADR 0038);
-/// `Success`/`Failure` summaries are unchanged from before.
+/// One-line summary of an episode for prompt context.
 pub fn episode_summary(e: &Episode) -> String {
-    let outcome = match e.outcome {
-        EpisodeOutcome::Unverified => {
-            "Unverified (completed, but no contract or human verified it — not a success pattern)"
-                .to_string()
-        }
-        o => format!("{o:?}"),
-    };
     format!(
-        "task: {} | outcome: {} | steps: {}",
+        "task: {} | outcome: {:?} | steps: {}",
         e.task,
-        outcome,
+        e.outcome,
         e.trace.len()
     )
 }
@@ -298,13 +302,18 @@ impl MemoryProvider for InMemoryProvider {
 
     async fn retrieve(&self, task: &str, limit: usize) -> Result<Vec<RankedContext>, MemoryError> {
         let store = self.inner.read().await;
-        let docs: Vec<String> = store.episodes.iter().map(|e| e.task.clone()).collect();
+        let eligible: Vec<&Episode> = store
+            .episodes
+            .iter()
+            .filter(|e| in_model_context(e))
+            .collect();
+        let docs: Vec<String> = eligible.iter().map(|e| e.task.clone()).collect();
         let ranked = self.retrieval.rank(task, &docs, limit).await;
         Ok(ranked
             .into_iter()
             .map(|(i, score)| RankedContext {
-                episode_id: store.episodes[i].id,
-                summary: episode_summary(&store.episodes[i]),
+                episode_id: eligible[i].id,
+                summary: episode_summary(eligible[i]),
                 score,
             })
             .collect())
@@ -421,17 +430,31 @@ mod tests {
         assert_eq!(back.outcome, EpisodeOutcome::Unverified);
     }
 
-    #[test]
-    fn unverified_summary_is_marked_and_others_unchanged() {
-        let mut e = episode("send the report");
+    #[tokio::test]
+    async fn unverified_never_reaches_retrieval_until_confirmed() {
+        let mem = InMemoryProvider::new();
+        let mut v1 = episode("send the quarterly report");
+        v1.outcome = EpisodeOutcome::Unverified;
+        mem.write(v1.clone()).await.unwrap();
+        assert!(mem
+            .retrieve("send quarterly report", 5)
+            .await
+            .unwrap()
+            .is_empty());
+        // Still in history (and so in the API).
+        assert_eq!(mem.episode_history(v1.run_id).await.unwrap().len(), 1);
+
+        let mut v2 = v1.clone();
+        v2.version = 2;
+        v2.outcome = EpisodeOutcome::Success;
+        v2.provenance = Provenance::Human;
+        mem.write(v2).await.unwrap();
+        let hits = mem.retrieve("send quarterly report", 5).await.unwrap();
+        assert_eq!(hits.len(), 1);
         assert_eq!(
-            episode_summary(&e),
-            "task: send the report | outcome: Success | steps: 1"
+            hits[0].summary,
+            "task: send the quarterly report | outcome: Success | steps: 1"
         );
-        e.outcome = EpisodeOutcome::Unverified;
-        let s = episode_summary(&e);
-        assert!(s.contains("Unverified"), "{s}");
-        assert!(s.contains("not a success pattern"), "{s}");
     }
 
     #[tokio::test]

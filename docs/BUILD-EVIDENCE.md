@@ -3142,3 +3142,69 @@ written, not executed. WASM memory cannot lift an episode (no guest history
 op) — tested as `Unsupported`, documented as a limit. Glassbox's parser is
 unchanged. The retrieval rule ("in context, marked") is a proposal awaiting
 Eryk; excluding instead is a one-line filter per backend.
+
+**Follow-up on the PR (Eryk, 2026-10-05): unverified episodes never enter
+model context.** (1) Every backend's `retrieve` now drops `unverified`
+episodes before ranking — `memory::in_model_context` in in-memory, SQLite
+(= the daemon's `memory-server` path) and Postgres BM25; in SQL before `LIMIT`
+on the pgvector path; in the WASM `memstore` guest and the Python example
+extension. The "not a success pattern" annotation is gone; summaries are
+unchanged for every state. The WASM backend gained the optional
+`memory_episode_history` op (guest keeps versions, host checks the run id),
+so confirmation lifts a WASM episode too; `memstore_wasm.wasm` rebuilt from
+source (only that module). (2) `memory_episode_history` — and the three other
+memory tools — were never in the action space through the memory seam, but
+the memory-server listed under `[[tools.servers]]` registered all four as
+model actions (measured: the new test fails without the guard and lists
+them). `McpToolSource` now refuses those names from any tool server; test
+`memory_tools_never_enter_the_action_space`.
+
+Per-backend proof through the real kernel (`kernel_core::testkit::
+episode_context_probe`, feature `testkit`, dev-dependencies only): run →
+second run's model context has no trace of the episode → human confirms →
+third run's context holds exactly `task: … | outcome: Success | steps: 1`.
+In-memory, SQLite via the memory-server child process, Postgres, WASM — one
+test each; plus `pgvector_path_never_retrieves_unverified`.
+
+What the model actually received on the real daemon (scripted model stub,
+which now also logs requests; `scripts/smoke-unverified-episodes.sh`):
+
+```
+unverified  Task: Send an e-mail to Alice with the report.
+            No steps executed yet. Choose the first action.
+confirmed   Task: Send an e-mail to Alice with the report.
+            Relevant past episodes:
+            - task: Send an e-mail to Alice with the report. | outcome: Success | steps: 1
+revoked     Task: Send an e-mail to Alice with the report.
+            No steps executed yet. Choose the first action.
+```
+
+Re-run after the change (clippy/fmt on Rust 1.99.0, tests on 1.97.0):
+
+- `cargo test --workspace --no-fail-fast -- --include-ignored`, fresh
+  database on local PostgreSQL 16 + pgvector: **404 passed, 0 failed**
+  (397 + 7: action-space guard, in-memory/SQLite/Postgres/WASM context probes,
+  pgvector filter, WASM history; the old summary-mark test was replaced by a
+  retrieval test). Hermetic: 390 passed, 14 ignored. Existing tests changed
+  only where they asserted the superseded rule (unverified retrieved, marked):
+  the storage/pg/MCP/WASM/kernel transition tests now assert "absent while
+  unverified".
+- Found on the way: the first version of the new pgvector test used the
+  "beta" topic and tied with the existing cosine test's rows in a shared
+  database; it now uses the embedder's neutral vector. A database reused
+  across runs still carries one row from that first version, which fails the
+  existing cosine test there; a fresh database (as in CI) passes.
+- `cargo +1.99.0 clippy --workspace --all-targets -- -D warnings`, `cargo
+  +1.99.0 fmt --all --check`: clean. Desktop fmt/clippy/test: clean.
+- web-ui: 22 vitest (`episodeView` text now "kept out of model context"),
+  `pnpm build` clean.
+- `scripts/smoke-unverified-episodes.sh`: PASS incl. the three prompt checks;
+  `scripts/smoke-success-contract.sh`: PASS.
+- `scripts/smoke-memory-extension.sh` (Python extension backend) run with the
+  scripted stub standing in for llama-server on :8080: asserts 1–3 PASS —
+  run 1's prompts carried no episode; the confirmation wrote v2 `success`
+  through the extension's new `memory_episode_history` (daemon log: `episode
+  revised … version=2`); run 2's prompts carried the episode. Assert 4 then
+  hangs: it expects an unimplemented-capability manifest to abort startup,
+  but since ADR 0035 such an extension is skipped and the daemon starts — a
+  stale assertion that predates this change, left for a separate fix.

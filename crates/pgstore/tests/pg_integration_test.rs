@@ -14,7 +14,7 @@
 //!    no longer sees it.
 //!
 //! `#[ignore]`d by default, so the plain `cargo test` stays hermetic AND the
-//! skip is VISIBLE as `12 ignored` (across this file and `pg_vector_test.rs`)
+//! skip is VISIBLE as `14 ignored` (across this file and `pg_vector_test.rs`)
 //! rather than a green `ok` that touched nothing. To run them: start a
 //! `pgvector/pgvector:pg16` container, set
 //! `KELTER_TEST_POSTGRES_URL`, and pass `-- --include-ignored`. CI does exactly
@@ -519,8 +519,7 @@ async fn episode_transitions_are_versioned_on_postgres() {
         .into_iter()
         .filter(|h| h.episode_id == v1.id)
         .collect();
-    assert_eq!(hits.len(), 1, "one episode, not one per version");
-    assert!(hits[0].summary.contains("Unverified"), "{hits:?}");
+    assert!(hits.is_empty(), "unverified never retrieved: {hits:?}");
 
     let hist = mem.episode_history(v1.run_id).await.unwrap();
     assert_eq!(
@@ -607,4 +606,32 @@ async fn connecting_while_writing_episodes_does_not_deadlock_on_postgres() {
     for t in tasks {
         t.await.unwrap();
     }
+}
+
+/// ADR 0038 end to end on Postgres (BM25 path): the kernel over the shared
+/// Postgres memory — the model's context never holds the unverified episode,
+/// and holds it once confirmed.
+#[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
+async fn postgres_keeps_unverified_out_of_model_context() {
+    let _ = require_pg!();
+    let tag = Uuid::new_v4().simple().to_string();
+    let task = format!("probe pg {tag} reconcile ledger");
+    let p = kernel_core::testkit::episode_context_probe(
+        std::sync::Arc::new(PgMemoryProvider::new(store().await)),
+        &task,
+    )
+    .await;
+    assert!(
+        p.before_confirmation.iter().all(|m| !m.contains(&tag)),
+        "{:?}",
+        p.before_confirmation
+    );
+    assert!(
+        p.after_confirmation
+            .iter()
+            .any(|m| m == &format!("task: {task} | outcome: Success | steps: 1")),
+        "{:?}",
+        p.after_confirmation
+    );
 }

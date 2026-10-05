@@ -118,7 +118,7 @@ export function episodeView(e: RunEpisodes | null): string | null {
   const by = cur.provenance === "human" ? ", set by a human" : "";
   const label =
     cur.outcome === "unverified"
-      ? "unverified — in context, not as a success pattern"
+      ? "unverified — kept out of model context until confirmed"
       : cur.outcome === "success"
         ? "success"
         : "failure";

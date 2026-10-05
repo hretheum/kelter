@@ -138,7 +138,7 @@ describe("episodeView (ADR 0038)", () => {
   it("never shows an unverified episode as a success", () => {
     const t = episodeView(of([ep({})]))!;
     expect(t).toContain("unverified");
-    expect(t).toContain("not as a success pattern");
+    expect(t).toContain("kept out of model context");
     expect(t).toContain("v1");
   });
 

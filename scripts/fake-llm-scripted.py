@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Scripted OpenAI-compatible /v1/chat/completions: replies from a queue,
-# then `finish` forever. Logs every reply it served to calls.log (cwd).
+# then `finish` forever. Logs every reply it served to calls.log (cwd), and
+# every request it received (the prompt the model saw) to requests.log.
 import json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -25,6 +26,8 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        with open("requests.log", "a") as f:
+            f.write(json.dumps(body) + "\n")
         reply = QUEUE.pop(0) if QUEUE else FINISH
         with open("calls.log", "a") as f:
             f.write(json.dumps(reply) + "\n")

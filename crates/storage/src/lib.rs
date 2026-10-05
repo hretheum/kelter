@@ -19,7 +19,10 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use kernel_core::{JournalEntry, Run, RunStore, StoreError};
-use memory::{episode_summary, Episode, GraphUpsert, MemoryError, MemoryProvider, RankedContext};
+use memory::{
+    episode_summary, in_model_context, Episode, GraphUpsert, MemoryError, MemoryProvider,
+    RankedContext,
+};
 
 /// Forward-only migrations; index = schema version - 1.
 const MIGRATIONS: &[&str] = &[
@@ -417,6 +420,9 @@ impl MemoryProvider for SqliteMemoryProvider {
             out
         };
 
+        // ADR 0038: an `unverified` episode never reaches model context, nor
+        // takes part in ranking.
+        let episodes: Vec<Episode> = episodes.into_iter().filter(in_model_context).collect();
         let docs: Vec<String> = episodes.iter().map(|e| e.task.clone()).collect();
         let ranked = self.retrieval.rank(task, &docs, limit).await;
         Ok(ranked
@@ -815,16 +821,20 @@ mod tests {
     }
 
     /// ADR 0038: confirm (v2 Success) and revoke (v3 Unverified) are new
-    /// versions of one episode; retrieval sees only the current one, the
-    /// history keeps all three, and a stale lower version never wins.
+    /// versions of one episode; retrieval (= model context) never returns it
+    /// while it is `unverified` and returns it once `success`; the history
+    /// keeps all three, and a stale lower version never wins.
     #[tokio::test]
     async fn episode_transitions_are_versioned_and_history_is_kept() {
         let mem = SqliteMemoryProvider::new(Db::open_in_memory().unwrap());
         let run_id = Uuid::new_v4();
         let v1 = ep(run_id, "reconcile the ledger", EpisodeOutcome::Unverified);
         mem.write(v1.clone()).await.unwrap();
-        let hits = mem.retrieve("reconcile ledger", 5).await.unwrap();
-        assert!(hits[0].summary.contains("Unverified"));
+        assert!(mem
+            .retrieve("reconcile ledger", 5)
+            .await
+            .unwrap()
+            .is_empty());
 
         let mut v2 = v1.clone();
         v2.version = 2;
@@ -840,9 +850,11 @@ mod tests {
         v3.outcome = EpisodeOutcome::Unverified;
         mem.write(v3).await.unwrap();
         mem.write(v1.clone()).await.unwrap(); // stale re-write
-        let hits = mem.retrieve("reconcile ledger", 5).await.unwrap();
-        assert_eq!(hits.len(), 1);
-        assert!(hits[0].summary.contains("Unverified"));
+        assert!(mem
+            .retrieve("reconcile ledger", 5)
+            .await
+            .unwrap()
+            .is_empty());
 
         let hist = mem.episode_history(run_id).await.unwrap();
         assert_eq!(

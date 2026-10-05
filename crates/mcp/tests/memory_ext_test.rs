@@ -142,9 +142,9 @@ async fn interface_violating_backend_is_rejected_by_the_schema_gate() {
 }
 
 /// ADR 0038 through the subprocess seam (the daemon's default SQLite memory
-/// path): the built-in memory extension stores an `unverified` episode, its
-/// summary carries the mark, a higher version supersedes it for retrieval,
-/// and `memory_episode_history` returns every version.
+/// path): the built-in memory extension stores an `unverified` episode but
+/// never retrieves it, a higher `success` version is retrieved, and
+/// `memory_episode_history` returns every version.
 #[tokio::test]
 async fn builtin_memory_carries_unverified_and_versions_over_mcp() {
     let dir = std::env::temp_dir().join(format!("kelter-memext-{}", Uuid::new_v4()));
@@ -162,12 +162,11 @@ async fn builtin_memory_carries_unverified_and_versions_over_mcp() {
     let mut e = episode("reconcile the ledger");
     e.outcome = EpisodeOutcome::Unverified;
     provider.write(e.clone()).await.unwrap();
-    let hits = provider.retrieve("reconcile ledger", 3).await.unwrap();
-    assert!(
-        hits[0].summary.contains("not a success pattern"),
-        "{:?}",
-        hits[0].summary
-    );
+    assert!(provider
+        .retrieve("reconcile ledger", 3)
+        .await
+        .unwrap()
+        .is_empty());
 
     let mut v2 = e.clone();
     v2.version = 2;
@@ -192,4 +191,122 @@ async fn builtin_memory_carries_unverified_and_versions_over_mcp() {
         .await
         .unwrap()
         .is_empty());
+}
+
+/// ADR 0038: the memory tools — `memory_episode_history` included — are the
+/// kernel's private protocol with its memory backend, never model actions.
+/// Even the memory-server misconfigured as a TOOL server (next to a real one)
+/// contributes nothing to the action space, so the model can neither see
+/// nor call them.
+#[tokio::test]
+async fn memory_tools_never_enter_the_action_space() {
+    use kernel_core::{ActionSource, Latitude};
+    use mcp::McpToolSource;
+
+    let dir = std::env::temp_dir().join(format!("kelter-memtools-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = McpToolSource::connect(vec![
+        ServerSpec {
+            name: "reference-tools".into(),
+            command: env!("CARGO_BIN_EXE_tools-server").into(),
+            args: vec!["--workspace".into(), dir.to_string_lossy().into_owned()],
+            cwd: None,
+            env: Vec::new(),
+        },
+        ServerSpec {
+            name: "memory-as-tools".into(),
+            command: env!("CARGO_BIN_EXE_memory-server").into(),
+            args: vec![
+                "--db".into(),
+                dir.join("mem.db").to_string_lossy().into_owned(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+        },
+    ])
+    .await
+    .unwrap();
+    let names: Vec<String> = source
+        .action_schema(Latitude::Standard)
+        .await
+        .unwrap()
+        .actions
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+    assert!(!names.is_empty(), "the real tool server still registers");
+    for reserved in [
+        "memory_write",
+        "memory_retrieve",
+        "memory_upsert",
+        "memory_episode_history",
+    ] {
+        assert!(
+            !names.iter().any(|n| n == reserved),
+            "{reserved} leaked: {names:?}"
+        );
+        assert!(mcp::client::is_reserved_memory_tool(reserved));
+    }
+    assert_eq!(names, source.tool_names());
+}
+
+/// ADR 0038 end to end on the daemon's default memory path — the kernel over
+/// the built-in memory-server (SQLite) as a real child process: the model's
+/// context never holds the unverified episode, and holds it once confirmed.
+#[tokio::test]
+async fn sqlite_memory_server_keeps_unverified_out_of_model_context() {
+    let dir = std::env::temp_dir().join(format!("kelter-memext-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let provider = McpMemoryProvider::connect(ServerSpec {
+        name: "builtin-memory".into(),
+        command: env!("CARGO_BIN_EXE_memory-server").into(),
+        args: vec![
+            "--db".into(),
+            dir.join("mem.db").to_string_lossy().into_owned(),
+        ],
+        cwd: None,
+        env: Vec::new(),
+    })
+    .await
+    .unwrap();
+    let p = kernel_core::testkit::episode_context_probe(
+        Arc::new(provider),
+        "probe sqlite reconcile ledger",
+    )
+    .await;
+    assert!(
+        p.before_confirmation
+            .iter()
+            .all(|m| !m.contains("probe sqlite")),
+        "{:?}",
+        p.before_confirmation
+    );
+    assert_eq!(
+        p.after_confirmation,
+        vec!["task: probe sqlite reconcile ledger | outcome: Success | steps: 1".to_string()]
+    );
+}
+
+/// ADR 0038, end to end through the kernel (in-memory backend): the model's
+/// context never holds the unverified episode, and holds it once confirmed.
+/// (Lives here rather than in kernel-core, which cannot enable its own
+/// `testkit` feature without a self dev-dependency.)
+#[tokio::test]
+async fn unverified_episode_reaches_model_context_only_after_confirmation() {
+    let p = kernel_core::testkit::episode_context_probe(
+        Arc::new(memory::InMemoryProvider::new()),
+        "probe inmem reconcile ledger",
+    )
+    .await;
+    assert!(
+        p.before_confirmation
+            .iter()
+            .all(|m| !m.contains("probe inmem")),
+        "{:?}",
+        p.before_confirmation
+    );
+    assert_eq!(
+        p.after_confirmation,
+        vec!["task: probe inmem reconcile ledger | outcome: Success | steps: 1".to_string()]
+    );
 }

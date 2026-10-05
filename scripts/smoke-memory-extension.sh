@@ -4,7 +4,9 @@
 #      registers via its manifest and the daemon routes the kernel's memory
 #      seam to it — no recompilation;
 #   2) a real model run writes a reflection episode THROUGH the extension,
-#      and a second run retrieves that context back from it;
+#      and — once a human confirms that run (ADR 0038: an unverified
+#      episode never reaches model context) — a second run retrieves that
+#      context back from it;
 #   3) governance: a manifest declaring an unimplemented capability makes
 #      startup fail loudly.
 #
@@ -85,7 +87,8 @@ log "assert 1: kernel memory routed to the Python extension"
 grep -q "memory: extension 'memstore' (external backend)" "$RUN_DIR/daemon.log" \
   || die "daemon did not register memstore as the memory backend"
 
-run_task() { # $1 task → status
+LAST_RUN_ID=""
+run_task() { # $1 task → status (the run id lands in LAST_RUN_ID)
   local run_id status="" body
   run_id=$(curl -fsS -X POST "$BASE/api/v1/runs" \
     -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
@@ -96,11 +99,13 @@ run_task() { # $1 task → status
     { [ "$status" = "completed" ] || [ "$status" = "failed" ]; } && break
     sleep 2
   done
+  LAST_RUN_ID="$run_id"
   printf '%s' "$status"
 }
 
 log "assert 2: a real run's reflection is WRITTEN through the extension"
-STATUS=$(run_task "Append the entry 'memory-proof' to the ledger using append_ledger. Then finish.")
+run_task "Append the entry 'memory-proof' to the ledger using append_ledger. Then finish." > "$RUN_DIR/status"
+STATUS=$(cat "$RUN_DIR/status")
 [ "$STATUS" = "completed" ] || die "run 1 did not complete ($STATUS)"
 MEMFILE="$REPO_ROOT/examples/extensions/memstore/memstore.json"
 [ -f "$MEMFILE" ] || die "extension backend file was never created"
@@ -108,7 +113,14 @@ grep -q "memory-proof" "$MEMFILE" \
   || die "reflection episode did not reach the Python backend"
 log "  episode stored by the Python backend: $(python3 -c "import json;d=json.load(open('$MEMFILE'));print(len(d['episodes']),'episode(s)')")"
 
-log "assert 3: a second run RETRIEVES that context back from the extension"
+# ADR 0038: the run has no success contract, so its episode is `unverified`
+# and kept out of model context until a human confirms the run.
+curl -fsS -X POST "$BASE/api/v1/runs/$LAST_RUN_ID/confirmation" \
+  -H "Authorization: Bearer ${TOKEN}" >/dev/null || die "confirming run 1 failed"
+grep -q '"outcome": "success"' "$MEMFILE" \
+  || die "the confirmation did not write a success version to the Python backend"
+
+log "assert 3: a second run RETRIEVES that (confirmed) context back from the extension"
 STATUS=$(run_task "Append the entry 'memory-proof-again' to the ledger using append_ledger. Then finish.")
 [ "$STATUS" = "completed" ] || die "run 2 did not complete ($STATUS)"
 grep -q "memory: retrieved context from the registered provider" "$RUN_DIR/daemon.log" \

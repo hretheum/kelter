@@ -149,14 +149,26 @@ impl McpToolSource {
         let mut clients = Vec::new();
         let mut tools = HashMap::new();
 
-        for (name, client) in named {
+        for (server, client) in named {
             let listed = client.list_all_tools().await.map_err(|e| {
-                ExecutionError::Substrate(format!("list_tools on '{name}' failed: {e}"))
+                ExecutionError::Substrate(format!("list_tools on '{server}' failed: {e}"))
             })?;
 
             let client_index = clients.len();
             for tool in listed {
                 let name = tool.name.to_string();
+                // The memory-capability tools (ADR 0008/0038) are the
+                // kernel's private protocol with a memory backend — never
+                // model actions. A server that exposes them here (e.g. the
+                // memory-server misconfigured as a tool server) does not get
+                // them into the action space.
+                if is_reserved_memory_tool(&name) {
+                    tracing::warn!(
+                        "MCP server '{server}' exposes reserved memory tool '{name}' — not \
+                         registered as an action (memory tools are kernel-only)"
+                    );
+                    continue;
+                }
                 if tools.contains_key(&name) {
                     tracing::warn!("duplicate MCP tool '{name}' — keeping the first registration");
                     continue;
@@ -188,6 +200,13 @@ impl McpToolSource {
         names.sort();
         names
     }
+}
+
+/// The memory-capability tool names (the three required ones plus the
+/// optional history tool) — reserved for the kernel's memory client.
+pub fn is_reserved_memory_tool(name: &str) -> bool {
+    crate::memory_client::MEMORY_TOOLS.contains(&name)
+        || name == crate::memory_client::MEMORY_HISTORY_TOOL
 }
 
 /// Convert a CallToolResult into the kernel's step-result JSON.

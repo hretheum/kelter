@@ -33,7 +33,8 @@ use async_trait::async_trait;
 use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use memory::embeddings::EmbeddingBackend;
 use memory::{
-    episode_summary, retrieval, Episode, GraphUpsert, MemoryError, MemoryProvider, RankedContext,
+    episode_summary, in_model_context, retrieval, Episode, GraphUpsert, MemoryError,
+    MemoryProvider, RankedContext,
 };
 use pgvector::Vector;
 use tokio_postgres::NoTls;
@@ -341,9 +342,12 @@ impl MemoryProvider for PgMemoryProvider {
         if let Some(qvec) = self.store.embed_one(task).await {
             let rows = client
                 .query(
+                    // ADR 0038: an `unverified` episode never reaches model
+                    // context — filtered before LIMIT so it cannot take a slot.
                     "SELECT data, (1 - (embedding <=> $1))::float8 AS score
                      FROM episodes
                      WHERE embedding IS NOT NULL
+                       AND (data::jsonb ->> 'outcome') IS DISTINCT FROM 'unverified'
                      ORDER BY embedding <=> $1
                      LIMIT $2",
                     &[&qvec, &(limit as i64)],
@@ -366,7 +370,12 @@ impl MemoryProvider for PgMemoryProvider {
 
         // BM25 path: load rows, rank fresh in Rust (identical contract to the
         // SQLite backend). No persistent index → reversible by construction.
-        let episodes = load_episodes(&client).await.map_err(mem_err)?;
+        let episodes: Vec<Episode> = load_episodes(&client)
+            .await
+            .map_err(mem_err)?
+            .into_iter()
+            .filter(in_model_context) // ADR 0038
+            .collect();
         let docs: Vec<String> = episodes.iter().map(|e| e.task.clone()).collect();
         let ranked = retrieval::normalize(&retrieval::rank_bm25(task, &docs, limit));
         Ok(ranked

@@ -26,6 +26,8 @@ pub mod plan;
 pub mod redact;
 pub mod skill_gate;
 pub mod store;
+#[cfg(feature = "testkit")]
+pub mod testkit;
 
 pub use action::{
     ActionSchema, ActionSpec, ProposedAction, ValidatedAction, ValidationError, A2A_ANCESTRY_ARG,

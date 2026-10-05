@@ -676,12 +676,13 @@ async fn unverified_run_writes_an_unverified_episode_and_confirmation_moves_it()
         episode_versions(&h, run.id).await,
         vec![(1, Unverified, Provenance::Reflection)]
     );
-    // Retrieved into context, marked — not as a success pattern.
-    let hits = h.memory.retrieve("send an e-mail", 3).await.unwrap();
-    assert!(
-        hits[0].summary.contains("not a success pattern"),
-        "{hits:?}"
-    );
+    // Kept, but never retrieved into model context while unverified.
+    assert!(h
+        .memory
+        .retrieve("send an e-mail", 3)
+        .await
+        .unwrap()
+        .is_empty());
 
     // Confirm → v2 success (human); revoke → v3 unverified; confirm → v4.
     h.kernel

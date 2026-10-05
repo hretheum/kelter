@@ -44,12 +44,12 @@ workspace).
 `architecture-overview.md`. Decisions → `docs/adr/` (0001–0038). The 2026-07-21
 adversarial audit + its fix passes → `docs/audit/AUDIT-2026-07-21.md`.
 
-**Testing.** `cargo test --workspace` is hermetic — 385 tests, plus 12
+**Testing.** `cargo test --workspace` is hermetic — 390 tests, plus 14
 `pgstore` tests that are `#[ignore]`d because they need a real Postgres. To run
 those too: start a `pgvector/pgvector:pg16` container, export
-`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (397 total — the
+`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (404 total — the
 figure CI reports). CI does this via a `services:` block. Bare `cargo test`
-reports them as `12 ignored`, never as a green pass. `cargo clippy --workspace
+reports them as `14 ignored`, never as a green pass. `cargo clippy --workspace
 --all-targets -D warnings` and `cargo fmt --check` are the bar. web-ui:
 `pnpm --dir apps/web-ui test` (vitest — 2 files, 22 tests) + `pnpm build`;
 both run in CI since 2026-08-03.
@@ -128,12 +128,16 @@ episode (`success` / `unverified`, `provenance: human`) — never overwrite,
 never delete; `MemoryProvider::write` with a higher `version` of the same
 `id` is a revision (contract in the trait doc). History via the optional
 `MemoryProvider::episode_history` (SQLite schema v4 `episode_versions`,
-Postgres same shape, MCP tool `memory_episode_history`; WASM and
-history-less extensions → `Unsupported`, no revision). Retrieval keeps
-unverified episodes in context, marked "not a success pattern" — the
-maintainer may still choose to exclude them. Pre-0038 episodes are left as
+Postgres same shape, MCP tool / WASM op `memory_episode_history` — optional;
+a backend without it → `Unsupported`, no revision). **Unverified episodes
+never enter model context** (Eryk, 2026-10-05): every backend's `retrieve`
+filters them before ranking (`memory::in_model_context`); they stay in the
+history, the API and the UI. Memory tool names are refused from any tool
+server, so the model can never see/call them. Pre-0038 episodes are left as
 they are. `GET /runs/{id}/episodes`, WS `episode_revised`.
-`scripts/smoke-unverified-episodes.sh` drives it.
+`scripts/smoke-unverified-episodes.sh` drives it (incl. the model's actual
+prompt). If you add a memory backend, honour the retrieve rule and test it
+with `kernel_core::testkit::episode_context_probe` (feature `testkit`).
 
 **Open items, in the order they'd bite.**
 1. **18 ADRs carry `human_validated: false`** — 0007–0023 plus 0032. Eryk's
@@ -147,10 +151,8 @@ they are. `GET /runs/{id}/episodes`, WS `episode_revised`.
    `/events`, no resume, `distill` errors). The ADR lists the options
    (documented `DELETE` rollback vs a catch-all variant); the choice is
    Eryk's.
-4. **ADR 0037/0038 follow-ups** — the web UI shows/confirms verification
-   but cannot submit a contract yet. ADR 0038 leaves open for Eryk whether
-   unverified episodes enter model context at all (implemented: in, marked),
-   and WASM memory cannot be lifted on confirmation (no guest history op).
+4. **ADR 0037 follow-up** — the web UI shows/confirms verification but
+   cannot submit a contract yet.
 5. **Phase 23 loose ends** — no plan leg in `scripts/smoke-selflearn.sh`, no
    web-UI surface for learned plans, and the `adopt_learned_plan` branch in
    `execute_plan` is unreviewed (it sits inside ADR 0030 generation /

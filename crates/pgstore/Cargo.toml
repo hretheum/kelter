@@ -33,4 +33,6 @@ deadpool-postgres = "0.14"
 pgvector = { version = "0.4", default-features = false, features = ["postgres"] }
 
 [dev-dependencies]
+# ADR 0038: the shared episode-context probe.
+kernel-core = { workspace = true, features = ["testkit"] }
 tokio = { workspace = true, features = ["full"] }

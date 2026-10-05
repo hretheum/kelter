@@ -295,25 +295,77 @@ async fn poisoned_wasm_memory_reaches_context_but_never_authorizes() {
     assert_eq!(run.status, RunStatus::Completed);
 }
 
-/// ADR 0038 on the WASM backend: the guest stores the episode JSON as-is, so
-/// an `unverified` episode round-trips and its state reaches the summary; the
-/// backend keeps no history, so it reports that (and the kernel then writes
-/// no revisions to it) instead of pretending.
+/// ADR 0038 on the WASM backend (memstore guest): an `unverified` episode is
+/// stored and in the history, but never retrieved; a higher `success`
+/// version is retrieved, with one entry per episode.
 #[tokio::test]
-async fn wasm_memory_backend_carries_the_unverified_state_and_has_no_history() {
+async fn wasm_memory_backend_versions_and_never_retrieves_unverified() {
     let mem = WasmMemoryProvider::load("memstore", &memstore_path(), Grants::default())
         .expect("memory module loads and instantiates");
     let mut e = episode("reconcile the ledger");
     e.outcome = EpisodeOutcome::Unverified;
     mem.write(e.clone()).await.unwrap();
+    assert!(mem
+        .retrieve("reconcile ledger", 5)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let mut v2 = e.clone();
+    v2.version = 2;
+    v2.outcome = EpisodeOutcome::Success;
+    v2.provenance = Provenance::Human;
+    mem.write(v2).await.unwrap();
+    mem.write(e.clone()).await.unwrap(); // stale re-write never wins
     let hits = mem.retrieve("reconcile ledger", 5).await.unwrap();
-    assert!(
-        hits[0].summary.contains("outcome: unverified"),
-        "{:?}",
-        hits[0].summary
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].summary.contains("outcome: success"), "{hits:?}");
+
+    let hist = mem.episode_history(e.run_id).await.unwrap();
+    assert_eq!(
+        hist.iter()
+            .map(|x| (x.version, x.outcome))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, EpisodeOutcome::Unverified),
+            (2, EpisodeOutcome::Success)
+        ]
     );
-    assert!(matches!(
-        mem.episode_history(e.run_id).await,
-        Err(memory::MemoryError::Unsupported(_))
-    ));
+}
+
+/// The poisoned twin acknowledges every op with `{"ok": true}` — a lying
+/// store. Its "history" is not trusted: the gate refuses it, so the kernel
+/// writes it no revisions (an error there is logged, never fatal).
+#[tokio::test]
+async fn lying_module_history_is_refused_by_the_gate() {
+    let mem = WasmMemoryProvider::load("poison", &poisonmem_path(), Grants::default())
+        .expect("module loads");
+    let err = mem.episode_history(Uuid::new_v4()).await.unwrap_err();
+    assert!(err.to_string().contains("interface-violating"), "{err}");
+}
+
+/// ADR 0038 end to end through the kernel over the WASM memory backend: the
+/// model's context never holds the unverified episode, and holds it once a
+/// human confirmed it.
+#[tokio::test]
+async fn wasm_memory_keeps_unverified_out_of_model_context() {
+    let mem = WasmMemoryProvider::load("memstore", &memstore_path(), Grants::default())
+        .expect("memory module loads and instantiates");
+    let p =
+        kernel_core::testkit::episode_context_probe(Arc::new(mem), "probe wasm reconcile ledger")
+            .await;
+    assert!(
+        p.before_confirmation
+            .iter()
+            .all(|m| !m.contains("probe wasm")),
+        "{:?}",
+        p.before_confirmation
+    );
+    assert_eq!(
+        p.after_confirmation,
+        vec![
+            "[wasm-memory:memstore] task: probe wasm reconcile ledger | outcome: success | steps: 1"
+                .to_string()
+        ]
+    );
 }

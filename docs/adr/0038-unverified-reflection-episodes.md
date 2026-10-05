@@ -9,7 +9,7 @@ provenance_metadata:
 
 # ADR 0038: Unverified reflection episodes
 
-Status: proposed (the retrieval rule in §4 is the maintainer's to accept) · Date: 2026-10-05 · Builds on: ADR 0005 (memory provider, reflection), ADR 0016 (versioned, provenance-tagged, reversible memory), ADR 0037 (success contract, `verification`, human confirmation) · Touches: ADR 0008 (memory extension protocol), ADR 0024 (WASM memory), ADR 0028 (shared Postgres memory)
+Status: accepted (retrieval rule in §4 decided by the maintainer, 2026-10-05) · Date: 2026-10-05 · Builds on: ADR 0005 (memory provider, reflection), ADR 0016 (versioned, provenance-tagged, reversible memory), ADR 0037 (success contract, `verification`, human confirmation) · Touches: ADR 0008 (memory extension protocol), ADR 0024 (WASM memory), ADR 0028 (shared Postgres memory)
 
 ## Context
 
@@ -32,20 +32,26 @@ learning channel was not.
 | Site | Role | Before | After |
 |---|---|---|---|
 | `crates/memory/src/lib.rs:89` → `:93` | the enum | `Success`, `Failure` | + `Unverified` (serde `"unverified"`) |
-| `crates/memory/src/lib.rs:209` → `:263` (`episode_summary`) | **read** — the text the model sees | `{:?}` of the outcome | `Unverified` gets an explicit mark; `Success`/`Failure` text unchanged |
+| `crates/memory/src/lib.rs:209` → `:274` (`episode_summary`) | **read** — the text the model sees | `{:?}` of the outcome | unchanged |
+| `crates/memory/src/lib.rs:204` (`in_model_context`, new) | **gate** — may it reach the model? | — | everything but `unverified` (§4) |
+| `retrieve` in `memory` (in-memory), `storage` (SQLite, served to the daemon by `memory-server`), `pgstore` (BM25 + pgvector) | **read** → model context | every current episode | `unverified` filtered out before ranking (pgvector: in SQL, before `LIMIT`) |
 | `crates/kernel-core/src/engine.rs:3645-3647` → `:3743-3751` (`finalize_run`) | **write** | `Completed` → `Success`, else `Failure` | `Completed` + `Contract` → `Success`; other `Completed` → `Unverified`; else `Failure` |
 | `crates/kernel-core/src/engine.rs:1825` (`revise_episodes`, new) | **write** a new version | — | confirm / revoke (§3) |
 | `crates/kernel-core/src/engine.rs:628` (`RunEvent::EpisodeRevised`, new) | WS | — | carries the new outcome |
 | `crates/storage` (SQLite), `crates/pgstore` (Postgres) | store | opaque JSON in `episodes.data` | same JSON; + version table (§3) |
 | `crates/mcp/src/memory_{client,server}.rs` (subprocess; the daemon's **default** SQLite memory path) | transport | opaque JSON | same; + optional `memory_episode_history` tool |
-| `crates/wasmhost` + `examples/wasm-tools/memstore-wasm/src/lib.rs:67` | transport + guest | guest reads `outcome` as a string into its summary | unchanged — `outcome: unverified` passes through |
+| `crates/wasmhost` + `examples/wasm-tools/memstore-wasm/src/lib.rs` | transport + guest | guest echoes `outcome` into its summary; no versions | guest: versions, skips `unverified` in retrieve, serves `memory_episode_history`; host: `episode_history` |
+| `examples/extensions/memstore/server.py` (Python example extension) | external backend | stores/echoes | same three rules as the WASM guest |
 | `crates/memory/src/retrieval.rs`, `embeddings.rs`, pgvector query | **ranking** | ranks on `task` only | unchanged — the outcome never enters the score |
+| `crates/mcp/src/client.rs:165` (`is_reserved_memory_tool`, new) | action space | a tool server could expose `memory_*` as actions | reserved names refused (§6) |
 | `crates/api/src/lib.rs:906` (`GET /runs/{id}/episodes`, new) | API read | — (no episode API existed) | current + versions |
 | `apps/web-ui/src/lib/result.ts` (`episodeView`, new), `Result.tsx` | UI read | only counted `reflection_written` | one "Memory: …" line under verification |
 | `apps/desktop/src-tauri/tests/durable_store.rs:63` | test literal | `Success` | unchanged (still valid) |
 
-Ranking does not read the outcome anywhere, so no retrieval score and no
-existing quality test moves (the stop condition in the brief did not
+Ranking itself does not read the outcome. The filter removes `unverified`
+episodes from the candidate set before ranking, which changes results only
+where such episodes exist — i.e. only data written after this change; no
+existing quality test moved (the stop condition in the brief did not
 trigger).
 
 ## Decision
@@ -55,9 +61,9 @@ trigger).
 `EpisodeOutcome::Unverified` — "ended `completed`, nothing verified it".
 Chosen over a separate `verified: bool` field because:
 
-- the outcome is the one thing every reader already looks at (the summary,
-  the WASM guest, any third-party memory extension that echoes it); a new
-  field next to an unchanged `Success` would leave every one of those readers
+- the outcome is the one thing every reader already looks at (retrieval
+  filters, the WASM guest, any third-party memory extension); a new field
+  next to an unchanged `Success` would leave every reader that ignores it
   still saying "success" — the exact failure this ADR exists to fix;
 - an enum cannot express the nonsense combination `Failure` + `verified`;
 - it is additive on the wire: old records (`"success"`/`"failure"`) parse
@@ -131,30 +137,56 @@ Per backend:
   cannot steer the kernel into revising another run's episode. A third-party
   extension that does not serve the tool stays a valid memory backend and
   reports `Unsupported`.
-- **WASM** (ADR 0024): the guest ABI is unchanged; there is no history op,
-  so `Unsupported`. The episode is still stored as `unverified` — the guest
-  stores the JSON it is given and its summary says `outcome: unverified` —
-  but a confirmation does not lift it (logged). This is a known limit (below).
+- **WASM** (ADR 0024): an **optional** fourth op in the same JSON envelope,
+  `{"op": "memory_episode_history", "run_id"}` → `{"episodes": [...]}`, with
+  the same untrusted-boundary checks on the host. The in-repo `memstore`
+  guest now keeps versions (current per id + every version) and serves it, so
+  confirmation lifts a WASM episode like any other. A module answering
+  `{"ok": false, "error": "unknown op …"}` reports `Unsupported` (no
+  revision); a module that answers anything else malformed is refused by the
+  gate (test `lying_module_history_is_refused_by_the_gate`). The `.wasm`
+  is rebuilt from source and committed, as before.
 
-### 4. Retrieval: unverified episodes stay in context, marked (proposed default)
+### 4. Retrieval: unverified episodes never enter model context (maintainer's decision)
 
-An `unverified` episode is still retrieved — it is a true record of what was
-tried for a similar task, and dropping it would also drop a legitimate
-not-yet-confirmed success. It is never presented as a success pattern: its
-summary reads
+Decided by Eryk, 2026-10-05: an `unverified` episode is **not** retrieved
+into the model's context, in any backend. It stays in the history, in
+`GET /runs/{id}/episodes` and in the UI — it is a true record — but the model
+never sees it, so a hallucinated success cannot become a pattern for the
+next run even as a marked hint. Once a human confirms the run, its `success`
+version is retrieved like any other; after a revoke it disappears from
+context again.
 
-```
-task: … | outcome: Unverified (completed, but no contract or human verified it — not a success pattern) | steps: N
-```
+Contract (`MemoryProvider::retrieve` doc): the current version of each
+episode is ranked, **excluding** `unverified` ones, which are filtered out
+*before* ranking (so they neither appear nor take a `limit` slot). One
+predicate, `memory::in_model_context`, is used by the Rust backends:
 
-`Success` and `Failure` summaries are byte-for-byte unchanged. Ranking is
-unchanged (the outcome is not a ranking input). After a confirmation the
-same episode is summarized as `Success`; after a revoke, `Unverified` again —
-one entry per episode, never one per version.
+- in-memory and SQLite (`storage`, which is also what the daemon's
+  `memory-server` subprocess serves): filter, then rank;
+- Postgres: BM25 path filters in Rust; pgvector path filters in SQL
+  (`(data::jsonb ->> 'outcome') IS DISTINCT FROM 'unverified'`) before
+  `LIMIT`;
+- WASM `memstore` guest and the Python example extension: skip
+  `"unverified"` in their own retrieve.
 
-**Open for the maintainer:** the stricter alternative — exclude `unverified`
-episodes from context entirely — is a one-line filter in each backend's
-`retrieve`. This ADR proposes "in, marked" and implements it; Eryk decides.
+A third-party backend is untrusted for its retrieve content in general (ADR
+0008/0024: its context can be poisoned, never authorizes); honouring this
+rule is part of the interface contract it implements.
+
+Summaries are unchanged for every state (`task: … | outcome: Success | …`) —
+no "not a success pattern" annotation; an unverified summary never reaches a
+prompt.
+
+Tests, one per backend, each driving the real kernel through
+`kernel_core::testkit::episode_context_probe` (run → second run's context →
+confirm → third run's context): `unverified_episode_reaches_model_context_only_after_confirmation`
+(in-memory), `sqlite_memory_server_keeps_unverified_out_of_model_context`
+(memory-server child process), `postgres_keeps_unverified_out_of_model_context`
+(+ `pgvector_path_never_retrieves_unverified`),
+`wasm_memory_keeps_unverified_out_of_model_context`. On the real daemon,
+`scripts/smoke-unverified-episodes.sh` reads the prompt the scripted model
+actually received.
 
 ### 5. Historical data — left as it is
 
@@ -176,10 +208,21 @@ it is not done here.
 
 The model cannot reach any of this. Episodes are written by `finalize_run`
 (kernel) and `revise_episodes` (only from the authenticated confirmation
-endpoint); neither is an action, and memory-extension tools are never in the
-action schema. Test `the_model_has_no_path_to_lifting_an_episode`: a model
-that proposes `episode_revise`, `memory_write` and a "verified success"
-`finish` leaves exactly one version, `unverified`, `provenance: reflection`.
+endpoint); neither is an action. Test `the_model_has_no_path_to_lifting_an_episode`:
+a model that proposes `episode_revise`, `memory_write` and a "verified
+success" `finish` leaves exactly one version, `unverified`, `provenance:
+reflection`.
+
+The memory-extension tools — `memory_write`/`retrieve`/`upsert` and the new
+`memory_episode_history` — are the kernel's private protocol with its memory
+backend. A `memory` extension is connected only as a `MemoryProvider`,
+never as a tool source, so they are not in the action schema. The one way
+they could have reached it was a misconfiguration: the memory-server listed
+under `[[tools.servers]]` registered all four as model actions (measured:
+the new test fails without the guard, listing them). `McpToolSource` now
+refuses those names from any tool server (warning logged), so the model can
+neither see nor call them under any configuration — test
+`memory_tools_never_enter_the_action_space`.
 
 ## What does not change
 
@@ -187,8 +230,8 @@ that proposes `episode_revise`, `memory_write` and a "verified success"
   same episode (`success` / `failure`, v1, `reflection`).
 - `Run::learnable` and distillation (ADR 0037) — the episode is not a
   learning input; the run is.
-- Ranking, the `retrieve` response schema, the WASM guest ABI, the three
-  required memory-extension tools.
+- Ranking itself, the `retrieve` response schema, the three required
+  memory-extension tools / WASM ops (the history one is optional in both).
 
 ## Compatibility
 
@@ -206,6 +249,10 @@ that proposes `episode_revise`, `memory_write` and a "verified success"
   way). Same shape of hazard as ADR 0036's; rollback option: `UPDATE
   episodes SET data = replace(data, '"outcome":"unverified"', '"outcome":"success"')`
   — which re-creates exactly the pre-ADR behaviour.
+- **Tool servers:** a `[[tools.servers]]` entry that exposes a tool named
+  `memory_write`/`memory_retrieve`/`memory_upsert`/`memory_episode_history`
+  no longer gets it registered as an action (logged at WARN). No in-repo
+  tool server uses those names.
 - **Desktop** links `memory`/`kernel-core`: no struct literal gained a field
   (`Episode` is unchanged), and `MemoryProvider` gained only a defaulted
   method.
@@ -223,14 +270,21 @@ that proposes `episode_revise`, `memory_write` and a "verified success"
   `Episode = {id, run_id, task, trace: string[], outcome: "success"|"failure"|"unverified", provenance: "reflection"|"human"|"import", version}`.
   `current` has one entry per episode id (highest version); `versions` has
   all, ordered by `(id, version)`. `history_supported: false` with empty
-  lists on a WASM or history-less extension backend.
+  lists on a backend without the optional history op.
+- An `unverified` episode is visible here (and in `reflection_written` /
+  `episode_revised`) but never in a model prompt.
 - No journal kind is added: the decision is already `success_confirmation_decided`.
 
 ## Known limits
 
-- **WASM and third-party subprocess memory without `memory_episode_history`:**
-  the unverified state is stored and shown, but confirmation cannot lift it.
-  Closing that needs a guest ABI op (WASM) — deferred.
+- **Third-party memory backends without the optional history op/tool:** an
+  unverified episode there stays out of context for good (if the backend
+  honours the retrieve rule), because a confirmation cannot write it a
+  `success` version. The in-repo backends all serve history.
+- **Honouring the retrieve rule is up to the backend.** The kernel sees only
+  ranked summaries, so it cannot itself filter an untrusted backend's
+  context; that backend could equally poison context in any other way (ADR
+  0024's invariant: context, never authority).
 - **The pgvector path** embeds `task`, which does not change across versions;
   a revision re-embeds it anyway (one extra embedding call per decision).
 - The episode carries `provenance: human` but not the principal; the
@@ -239,11 +293,14 @@ that proposes `episode_revise`, `memory_write` and a "verified success"
 
 ## Consequences
 
-- An unverified success no longer reaches the model as a success pattern;
-  it reaches it as what it is.
+- An unverified success no longer reaches the model at all; it reaches it
+  only after a human confirms it.
 - The human confirmation is now the one switch for both learning channels —
   distillation (ADR 0037) and episodic memory (this ADR) — and it is
   reversible in both, with history kept.
 - `scripts/smoke-unverified-episodes.sh` drives it on the real daemon:
-  unverified v1 → confirm → success v2 → revoke → unverified v3; a
-  contract-verified run is `success` at once and cannot be confirmed.
+  unverified v1 → confirm → success v2 → revoke → unverified v3, with the
+  model's prompt checked at each stage (no episode → `outcome: Success` → no
+  episode); a contract-verified run is `success` at once and cannot be
+  confirmed. `scripts/smoke-memory-extension.sh` (needs a real model) now
+  confirms its first run before expecting retrieval.

@@ -17,6 +17,11 @@ uuid.workspace = true
 tracing.workspace = true
 futures.workspace = true
 
+[features]
+# Test support for other crates' tests (`kernel_core::testkit`); enable only
+# from dev-dependencies.
+testkit = []
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 tracing-subscriber = { workspace = true }
