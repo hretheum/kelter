@@ -12,7 +12,8 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use kernel_core::{
-    ActionSchema, PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction, Usage,
+    ActionSchema, CallBound, PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction,
+    Usage,
 };
 
 use crate::prompt;
@@ -213,6 +214,18 @@ impl PolicyOracle for OpenRouterAdapter {
         Err(PolicyError::Malformed(
             "response contained neither tool_calls nor content".into(),
         ))
+    }
+
+    fn call_bound(&self, context: &PolicyContext, schema: &ActionSchema) -> CallBound {
+        let limit = self.tuning.step_result_limit.unwrap_or(600);
+        crate::chat_call_bound(
+            &[
+                &prompt::system_prompt_native(schema, context),
+                &prompt::user_prompt_with_limit(context, limit),
+            ],
+            Some(&Self::tools_payload(schema)),
+            self.tuning.max_tokens.unwrap_or(1024),
+        )
     }
 
     fn describe(&self) -> String {

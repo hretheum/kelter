@@ -43,6 +43,123 @@ pub struct Config {
     pub skills: SkillsConfig,
     #[serde(default)]
     pub delegation: DelegationConfig,
+    #[serde(default)]
+    pub approval: ApprovalConfig,
+    #[serde(default)]
+    pub budget: BudgetSection,
+}
+
+/// The human gate on mutating actions (ADR 0038). Absent = every action
+/// `allow`, exactly as before. Policies are `"allow" | "ask" | "deny"`; an
+/// unknown value is a config ERROR (the daemon refuses to start) rather than
+/// a silent fallback — a typo in a safety gate must fail closed. Only
+/// actions that declare `idempotency_key` (the ADR 0031 "mutating"
+/// criterion) are gated; an entry naming any other action is logged at
+/// startup and has no effect. `review_verdict = "ask"` makes plan-mode
+/// review nodes a human verdict.
+///
+/// ```toml
+/// [approval]
+/// default = "allow"
+/// ask_timeout_secs = 300
+/// [approval.actions]
+/// write_file = "ask"
+/// run_command = "deny"
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ApprovalConfig {
+    pub default: kernel_core::ActionPolicy,
+    pub actions: std::collections::HashMap<String, kernel_core::ActionPolicy>,
+    /// How long a run may wait for a decision before the sweeper denies it
+    /// (principal `"system:timeout"`). `0` = wait indefinitely.
+    pub ask_timeout_secs: u64,
+}
+
+impl Default for ApprovalConfig {
+    fn default() -> Self {
+        Self {
+            default: kernel_core::ActionPolicy::Allow,
+            actions: std::collections::HashMap::new(),
+            ask_timeout_secs: 300,
+        }
+    }
+}
+
+impl ApprovalConfig {
+    pub fn to_gate(&self) -> kernel_core::ActionGateConfig {
+        kernel_core::ActionGateConfig {
+            default: self.default,
+            actions: self.actions.clone(),
+            ask_timeout_secs: self.ask_timeout_secs,
+        }
+    }
+}
+
+/// Cost budgets (ADR 0039). Absent = no limits. The per-run values are both
+/// the default and the ceiling for `POST /api/v1/runs` `budget` overrides
+/// (a caller may lower them, never raise them).
+///
+/// ```toml
+/// [budget]
+/// max_usd = 0.50
+/// max_tokens = 200000
+/// max_wall_secs = 1800
+/// daily_usd_per_principal = 5.0
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BudgetSection {
+    pub max_usd: Option<f64>,
+    pub max_tokens: Option<u64>,
+    pub max_wall_secs: Option<u64>,
+    pub daily_usd_per_principal: Option<f64>,
+    /// Tokens added to every model-call bound for what the adapter cannot
+    /// see (hidden provider templates / tool preambles).
+    pub prompt_overhead_tokens: u64,
+    /// Completion bound when an adapter does not report `max_tokens`.
+    pub fallback_completion_tokens: u64,
+}
+
+impl Default for BudgetSection {
+    fn default() -> Self {
+        Self {
+            max_usd: None,
+            max_tokens: None,
+            max_wall_secs: None,
+            daily_usd_per_principal: None,
+            prompt_overhead_tokens: kernel_core::BudgetConfig::DEFAULT_PROMPT_OVERHEAD_TOKENS,
+            fallback_completion_tokens:
+                kernel_core::BudgetConfig::DEFAULT_FALLBACK_COMPLETION_TOKENS,
+        }
+    }
+}
+
+impl BudgetSection {
+    pub fn to_budget(&self) -> anyhow::Result<kernel_core::BudgetConfig> {
+        for (name, v) in [
+            ("max_usd", self.max_usd),
+            ("daily_usd_per_principal", self.daily_usd_per_principal),
+        ] {
+            if let Some(v) = v {
+                anyhow::ensure!(v.is_finite() && v > 0.0, "[budget] {name} must be > 0");
+            }
+        }
+        anyhow::ensure!(
+            self.max_tokens != Some(0) && self.max_wall_secs != Some(0),
+            "[budget] max_tokens / max_wall_secs must be > 0"
+        );
+        Ok(kernel_core::BudgetConfig {
+            per_run: kernel_core::BudgetLimits {
+                max_usd: self.max_usd,
+                max_tokens: self.max_tokens,
+                max_wall_secs: self.max_wall_secs,
+            },
+            daily_usd_per_principal: self.daily_usd_per_principal,
+            prompt_overhead_tokens: self.prompt_overhead_tokens,
+            fallback_completion_tokens: self.fallback_completion_tokens,
+        })
+    }
 }
 
 /// Skills (ADR 0019): advisory procedural knowledge in the OpenSkills /

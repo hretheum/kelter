@@ -7,6 +7,7 @@ use anyhow::Context;
 use rand::Rng;
 
 use daemon::agents_controller;
+use daemon::approval_sweep;
 use daemon::config::{self, Config};
 use daemon::delegation_sweep;
 use daemon::skill_sweep;
@@ -1129,7 +1130,14 @@ async fn main() -> anyhow::Result<()> {
         kernel_built = kernel_built.with_skills(gate);
     }
     kernel_built = kernel_built.with_delegation_gate(delegation_gate);
+    // Human gate on mutating actions (ADR 0038) and cost budgets (ADR 0039):
+    // both inert unless configured.
+    let action_gate = cfg.approval.to_gate();
+    kernel_built = kernel_built
+        .with_action_gate(action_gate.clone())
+        .with_budget(cfg.budget.to_budget()?);
     let kernel = Arc::new(kernel_built);
+    log_governance(&kernel, &cfg).await;
 
     // Metrics recorder (Phase 8, item C): translate the kernel's run-event
     // stream into OTLP metrics. Only when observability is enabled.
@@ -1250,6 +1258,38 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // The action-approval timeout sweeper (ADR 0038): only when a pause can
+    // occur and a timeout is set — silence becomes a deny.
+    if action_gate.can_ask() && cfg.approval.ask_timeout_secs > 0 {
+        let kernel = kernel.clone();
+        let timeout_secs = cfg.approval.ask_timeout_secs;
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                tick.tick().await;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                for run_id in
+                    approval_sweep::sweep_timed_out_action_approvals(&kernel, timeout_secs, now)
+                        .await
+                {
+                    let kernel = kernel.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = kernel.execute_run(run_id).await {
+                            tracing::error!(%run_id, "resume after approval timeout failed: {e}");
+                        }
+                    });
+                }
+            }
+        });
+        tracing::info!(
+            "approval: action-approval timeout sweeper active (timeout={}s)",
+            timeout_secs
+        );
+    }
+
     // Token resolution (Phase 8, item F): env first (secrets stay out of the
     // config file / tree), then the config value, then a generated one.
     let token = std::env::var("KELTER_TOKEN")
@@ -1364,4 +1404,53 @@ async fn main() -> anyhow::Result<()> {
     // Flush + shut down all OTel pillars — batch exporters do not auto-flush.
     otel_guard.shutdown();
     Ok(())
+}
+
+/// Startup log for the human gate and budgets (ADR 0038/0039): what is in
+/// force, and every `[approval.actions]` entry that cannot take effect —
+/// an action the registry does not offer, or one that is not mutating (no
+/// `idempotency_key`), which the gate never touches by design.
+async fn log_governance(kernel: &Kernel, cfg: &daemon::config::Config) {
+    let gate = &cfg.approval;
+    if gate.default != kernel_core::ActionPolicy::Allow || !gate.actions.is_empty() {
+        tracing::info!(
+            "approval: default={:?} entries={} ask_timeout={}s",
+            gate.default,
+            gate.actions.len(),
+            gate.ask_timeout_secs
+        );
+        if let Ok(schema) = kernel.current_action_schema().await {
+            for name in gate.actions.keys() {
+                if name == kernel_core::plan::REVIEW_ACTION {
+                    continue;
+                }
+                match schema.spec(name) {
+                    None => tracing::warn!(
+                        action = %name,
+                        "approval: [approval.actions] names an action the registry does not offer"
+                    ),
+                    Some(spec) if !spec.supports_idempotency_key() => tracing::warn!(
+                        action = %name,
+                        "approval: action is not mutating (declares no idempotency_key) — the \
+                         gate does not apply to it (ADR 0038)"
+                    ),
+                    Some(_) => {}
+                }
+            }
+        }
+    }
+    let b = &cfg.budget;
+    if b.max_usd.is_some()
+        || b.max_tokens.is_some()
+        || b.max_wall_secs.is_some()
+        || b.daily_usd_per_principal.is_some()
+    {
+        tracing::info!(
+            max_usd = ?b.max_usd,
+            max_tokens = ?b.max_tokens,
+            max_wall_secs = ?b.max_wall_secs,
+            daily_usd_per_principal = ?b.daily_usd_per_principal,
+            "budget: limits active (ADR 0039)"
+        );
+    }
 }

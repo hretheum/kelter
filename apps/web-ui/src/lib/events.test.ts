@@ -152,3 +152,56 @@ describe("ingestReplay — journaled refusals (ADR 0036)", () => {
     expect(step.rejections).toEqual([{ reason: "bad args", attempt: 0 }]);
   });
 });
+
+describe("action approval (ADR 0038)", () => {
+  const requested: RunEvent = {
+    type: "action_approval_requested",
+    step: 2,
+    action: "zastosuj_patch",
+    arguments: { sciezka: "a.rs" },
+    branch: null,
+    expires_at: 1700000300,
+  };
+
+  it("a live request sets the pending approval and its decision clears it", () => {
+    ingestEnvelope(env(1, requested));
+    expect(axisFor(RUN).pendingActionApproval?.action).toBe("zastosuj_patch");
+    ingestEnvelope(
+      env(2, {
+        type: "action_approval_decided",
+        step: 2,
+        action: "zastosuj_patch",
+        decision: "allow",
+        principal: "alice",
+        branch: null,
+      })
+    );
+    expect(axisFor(RUN).pendingActionApproval).toBeNull();
+  });
+
+  it("a decision for a different step leaves the pending one alone", () => {
+    ingestEnvelope(env(1, requested));
+    ingestEnvelope(
+      env(2, {
+        type: "action_approval_decided",
+        step: 1,
+        action: "zastosuj_patch",
+        decision: "deny",
+        principal: "alice",
+        branch: null,
+      })
+    );
+    expect(axisFor(RUN).pendingActionApproval?.step).toBe(2);
+  });
+
+  it("replay folds request + decision in append order", () => {
+    ingestReplay(RUN, { task: "t", policy: "p" }, [
+      { kind: "action_approval_requested", step: 0, action: "w", arguments: {}, requested_at: 1 },
+    ]);
+    expect(axisFor(RUN).pendingActionApproval?.action).toBe("w");
+    ingestReplay(RUN, { task: "t", policy: "p" }, [
+      { kind: "action_approval_decided", step: 0, action: "w", decision: "deny", principal: "x" },
+    ]);
+    expect(axisFor(RUN).pendingActionApproval).toBeNull();
+  });
+});

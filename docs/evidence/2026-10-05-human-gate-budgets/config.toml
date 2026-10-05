@@ -1,0 +1,28 @@
+[server]
+bind = "127.0.0.1:7595"
+
+[policy]
+engine = "local:scripted-stub"
+base_url = "http://127.0.0.1:18095"
+
+[kernel]
+max_steps = 4
+reflection = false
+
+[storage]
+backend = "sqlite"
+path = "/tmp/tmp.nwO2z1Dvjx/kelter.db"
+
+[tools]
+workspace = "/tmp/tmp.nwO2z1Dvjx/work"
+bundled_tools = true
+extension_dirs = []
+
+[approval]
+ask_timeout_secs = 600
+[approval.actions]
+append_ledger = "ask"
+write_report = "deny"
+
+[budget]
+prompt_overhead_tokens = 0

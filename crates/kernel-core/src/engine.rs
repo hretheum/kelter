@@ -14,6 +14,8 @@ use tracing::Instrument;
 use uuid::Uuid;
 
 use crate::action::{ActionSchema, ActionSpec, ValidatedAction};
+use crate::action_gate::{ActionApprovalDecision, ActionGateConfig, ActionPolicy};
+use crate::budget::{BudgetConfig, BudgetLimits, BudgetStop, RunBudget};
 use crate::contract::{ContractReport, SuccessContract, Verification};
 use crate::delegation_gate::{AgentDelegationDecision, DelegationDecisionOutcome, DelegationGate};
 use crate::journal::{
@@ -389,6 +391,12 @@ pub enum RunStatus {
     /// asking a follow-up. `unfinished_runs` INCLUDES it — a restart
     /// re-surfaces the input request, never orphans it.
     AwaitingDelegationInput,
+    /// Non-terminal, PAUSED (ADR 0038): a proposal of a mutating action hit
+    /// an `ask` policy (or a plan `review` node is configured for a human
+    /// verdict), and the run waits for a human's allow/deny. Nothing has
+    /// executed: no `Decision`/`Intent` exists for the proposal yet.
+    /// `unfinished_runs` INCLUDES it — a restart re-surfaces the request.
+    AwaitingActionApproval,
 }
 
 /// One executed step: which action ran, with what arguments, and how it went.
@@ -486,6 +494,27 @@ pub struct Run {
     /// confirmation endpoint; journaled with the principal.
     #[serde(default)]
     pub confirmation: Option<RunConfirmation>,
+    /// The pending action approval this run is paused on, when `status ==
+    /// AwaitingActionApproval` (ADR 0038). `None` otherwise.
+    #[serde(default)]
+    pub pending_action_approval: Option<PendingActionApproval>,
+    /// The authenticated principal that created this run, when it came
+    /// through the API (ADR 0039 — the daily budget is per principal).
+    /// `None` for runs created otherwise and for runs from before ADR 0039.
+    #[serde(default)]
+    pub principal: Option<String>,
+    /// The run's effective budget (ADR 0039), fixed at creation: `[budget]`
+    /// tightened by the caller's override. `None` = unlimited.
+    #[serde(default)]
+    pub budget: Option<RunBudget>,
+    /// Set when a budget stopped the run (ADR 0039): which limit, what was
+    /// used, what the refused call would have needed. The run is `failed`.
+    #[serde(default)]
+    pub budget_stop: Option<BudgetStop>,
+    /// Seconds this run spent paused on human decisions (ADR 0039), excluded
+    /// from its wall-clock budget.
+    #[serde(default)]
+    pub paused_secs: u64,
 }
 
 /// A human's confirmation that an unverified `completed` run really did its
@@ -569,6 +598,39 @@ pub struct PendingDelegationInput {
     /// The remote's follow-up question / what it needs, surfaced to the human.
     pub prompt: String,
     pub requested_at: u64,
+}
+
+/// A durable snapshot of one pending action approval (ADR 0038), carried on
+/// the run record so the resume path and any client can render the request
+/// without re-reading the journal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingActionApproval {
+    pub step: u32,
+    /// The mutating action proposed, or `review_verdict` for a plan review
+    /// node decided by a human.
+    pub action: String,
+    /// The proposal's arguments, as the model sent them (for a review node:
+    /// the upstream node ids and their outputs, bounded).
+    pub arguments: serde_json::Value,
+    /// The plan node id, in plan mode.
+    #[serde(default)]
+    pub branch: Option<String>,
+    pub requested_at: u64,
+    /// When the timeout sweeper will deny it (`None`: no timeout).
+    #[serde(default)]
+    pub expires_at: Option<u64>,
+}
+
+/// Creation-time options for a run (ADR 0037/0038/0039). `Default` is a
+/// plain run: daemon step budget, no contract, the configured budget, no
+/// principal.
+#[derive(Debug, Clone, Default)]
+pub struct RunOptions {
+    pub max_steps: Option<u32>,
+    pub success_contract: Option<SuccessContract>,
+    /// The caller's per-run budget override, tightened against `[budget]`.
+    pub budget: Option<BudgetLimits>,
+    pub principal: Option<String>,
 }
 
 /// Accounting for one remote agent within a run.
@@ -715,6 +777,36 @@ pub enum RunEvent {
         step: u32,
         agent: String,
         principal: String,
+        branch: Option<String>,
+    },
+    /// A proposal of a mutating action hit an `ask` policy, or a plan review
+    /// node waits for a human verdict (ADR 0038) — the run has paused.
+    /// `expires_at` is when silence becomes a deny.
+    ActionApprovalRequested {
+        step: u32,
+        action: String,
+        arguments: serde_json::Value,
+        branch: Option<String>,
+        expires_at: Option<u64>,
+    },
+    /// A pending action approval was resolved — emitted by
+    /// `decide_action_approval` itself, so a client sees it land at once.
+    ActionApprovalDecided {
+        step: u32,
+        action: String,
+        decision: ActionApprovalDecision,
+        principal: String,
+        branch: Option<String>,
+    },
+    /// A budget stopped the run before a model call or action that would
+    /// have crossed it (ADR 0039). Followed by `failed`.
+    BudgetExceeded {
+        step: u32,
+        limit: crate::budget::BudgetLimitKind,
+        max: f64,
+        used: f64,
+        requested: f64,
+        checkpoint: crate::budget::BudgetCheckpoint,
         branch: Option<String>,
     },
     /// Intermediate progress streamed from a running remote delegation (ADR
@@ -945,6 +1037,11 @@ pub struct Kernel {
     /// → every P2-admitted delegation is authorized silently (no trust
     /// gating) — kernel-core stays a2a-agnostic, this is only a seam.
     delegation_gate: Option<Arc<dyn DelegationGate>>,
+    /// The operator's allow/ask/deny policy on mutating actions (ADR 0038).
+    /// Default: inert (everything allowed).
+    action_gate: ActionGateConfig,
+    /// Cost ceilings (ADR 0039). Default: inert (no limits).
+    budget: BudgetConfig,
     events: broadcast::Sender<RunEventEnvelope>,
     config: KernelConfig,
 }
@@ -989,7 +1086,8 @@ fn resume_cause(journal: &[JournalEntry]) -> ResumeCause {
     let last = journal.iter().rev().find(|e| !e.is_informational());
     match last {
         Some(JournalEntry::SkillActivationDecided { .. })
-        | Some(JournalEntry::AgentDelegationDecided { .. }) => ResumeCause::PauseResolved,
+        | Some(JournalEntry::AgentDelegationDecided { .. })
+        | Some(JournalEntry::ActionApprovalDecided { .. }) => ResumeCause::PauseResolved,
         Some(JournalEntry::Note { key, .. }) if key == A2A_CONTINUATION_INPUT_NOTE => {
             ResumeCause::PauseResolved
         }
@@ -1093,6 +1191,50 @@ fn still_awaiting_delegation_decision(journal: &[JournalEntry]) -> Option<Pendin
     pending
 }
 
+/// The most recent `ActionApprovalRequested` with no later matching
+/// `ActionApprovalDecided` (same step and action) — an action-approval pause
+/// the run has not been released from (ADR 0038). Mirrors
+/// `still_awaiting_delegation_decision`.
+fn still_awaiting_action_approval(
+    journal: &[JournalEntry],
+    timeout_secs: u64,
+) -> Option<PendingActionApproval> {
+    let mut pending: Option<PendingActionApproval> = None;
+    for entry in journal {
+        match entry {
+            JournalEntry::ActionApprovalRequested {
+                step,
+                action,
+                arguments,
+                branch,
+                requested_at,
+            } => {
+                pending = Some(PendingActionApproval {
+                    step: *step,
+                    action: action.clone(),
+                    arguments: arguments.clone(),
+                    branch: branch.clone(),
+                    requested_at: *requested_at,
+                    expires_at: approval_expiry(*requested_at, timeout_secs),
+                });
+            }
+            JournalEntry::ActionApprovalDecided { step, action, .. }
+                if pending
+                    .as_ref()
+                    .is_some_and(|p| p.step == *step && &p.action == action) =>
+            {
+                pending = None;
+            }
+            _ => {}
+        }
+    }
+    pending
+}
+
+fn approval_expiry(requested_at: u64, timeout_secs: u64) -> Option<u64> {
+    (timeout_secs > 0).then(|| requested_at.saturating_add(timeout_secs))
+}
+
 /// The most recent `AgentDelegationInputRequested` in the journal that the
 /// human has not yet answered — resolution is a `Note` keyed
 /// `A2A_CONTINUATION_INPUT_NOTE` at the SAME step (ADR 0026). Mirrors
@@ -1146,9 +1288,25 @@ impl Kernel {
             learned: None,
             skills: None,
             delegation_gate: None,
+            action_gate: ActionGateConfig::default(),
+            budget: BudgetConfig::default(),
             events,
             config,
         }
+    }
+
+    /// Attach the operator's action policy (ADR 0038). Builder-style so
+    /// `KernelConfig` — and every caller that builds one — stays unchanged;
+    /// absent → every action is allowed, as before.
+    pub fn with_action_gate(mut self, gate: ActionGateConfig) -> Self {
+        self.action_gate = gate;
+        self
+    }
+
+    /// Attach cost budgets (ADR 0039). Absent → no limits, no checks.
+    pub fn with_budget(mut self, budget: BudgetConfig) -> Self {
+        self.budget = budget;
+        self
     }
 
     /// Attach a learned-fact store, enabling governed self-learning (Phase 10).
@@ -1410,6 +1568,41 @@ impl Kernel {
         max_steps: Option<u32>,
         contract: Option<SuccessContract>,
     ) -> Result<Uuid, KernelError> {
+        self.create_run_with_options(
+            task,
+            RunOptions {
+                max_steps,
+                success_contract: contract,
+                ..RunOptions::default()
+            },
+        )
+        .await
+    }
+
+    /// Create a pending run with every creation-time option (ADR 0037/0039).
+    /// The contract is validated as in [`Self::create_run_with_contract`];
+    /// a budget override that is not positive or exceeds a configured
+    /// `[budget]` ceiling is refused with [`KernelError::InvalidRequest`] —
+    /// a caller may tighten the operator's limits, never loosen them.
+    pub async fn create_run_with_options(
+        &self,
+        task: String,
+        options: RunOptions,
+    ) -> Result<Uuid, KernelError> {
+        let RunOptions {
+            max_steps,
+            success_contract: contract,
+            budget,
+            principal,
+        } = options;
+        let limits = match &budget {
+            Some(over) => self
+                .budget
+                .per_run
+                .with_override(over)
+                .map_err(KernelError::InvalidRequest)?,
+            None => self.budget.per_run,
+        };
         if let Some(c) = &contract {
             let known: Vec<String> = self
                 .current_action_schema()
@@ -1420,7 +1613,7 @@ impl Kernel {
                 .collect();
             crate::contract::validate(c, &known).map_err(KernelError::InvalidRequest)?;
         }
-        self.create_run_inner(task, 0, Vec::new(), max_steps, contract)
+        self.create_run_inner(task, 0, Vec::new(), max_steps, contract, limits, principal)
             .await
     }
 
@@ -1431,10 +1624,22 @@ impl Kernel {
         a2a_ancestry: Vec<String>,
         max_steps: Option<u32>,
     ) -> Result<Uuid, KernelError> {
-        self.create_run_inner(task, a2a_depth, a2a_ancestry, max_steps, None)
-            .await
+        // Runs that do not come through `create_run_with_options` (A2A
+        // inbound, CLI, tests) still get the operator's per-run limits —
+        // `[budget]` bounds every run, not only API ones.
+        self.create_run_inner(
+            task,
+            a2a_depth,
+            a2a_ancestry,
+            max_steps,
+            None,
+            self.budget.per_run,
+            None,
+        )
+        .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn create_run_inner(
         &self,
         task: String,
@@ -1442,7 +1647,29 @@ impl Kernel {
         a2a_ancestry: Vec<String>,
         max_steps: Option<u32>,
         success_contract: Option<SuccessContract>,
+        limits: BudgetLimits,
+        principal: Option<String>,
     ) -> Result<Uuid, KernelError> {
+        let policy = self.oracle.describe();
+        // A model the price table does not know cannot be held to a dollar
+        // limit (ADR 0039): recorded on the run, warned about, never guessed.
+        let budget = (!limits.is_empty()).then(|| RunBudget {
+            limits,
+            usd_enforced: self
+                .config
+                .pricing
+                .cost(&policy, &Usage::default())
+                .is_some(),
+        });
+        if let Some(b) = &budget {
+            if b.limits.max_usd.is_some() && !b.usd_enforced {
+                tracing::warn!(
+                    model = %policy,
+                    "budget: max_usd is set but the model has no price — the dollar limit is \
+                     NOT enforced for this run (tokens and wall time still are)"
+                );
+            }
+        }
         let run = Run {
             id: Uuid::new_v4(),
             task: task.clone(),
@@ -1450,7 +1677,7 @@ impl Kernel {
             steps: Vec::new(),
             output: None,
             error: None,
-            policy: self.oracle.describe(),
+            policy,
             created_at: now_secs(),
             usage: Usage::default(),
             agent_usage: std::collections::HashMap::new(),
@@ -1467,6 +1694,11 @@ impl Kernel {
             verification: None,
             contract_report: None,
             confirmation: None,
+            pending_action_approval: None,
+            principal,
+            budget,
+            budget_stop: None,
+            paused_secs: 0,
         };
         let id = run.id;
         self.store.put(run).await?;
@@ -1555,6 +1787,7 @@ impl Kernel {
                 ))
             })?;
         let step = pending.step;
+        let pending = pending.clone();
         self.store
             .append_journal(
                 run_id,
@@ -1566,6 +1799,7 @@ impl Kernel {
                 },
             )
             .await?;
+        run.paused_secs += now_secs().saturating_sub(pending.requested_at);
         run.pending_skill_activation = None;
         run.status = RunStatus::Running;
         self.store.put(run.clone()).await?;
@@ -1606,6 +1840,7 @@ impl Kernel {
                 ))
             })?;
         let step = pending.step;
+        let requested_at = pending.requested_at;
         self.store
             .append_journal(
                 run_id,
@@ -1617,6 +1852,7 @@ impl Kernel {
                 },
             )
             .await?;
+        run.paused_secs += now_secs().saturating_sub(requested_at);
         run.pending_delegation = None;
         run.status = RunStatus::Running;
         self.store.put(run.clone()).await?;
@@ -1655,6 +1891,7 @@ impl Kernel {
         })?;
         let step = pending.step;
         let agent = pending.agent.clone();
+        let requested_at = pending.requested_at;
         self.store
             .append_journal(
                 run_id,
@@ -1665,6 +1902,7 @@ impl Kernel {
                 },
             )
             .await?;
+        run.paused_secs += now_secs().saturating_sub(requested_at);
         run.pending_delegation_input = None;
         run.status = RunStatus::Running;
         self.store.put(run.clone()).await?;
@@ -1680,6 +1918,230 @@ impl Kernel {
         );
         tracing::info!(%run_id, %principal, "delegation input provided");
         Ok(run)
+    }
+
+    /// Resolve a pending action approval (ADR 0038) with a human's decision —
+    /// or the timeout sweeper's deny (principal `"system:timeout"`). Journal
+    /// and state write only, like `decide_delegation`: the caller re-invokes
+    /// `execute_run` to resume. `action` must name the pending action, so a
+    /// stale client cannot approve a different proposal than it was shown.
+    ///
+    /// There is no model path to this: approval is not an action, it is in
+    /// no action schema, and only the authenticated API and the sweeper
+    /// call it.
+    pub async fn decide_action_approval(
+        &self,
+        run_id: Uuid,
+        action: &str,
+        decision: ActionApprovalDecision,
+        principal: &str,
+    ) -> Result<Run, KernelError> {
+        let mut run = self.store.get(run_id).await?;
+        let pending = run
+            .pending_action_approval
+            .clone()
+            .filter(|p| p.action == action && run.status == RunStatus::AwaitingActionApproval)
+            .ok_or_else(|| {
+                KernelError::InvalidState(format!(
+                    "run {run_id} has no pending approval request for '{action}'"
+                ))
+            })?;
+        self.store
+            .append_journal(
+                run_id,
+                JournalEntry::ActionApprovalDecided {
+                    step: pending.step,
+                    action: action.to_string(),
+                    decision,
+                    principal: principal.to_string(),
+                    branch: pending.branch.clone(),
+                },
+            )
+            .await?;
+        run.paused_secs += now_secs().saturating_sub(pending.requested_at);
+        run.pending_action_approval = None;
+        run.status = RunStatus::Running;
+        self.store.put(run.clone()).await?;
+        self.emit(
+            run_id,
+            0,
+            RunEvent::ActionApprovalDecided {
+                step: pending.step,
+                action: action.to_string(),
+                decision,
+                principal: principal.to_string(),
+                branch: pending.branch,
+            },
+        );
+        tracing::info!(%run_id, %action, ?decision, %principal, "action approval decided");
+        Ok(run)
+    }
+
+    /// Journal and announce a pause for an action approval (ADR 0038), both
+    /// modes. The run record is persisted with the pending request; the
+    /// caller returns right after.
+    async fn pause_for_approval(
+        &self,
+        run: &mut Run,
+        seq: u64,
+        pending: PendingActionApproval,
+    ) -> Result<(), KernelError> {
+        self.store
+            .append_journal(
+                run.id,
+                JournalEntry::ActionApprovalRequested {
+                    step: pending.step,
+                    action: pending.action.clone(),
+                    arguments: pending.arguments.clone(),
+                    branch: pending.branch.clone(),
+                    requested_at: pending.requested_at,
+                },
+            )
+            .await?;
+        run.status = RunStatus::AwaitingActionApproval;
+        run.pending_action_approval = Some(pending.clone());
+        self.store.put(run.clone()).await?;
+        self.emit(
+            run.id,
+            seq,
+            RunEvent::ActionApprovalRequested {
+                step: pending.step,
+                action: pending.action,
+                arguments: pending.arguments,
+                branch: pending.branch,
+                expires_at: pending.expires_at,
+            },
+        );
+        tracing::info!(run_id = %run.id, step = pending.step, "paused for an action approval");
+        Ok(())
+    }
+
+    /// Worst-case usage of one model call (ADR 0039): the adapter's bound
+    /// plus the configured overhead, with the configured completion fallback
+    /// when the adapter does not know its own `max_tokens`.
+    fn call_bound(&self, context: &PolicyContext, schema: &ActionSchema) -> Usage {
+        let b = self.oracle.call_bound(context, schema);
+        Usage {
+            prompt_tokens: b
+                .prompt_tokens
+                .saturating_add(self.budget.prompt_overhead_tokens),
+            completion_tokens: b
+                .completion_tokens
+                .unwrap_or(self.budget.fallback_completion_tokens),
+            calls: 1,
+        }
+    }
+
+    /// Dollars the principal's OTHER runs created in the current UTC day have
+    /// spent (ADR 0039): `cost_usd` for finished runs, the price of the
+    /// recorded usage for in-flight ones. Derived from the run records — no
+    /// separate counter, so nothing can drift from what the runs report.
+    async fn principal_spend_today(&self, principal: &str, exclude: Uuid) -> f64 {
+        let day = crate::budget::utc_day_start(now_secs());
+        let Ok(runs) = self.store.list().await else {
+            return 0.0;
+        };
+        runs.iter()
+            .filter(|r| {
+                r.id != exclude && r.created_at >= day && r.principal.as_deref() == Some(principal)
+            })
+            .filter_map(|r| {
+                r.cost_usd
+                    .or_else(|| self.config.pricing.cost(&r.policy, &r.usage))
+            })
+            .sum()
+    }
+
+    /// The budget check (ADR 0039), run BEFORE a model call (`next_call`
+    /// set) or an action (`None`). `reserved` is usage already committed to
+    /// calls in flight. `None` = within budget; nothing to check at all for a
+    /// run without a budget when no daily ceiling is configured.
+    async fn budget_check(
+        &self,
+        run: &Run,
+        next_call: Option<Usage>,
+        reserved: Usage,
+        step: u32,
+        branch: Option<String>,
+    ) -> Option<BudgetStop> {
+        let daily_limit = self
+            .budget
+            .daily_usd_per_principal
+            .zip(run.principal.as_deref());
+        if run.budget.is_none() && daily_limit.is_none() {
+            return None;
+        }
+        let daily = match daily_limit {
+            Some((max, principal)) => {
+                Some((max, self.principal_spend_today(principal, run.id).await))
+            }
+            None => None,
+        };
+        let mut used = run.usage;
+        used.add(&reserved);
+        crate::budget::check(&crate::budget::BudgetProbe {
+            budget: run.budget.as_ref(),
+            pricing: &self.config.pricing,
+            model: &run.policy,
+            used,
+            next_call,
+            elapsed_secs: now_secs()
+                .saturating_sub(run.created_at)
+                .saturating_sub(run.paused_secs),
+            daily,
+            step,
+            branch,
+        })
+    }
+
+    /// Record a budget stop (ADR 0039): a journaled refusal (source
+    /// `budget`), the live `budget_exceeded` event, and the structured stop
+    /// on the run record — persisted BEFORE the caller finalizes the run as
+    /// `failed`, so a crash in between cannot lose it. Returns the reason.
+    async fn record_budget_stop(
+        &self,
+        run: &mut Run,
+        seq: &mut u64,
+        stop: BudgetStop,
+        subject: RejectionSubject,
+        action: Option<String>,
+        proposal_seq: Option<u64>,
+    ) -> Result<String, KernelError> {
+        let reason = stop.reason();
+        tracing::warn!(run_id = %run.id, step = stop.step, "{reason}");
+        self.reject(
+            run.id,
+            seq,
+            Rejection {
+                step: stop.step,
+                attempt: 0,
+                source: RejectionSource::Budget,
+                subject,
+                reason: reason.clone(),
+                action,
+                arguments: None,
+                branch: stop.branch.clone(),
+                proposal_seq,
+            },
+        )
+        .await;
+        self.emit(
+            run.id,
+            *seq,
+            RunEvent::BudgetExceeded {
+                step: stop.step,
+                limit: stop.limit,
+                max: stop.max,
+                used: stop.used,
+                requested: stop.requested,
+                checkpoint: stop.checkpoint,
+                branch: stop.branch.clone(),
+            },
+        );
+        *seq += 1;
+        run.budget_stop = Some(stop);
+        self.store.put(run.clone()).await?;
+        Ok(reason)
     }
 
     /// A human confirms — or revokes a confirmation of — an UNVERIFIED
@@ -2379,6 +2841,36 @@ impl Kernel {
             return Ok(run);
         }
 
+        // Still awaiting a human action approval (ADR 0038)? Re-surface, do
+        // not advance — the same early return as the three pauses above, so a
+        // restart (or a second `execute_run`) neither calls the model nor
+        // executes the waiting action.
+        if let Some(pending) =
+            still_awaiting_action_approval(&journal, self.action_gate.ask_timeout_secs)
+        {
+            tracing::info!(
+                %run_id,
+                step = pending.step,
+                action = %pending.action,
+                "resume: still awaiting a human action approval — re-surfacing"
+            );
+            self.emit(
+                run_id,
+                0,
+                RunEvent::ActionApprovalRequested {
+                    step: pending.step,
+                    action: pending.action.clone(),
+                    arguments: pending.arguments.clone(),
+                    branch: pending.branch.clone(),
+                    expires_at: pending.expires_at,
+                },
+            );
+            run.status = RunStatus::AwaitingActionApproval;
+            run.pending_action_approval = Some(pending);
+            self.store.put(run.clone()).await?;
+            return Ok(run);
+        }
+
         let resumed = has_prior_execution(run.steps.len(), &journal);
         if resumed {
             tracing::info!(
@@ -2437,7 +2929,12 @@ impl Kernel {
                         )
                     )
                 });
-                let replayed = f.decision.is_some() || allowed_skill || allowed_delegation;
+                let allowed_action = f
+                    .action_approval
+                    .as_ref()
+                    .is_some_and(|p| p.decision == Some(ActionApprovalDecision::Allow));
+                let replayed =
+                    f.decision.is_some() || allowed_skill || allowed_delegation || allowed_action;
                 (at_step, if replayed { vec![at_step] } else { Vec::new() })
             };
             self.record_resumed(run_id, &journal, at_step, replayed_steps)
@@ -2527,7 +3024,7 @@ impl Kernel {
         let step_budget = run.max_steps.unwrap_or(self.config.max_steps);
         #[allow(clippy::cast_possible_truncation)]
         let first_step = run.steps.len() as u32;
-        for step_index in first_step..step_budget {
+        'steps: for step_index in first_step..step_budget {
             // Journal state for this step (only ever non-empty for the first
             // iteration after a resume).
             let mut folded = fold_step(&journal, step_index);
@@ -2653,6 +3150,41 @@ impl Kernel {
                 }
             }
 
+            // A decided action approval (ADR 0038): mirrors the delegation block
+            // above. Allow journals the model's ORIGINAL proposal as this
+            // step's Decision (once — a resume after that finds the Decision
+            // and skips this), so the replay branch below dispatches it through
+            // the usual Intent → Receipt boundary; Deny seeds `last_error` for a
+            // fresh proposal. An undecided one never reaches here (the
+            // top-of-function check re-surfaced it).
+            if let Some(approval) = folded.action_approval.clone() {
+                match approval.decision {
+                    None => { /* defensive no-op: the top-of-fn check already handles this */ }
+                    Some(ActionApprovalDecision::Deny) => {
+                        last_error = Some(format!(
+                            "a human declined '{}' with these arguments for this run — pick a \
+                             different approach.",
+                            approval.action
+                        ));
+                    }
+                    Some(ActionApprovalDecision::Allow) if folded.decision.is_none() => {
+                        self.store
+                            .append_journal(
+                                run_id,
+                                JournalEntry::Decision {
+                                    step: step_index,
+                                    action: approval.action.clone(),
+                                    arguments: approval.arguments.clone(),
+                                    usage: None,
+                                },
+                            )
+                            .await?;
+                        folded.decision = Some((approval.action, approval.arguments));
+                    }
+                    Some(ActionApprovalDecision::Allow) => {}
+                }
+            }
+
             // 1. Build the action space: tools + the kernel-owned finish action.
             let mut schema = self.tools.action_schema(latitude).await?;
             // A2 (duplicate-rule refinement): a MUTATING action — one whose
@@ -2765,6 +3297,31 @@ impl Kernel {
                         }),
                         active_skills: run.active_skills.clone(),
                     };
+                    // Budget (ADR 0039): the call's worst case must fit BEFORE it
+                    // is made.
+                    if let Some(stop) = self
+                        .budget_check(
+                            &run,
+                            Some(self.call_bound(&context, &schema)),
+                            Usage::default(),
+                            step_index,
+                            None,
+                        )
+                        .await
+                    {
+                        let reason = self
+                            .record_budget_stop(
+                                &mut run,
+                                &mut seq,
+                                stop,
+                                RejectionSubject::None,
+                                None,
+                                None,
+                            )
+                            .await?;
+                        terminal = Some((RunStatus::Failed, None, Some(reason)));
+                        break 'steps;
+                    }
                     let model_span = tracing::info_span!(
                         parent: &step_span,
                         "kelter.model_call",
@@ -2802,6 +3359,12 @@ impl Kernel {
                         }
                     };
                     let usage = proposal.usage;
+                    // Every model call counts (ADR 0039), refused proposals and
+                    // paused ones included — a budget a looping model could
+                    // burn through uncounted would not be a budget.
+                    if let Some(u) = usage {
+                        run.usage.add(&u);
+                    }
                     let proposed = proposal.action;
                     // Kept for the journal (ADR 0036): validation consumes
                     // the proposal, and a refused one is journaled nowhere
@@ -3129,12 +3692,64 @@ impl Kernel {
                                 }
                             }
 
+                            // Action gate (ADR 0038): a MUTATING proposal —
+                            // the ADR 0031 criterion, read from the full
+                            // schema — is held to the operator's policy BEFORE
+                            // it becomes a Decision. Deny refuses it like any
+                            // kernel refusal (journaled, the model is told);
+                            // Ask pauses durably with the proposal journaled
+                            // verbatim and nothing executed. Not on the replay
+                            // path: a journaled Decision was already allowed.
+                            if mutating_actions.contains(v.action()) {
+                                match self.action_gate.policy_for(v.action(), true) {
+                                    ActionPolicy::Allow => {}
+                                    ActionPolicy::Deny => {
+                                        let reason = format!(
+                                            "the operator's action policy denies '{}' — it \
+                                             changes state and is not permitted in this \
+                                             deployment; pick a different approach",
+                                            v.action()
+                                        );
+                                        self.reject(
+                                            run_id,
+                                            &mut seq,
+                                            refused(
+                                                RejectionSource::ActionPolicy,
+                                                v.action(),
+                                                v.arguments(),
+                                                reason.clone(),
+                                            ),
+                                        )
+                                        .await;
+                                        last_error = Some(reason);
+                                        continue;
+                                    }
+                                    ActionPolicy::Ask => {
+                                        let requested_at = now_secs();
+                                        self.pause_for_approval(
+                                            &mut run,
+                                            seq,
+                                            PendingActionApproval {
+                                                step: step_index,
+                                                action: v.action().to_string(),
+                                                arguments: v.arguments().clone(),
+                                                branch: None,
+                                                requested_at,
+                                                expires_at: approval_expiry(
+                                                    requested_at,
+                                                    self.action_gate.ask_timeout_secs,
+                                                ),
+                                            },
+                                        )
+                                        .await?;
+                                        return Ok(run);
+                                    }
+                                }
+                            }
+
                             // Memoization point: the accepted decision (and
                             // its cost) is journaled BEFORE anything acts on
                             // it, so replay never needs the model.
-                            if let Some(u) = usage {
-                                run.usage.add(&u);
-                            }
                             self.store
                                 .append_journal(
                                     run_id,
@@ -3279,6 +3894,30 @@ impl Kernel {
                 );
                 seq += 1;
                 continue;
+            }
+
+            // Budget before the action (ADR 0039) — wall time, and usage that
+            // already reached a limit. Skipped when the step's effect is
+            // already in flight (dangling intent) or done (receipt): finishing
+            // an action that may have happened beats leaving it ambiguous.
+            if folded.intent.is_none() && folded.receipt.is_none() {
+                if let Some(stop) = self
+                    .budget_check(&run, None, Usage::default(), step_index, None)
+                    .await
+                {
+                    let reason = self
+                        .record_budget_stop(
+                            &mut run,
+                            &mut seq,
+                            stop,
+                            RejectionSubject::Decision,
+                            Some(validated.action().to_string()),
+                            decision_seq,
+                        )
+                        .await?;
+                    terminal = Some((RunStatus::Failed, None, Some(reason)));
+                    break;
+                }
             }
 
             // 4. Execute through the tool substrate, inside the durable
@@ -3965,6 +4604,32 @@ impl Kernel {
                             guidance: Some(guidance),
                             active_skills: run.active_skills.clone(),
                         };
+                        // Budget (ADR 0039): the plan proposal's worst case must
+                        // fit before it is asked for.
+                        if let Some(stop) = self
+                            .budget_check(
+                                &run,
+                                Some(self.call_bound(&context, &propose_schema)),
+                                Usage::default(),
+                                step_base,
+                                None,
+                            )
+                            .await
+                        {
+                            let reason = self
+                                .record_budget_stop(
+                                    &mut run,
+                                    &mut seq,
+                                    stop,
+                                    RejectionSubject::None,
+                                    None,
+                                    None,
+                                )
+                                .await?;
+                            return self
+                                .finalize_run(run, RunStatus::Failed, None, Some(reason), seq)
+                                .await;
+                        }
                         let proposal = self
                             .oracle
                             .propose(&context, &propose_schema)
@@ -4187,13 +4852,26 @@ impl Kernel {
                 requested_at: u64,
             }
             let mut pending_ask: Option<PlanAsk> = None;
+            // The action-approval counterpart (ADR 0038): a mutating tool node
+            // under `ask`, or a review node decided by a human. Same
+            // drain-then-pause discipline as `pending_ask`, one at a time.
+            let mut pending_action_ask: Option<PendingActionApproval> = None;
+            // Budget (ADR 0039): tokens reserved for review calls already
+            // admitted but not yet returned, so concurrent admission cannot
+            // overcommit; and whether a budget stopped this generation (no
+            // re-plan then — the re-plan would be a model call the budget
+            // just refused).
+            let mut reserved = Usage::default();
+            let mut review_reservations: std::collections::HashMap<usize, Usage> =
+                std::collections::HashMap::new();
+            let mut budget_stopped = false;
 
             loop {
                 for (node_index, node) in &nodes {
                     if completed.contains(node_index) || dispatched.contains(node_index) {
                         continue;
                     }
-                    if failure.is_some() || pending_ask.is_some() {
+                    if failure.is_some() || pending_ask.is_some() || pending_action_ask.is_some() {
                         // No NEW node is admitted once the plan has failed
                         // (fail-fast, ADR 0010) OR a node is awaiting human
                         // delegation authorization (drain-then-pause, ADR 0025) —
@@ -4529,12 +5207,197 @@ impl Kernel {
                         }
                     }
 
-                    dispatched.insert(*node_index);
                     let deps_context: Vec<serde_json::Value> = node
                         .deps
                         .iter()
                         .filter_map(|d| node_outputs.get(d).cloned())
                         .collect();
+
+                    // Action gate (ADR 0038): a MUTATING tool node, and a review
+                    // node when `review_verdict = "ask"`. A recorded decision is
+                    // consumed first (replay is law — the policy is not
+                    // re-consulted); otherwise the policy decides. Skipped for a
+                    // node with a dangling Intent: it passed this gate before
+                    // the crash. The approval is read from the full journal, not
+                    // from `folded`, so a retry of an approved node (clean
+                    // per-step view) is not asked again.
+                    let is_review = node.node_type == crate::plan::NodeType::Review;
+                    let human_review = is_review && self.action_gate.review_by_human();
+                    let gated_tool = node.node_type == crate::plan::NodeType::Tool
+                        && node.action.as_deref().is_some_and(|a| {
+                            schema
+                                .spec(a)
+                                .is_some_and(ActionSpec::supports_idempotency_key)
+                        });
+                    if (gated_tool || human_review) && folded.intent.is_none() {
+                        let action_name = if is_review {
+                            crate::plan::REVIEW_ACTION.to_string()
+                        } else {
+                            node.action.clone().unwrap_or_default()
+                        };
+                        let approval = fold_step(&journal, step).action_approval;
+                        let verdict = approval.as_ref().map(|a| a.decision);
+                        let reviewer = approval
+                            .as_ref()
+                            .and_then(|a| a.principal.clone())
+                            .unwrap_or_default();
+                        let policy = match verdict {
+                            Some(Some(_)) => None,
+                            Some(None) => Some(ActionPolicy::Ask),
+                            None if human_review => Some(ActionPolicy::Ask),
+                            None => Some(self.action_gate.policy_for(&action_name, true)),
+                        };
+                        // A human verdict on a review node IS the node's result:
+                        // journaled as its receipt, exactly like a model verdict.
+                        if let (true, Some(Some(decision))) = (human_review, verdict) {
+                            let approve = decision == ActionApprovalDecision::Allow;
+                            let result = serde_json::json!({
+                                "approve": approve,
+                                "reason": format!(
+                                    "{} by a human reviewer",
+                                    if approve { "approved" } else { "rejected" }
+                                ),
+                                "reviewer": reviewer,
+                            });
+                            self.store
+                                .append_journal(
+                                    run_id,
+                                    JournalEntry::Receipt {
+                                        step,
+                                        ok: approve,
+                                        result: result.clone(),
+                                    },
+                                )
+                                .await?;
+                            node_outputs.insert(node.id.clone(), result.clone());
+                            self.record_node_step(&mut run, step, node, result.clone(), approve)
+                                .await?;
+                            self.emit(
+                                run_id,
+                                seq,
+                                RunEvent::Executed {
+                                    step,
+                                    action: outcome::REVIEW_STEP_ACTION.to_string(),
+                                    ok: approve,
+                                    result,
+                                    branch: Some(node.id.clone()),
+                                },
+                            );
+                            seq += 1;
+                            completed.insert(*node_index);
+                            dispatched.insert(*node_index);
+                            if !approve {
+                                failure = Some(format!(
+                                    "plan node '{}' review rejected by a human",
+                                    node.id
+                                ));
+                            }
+                            continue;
+                        }
+                        let refusal = match (verdict, policy) {
+                            (Some(Some(ActionApprovalDecision::Deny)), _) => Some((
+                                RejectionSource::OperatorDenied,
+                                format!(
+                                    "a human declined plan node '{}' ({action_name}) for this run",
+                                    node.id
+                                ),
+                            )),
+                            (_, Some(ActionPolicy::Deny)) => Some((
+                                RejectionSource::ActionPolicy,
+                                format!(
+                                    "the operator's action policy denies '{action_name}' (plan \
+                                     node '{}') — it changes state and is not permitted in this \
+                                     deployment",
+                                    node.id
+                                ),
+                            )),
+                            _ => None,
+                        };
+                        if let Some((source, reason)) = refusal {
+                            self.reject(
+                                run_id,
+                                &mut seq,
+                                node_refusal(step, 0, source, node, reason.clone()),
+                            )
+                            .await;
+                            let result = serde_json::json!({ "error": reason });
+                            self.record_node_step(&mut run, step, node, result.clone(), false)
+                                .await?;
+                            node_outputs.insert(node.id.clone(), result);
+                            completed.insert(*node_index);
+                            dispatched.insert(*node_index);
+                            failure = Some(format!(
+                                "plan node '{}' refused by the action policy",
+                                node.id
+                            ));
+                            continue;
+                        }
+                        if policy == Some(ActionPolicy::Ask) {
+                            let (arguments, requested_at) = match &approval {
+                                // Defensive re-pause on an undecided request.
+                                Some(a) => (a.arguments.clone(), a.requested_at),
+                                None if is_review => (
+                                    serde_json::json!({
+                                        "node": node.id,
+                                        "deps": node.deps,
+                                        "upstream": crate::journal::bounded_rejected_arguments(
+                                            &serde_json::json!(deps_context)
+                                        ),
+                                    }),
+                                    now_secs(),
+                                ),
+                                None => (node.arguments.clone(), now_secs()),
+                            };
+                            pending_action_ask = Some(PendingActionApproval {
+                                step,
+                                action: action_name,
+                                arguments,
+                                branch: Some(node.id.clone()),
+                                requested_at,
+                                expires_at: approval_expiry(
+                                    requested_at,
+                                    self.action_gate.ask_timeout_secs,
+                                ),
+                            });
+                            continue;
+                        }
+                    }
+
+                    // Budget before dispatch (ADR 0039): a review node is a model
+                    // call — its worst case is reserved against concurrent
+                    // siblings; a tool/a2a node is an action. Skipped for a
+                    // dangling Intent (finish what may already have happened).
+                    if folded.intent.is_none() {
+                        let review_bound = is_review.then(|| {
+                            let (ctx, rs) =
+                                review_call(&schema, &deps_context, &run.active_skills, latitude);
+                            self.call_bound(&ctx, &rs)
+                        });
+                        if let Some(stop) = self
+                            .budget_check(&run, review_bound, reserved, step, Some(node.id.clone()))
+                            .await
+                        {
+                            let reason = self
+                                .record_budget_stop(
+                                    &mut run,
+                                    &mut seq,
+                                    stop,
+                                    RejectionSubject::PlanNode,
+                                    node.action.clone(),
+                                    Some(plan_seq),
+                                )
+                                .await?;
+                            failure = Some(reason);
+                            budget_stopped = true;
+                            continue;
+                        }
+                        if let Some(b) = review_bound {
+                            reserved.add(&b);
+                            review_reservations.insert(*node_index, b);
+                        }
+                    }
+
+                    dispatched.insert(*node_index);
                     let handle = tokio::spawn(dispatch_plan_node_execution(
                         run_id,
                         step,
@@ -4579,6 +5442,13 @@ impl Kernel {
                 // base.
                 let node_index = (outcome.node_index - step_base) as usize;
                 let node = validated_plan.node(node_index);
+                if let Some(b) = review_reservations.remove(&node_index) {
+                    reserved.prompt_tokens = reserved.prompt_tokens.saturating_sub(b.prompt_tokens);
+                    reserved.completion_tokens = reserved
+                        .completion_tokens
+                        .saturating_sub(b.completion_tokens);
+                    reserved.calls = reserved.calls.saturating_sub(b.calls);
+                }
 
                 if let Some(u) = outcome.usage {
                     run.usage.add(&u);
@@ -4597,7 +5467,8 @@ impl Kernel {
                 // never retry: a rejection is a verdict, not a transient fault.
                 // An a2a retry re-enters the FULL admission governance (budget +
                 // trust gate) exactly like a fresh dial — the ADR 0023 rule.
-                if !outcome.ok && node.node_type != crate::plan::NodeType::Review {
+                if !outcome.ok && node.node_type != crate::plan::NodeType::Review && !budget_stopped
+                {
                     let used = node_retries.entry(node_index).or_insert(0);
                     if *used < resilience.max_node_retries {
                         *used += 1;
@@ -4675,6 +5546,10 @@ impl Kernel {
             // the ask is abandoned unjournaled (its node never ran) and the plan
             // finalizes as failed below.
             if failure.is_none() {
+                if let Some(pending) = pending_action_ask {
+                    self.pause_for_approval(&mut run, seq, pending).await?;
+                    return Ok(run);
+                }
                 if let Some(ask) = pending_ask {
                     self.store
                         .append_journal(
@@ -4755,7 +5630,7 @@ impl Kernel {
                     // fresh `propose_plan` — through the same validation floor.
                     // Budget exhausted (or resilience off) → the run fails
                     // cleanly, exactly as before ADR 0030.
-                    if replans_used < resilience.max_replans {
+                    if !budget_stopped && replans_used < resilience.max_replans {
                         replans_used += 1;
                         let this_gen_steps: Vec<&StepRecord> = run
                             .steps
@@ -4867,6 +5742,39 @@ impl Kernel {
     }
 }
 
+/// The model call a review node makes: its context and one-action schema.
+/// Shared by the dispatch tail (which makes the call) and the admission loop
+/// (which bounds it for the budget, ADR 0039) so the two can never diverge.
+fn review_call(
+    schema: &ActionSchema,
+    deps_context: &[serde_json::Value],
+    active_skills: &[String],
+    latitude: Latitude,
+) -> (PolicyContext, ActionSchema) {
+    let review_schema = ActionSchema {
+        actions: vec![schema
+            .spec(crate::plan::REVIEW_ACTION)
+            .expect("review action present")
+            .clone()],
+    };
+    let context = PolicyContext {
+        task: format!(
+            "Review the following upstream results and decide whether the work is \
+             acceptable:\n{}",
+            serde_json::to_string(deps_context).unwrap_or_default()
+        ),
+        steps: Vec::new(),
+        memory: Vec::new(),
+        last_error: None,
+        latitude,
+        guidance: Some(
+            "Call review_verdict with approve=true only if the results look correct.".into(),
+        ),
+        active_skills: active_skills.to_vec(),
+    };
+    (context, review_schema)
+}
+
 /// One plan node's outcome from the durable intent→execute→receipt tail
 /// (ADR 0022), returned to the single orchestrator (`Kernel::execute_plan`)
 /// — the only writer of `run`/`node_outputs` — which applies it via
@@ -4917,27 +5825,8 @@ async fn dispatch_plan_node_execution(
         // A review node is a kernel-owned decision. It calls the oracle
         // (memoized via the receipt) for an approve/reject verdict over its
         // upstream outputs.
-        let review_schema = ActionSchema {
-            actions: vec![schema
-                .spec(crate::plan::REVIEW_ACTION)
-                .expect("review action present")
-                .clone()],
-        };
-        let context = PolicyContext {
-            task: format!(
-                "Review the following upstream results and decide whether the work is \
-                 acceptable:\n{}",
-                serde_json::to_string(&deps_context).unwrap_or_default()
-            ),
-            steps: Vec::new(),
-            memory: Vec::new(),
-            last_error: None,
-            latitude,
-            guidance: Some(
-                "Call review_verdict with approve=true only if the results look correct.".into(),
-            ),
-            active_skills,
-        };
+        let (context, review_schema) =
+            review_call(&schema, &deps_context, &active_skills, latitude);
         let proposal = oracle
             .propose(&context, &review_schema)
             .await

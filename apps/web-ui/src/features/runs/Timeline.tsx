@@ -12,6 +12,7 @@ import { formatCost, formatElapsed, shortPolicy } from "@/lib/format";
 import { cancelRun } from "@/store/app";
 import { useAppState, useAxis } from "@/store/hooks";
 import type { Run } from "@/lib/api";
+import { ActionApprovalPrompt } from "./ActionApprovalPrompt";
 import { DelegationAuthorizationPrompt } from "./DelegationAuthorizationPrompt";
 import { DelegationInputPrompt } from "./DelegationInputPrompt";
 import { FanoutLanes } from "./FanoutLanes";
@@ -38,6 +39,14 @@ export function Timeline({ run }: { run: Run }) {
   const prevPendingSkill = useRef<string | null>(null);
   const prevPendingDelegation = useRef<string | null>(null);
   const prevPendingDelegationInput = useRef<string | null>(null);
+  const prevPendingApproval = useRef<string | null>(null);
+  // ADR 0038: the run record is authoritative for an approval pause (the
+  // decided event rides seq 0 and may be deduped away); the axis fills in
+  // while the record catches up.
+  const pendingApproval =
+    run.status === "awaiting_action_approval"
+      ? (run.pending_action_approval ?? axis.pendingActionApproval)
+      : null;
 
   // Live elapsed timer while running.
   useEffect(() => {
@@ -61,6 +70,7 @@ export function Timeline({ run }: { run: Run }) {
     axis.pendingSkillActivation,
     axis.pendingDelegation,
     axis.pendingDelegationInput,
+    pendingApproval,
   ]);
 
   // Milestone announcements only (design/04 §6): rejected + executed + terminal.
@@ -124,6 +134,19 @@ export function Timeline({ run }: { run: Run }) {
     prevPendingDelegationInput.current = cur;
   }, [axis.pendingDelegationInput]);
 
+  // Action-approval pause/resolve (ADR 0038): a real side effect waits on the
+  // human — assertive, like the delegation pause.
+  useEffect(() => {
+    const cur = pendingApproval ? `${pendingApproval.step}:${pendingApproval.action}` : null;
+    const prev = prevPendingApproval.current;
+    if (cur && cur !== prev) {
+      announce(`${pendingApproval?.action} wants to change state — awaiting your approval`, "assertive");
+    } else if (!cur && prev) {
+      announce(`approval decided`);
+    }
+    prevPendingApproval.current = cur;
+  }, [pendingApproval]);
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -166,7 +189,8 @@ export function Timeline({ run }: { run: Run }) {
               ◉ Awaiting your input
             </Badge>
           ) : run.status === "awaiting_skill_decision" ||
-            run.status === "awaiting_delegation_decision" ? (
+            run.status === "awaiting_delegation_decision" ||
+            run.status === "awaiting_action_approval" ? (
             <Badge tone="warning" className="shrink-0">
               ◉ Awaiting your decision
             </Badge>
@@ -237,6 +261,7 @@ export function Timeline({ run }: { run: Run }) {
         {axis.pendingDelegation && (
           <DelegationAuthorizationPrompt runId={run.id} pending={axis.pendingDelegation} />
         )}
+        {pendingApproval && <ActionApprovalPrompt runId={run.id} pending={pendingApproval} />}
         {axis.pendingDelegationInput && (
           <DelegationInputPrompt runId={run.id} pending={axis.pendingDelegationInput} />
         )}

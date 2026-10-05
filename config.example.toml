@@ -52,6 +52,33 @@ mode = "step"        # "step" (one action at a time) | "plan" (validated durable
 # plan_node_retries = 1   # extra attempts per failed tool/a2a node (transient failures)
 # plan_replans = 2        # max REVISED plans after a failure (re-validated, journaled, bounded)
 
+# Human gate on MUTATING actions (ADR 0038). Absent = everything "allow" (no change).
+# Only actions that declare `idempotency_key` are gated (the ADR 0031 criterion) — in the
+# bundled tools: read_source, extract_structure, write_report, append_ledger; with
+# [tools.coding]: popraw_kod, zastosuj_patch, uruchom_komende. Read-only tools (czytaj_plik,
+# git_status, git_diff) and delegate_to_* (own gate, [delegation]) are never gated.
+# An unknown policy value is a startup ERROR (a typo in a safety gate fails closed).
+# [approval]
+# default = "allow"          # allow | ask | deny — for mutating actions with no entry below
+# ask_timeout_secs = 300     # no decision in time = deny (principal system:timeout); 0 = wait forever
+# [approval.actions]
+# zastosuj_patch = "ask"     # pause the run; decide via POST /api/v1/runs/{id}/action-approval
+# uruchom_komende = "deny"   # refused, journaled (rejected/action_policy), the model is told
+# review_verdict = "ask"     # plan mode: review nodes become a human verdict, not a model call
+
+# Cost budgets (ADR 0039). Absent = no limits. Checked BEFORE every model call (its worst
+# case: prompt bytes + max_tokens) and every action, never after. Per-run values are the
+# default AND the ceiling for a `budget` override on POST /api/v1/runs (lower only).
+# A model with no [pricing] entry cannot be priced: max_usd / daily_usd_per_principal do
+# not apply to it (run.budget.usd_enforced = false); max_tokens and max_wall_secs still do.
+# [budget]
+# max_usd = 0.50
+# max_tokens = 200000            # prompt + completion over the run's model calls
+# max_wall_secs = 1800           # wall clock from creation, minus time paused on a human
+# daily_usd_per_principal = 5.0  # per API principal, per UTC day (derived from run records)
+# prompt_overhead_tokens = 1024  # added to every call bound (hidden provider templates)
+# fallback_completion_tokens = 4096  # completion bound when an adapter reports no max_tokens
+
 [tools]
 workspace = "./work" # reference MCP tools read/write inside this directory
 # Directories scanned for extensions (subdirs with a kelter-extension.toml
