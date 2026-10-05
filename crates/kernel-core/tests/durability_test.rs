@@ -337,6 +337,8 @@ async fn terminal_journal_entry_finalizes_without_work() {
                 status: RunStatus::Completed,
                 output: Some(json!({"summary": "was done"})),
                 error: None,
+                verification: None,
+                contract_report: None,
             },
         )
         .await

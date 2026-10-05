@@ -2937,3 +2937,96 @@ without a misconfigured action source; same code path as the tested limit
 refusals). A run on K12 itself, and the export of the 142 runs against this
 binary. The downgrade policy is open for Eryk (ADR 0036, "Compatibility").
 Glassbox's parser is unchanged — a separate task after merge.
+
+## 2026-10-05 — success contract and `verification` (ADR 0037, KR1.1, gap L8)
+
+On a deployment, "send an e-mail" with no mail tool ended `completed`: the
+model wrote a file, which is an effective action, so ADR 0033's floor let it
+through — and `distill` would have learned it as a successful approach.
+
+**What changed.** `POST /api/v1/runs` takes an optional `success_contract`
+(`require`: `action_succeeded` / `result_equals` / `result_contains`, all
+pure functions of the recorded step trace), validated at creation against the
+live action space (bad shape, unknown or kernel-owned action, bad pointer →
+422, no run). `outcome::verdict` is the one success predicate: ADR 0033 floor
+first, then the contract; an unmet contract ends `incomplete` with every
+failing condition in `error`. Every judged run carries `verification`
+(`contract` | `none`) on the run, the terminal journal entry, the terminal
+event and the history response; `contract_report` says which conditions
+held. `distill` (facts and plans) takes only `Run::learnable()` runs:
+contract-verified, human-confirmed, or pre-ADR (no `verification` key —
+compatible default, Eryk to confirm). `POST`/`DELETE
+/api/v1/runs/{id}/confirmation` confirms / revokes (bearer, principal from
+the token), journaled as informational `success_confirmation_decided`;
+revoke forgets what was distilled from that run alone. A2A inbound: state
+unchanged, additive `metadata["kelter.verification"]`. Web UI: basis line +
+Confirm/Revoke on completed runs, "Success contract not met" on a
+contract-failed incomplete.
+
+**Where the kernel decides success** (this tree):
+
+| place | file:line | before | now |
+|---|---|---|---|
+| step mode, `finish` | `crates/kernel-core/src/engine.rs:3195` | `effective_steps > 0` | `outcome::verdict(steps, contract)` |
+| plan mode, last generation clean | `crates/kernel-core/src/engine.rs:4740` | same | same `verdict` |
+| the predicate | `crates/kernel-core/src/outcome.rs:96` | `effective_steps` | floor, then `contract::evaluate` |
+| terminal journal + event | `crates/kernel-core/src/engine.rs:3590` (`finalize_run`) | status/output/error | + `verification`, `contract_report` |
+| crash after terminal | `crates/kernel-core/src/engine.rs:2281` | restores status | + restores verdict |
+| learning filter | `crates/kernel-core/src/engine.rs:1231` → `Run::learnable` (`:504`) | `status == Completed` | verified or confirmed (or pre-ADR) |
+| A2A inbound mapping | `crates/a2a/src/server.rs:53`, `:91` | Incomplete → FAILED | unchanged + metadata |
+| contract validation | `crates/kernel-core/src/engine.rs:1417` | — | 422 via `KernelError::InvalidRequest` |
+
+**Run JSON** (from `scripts/smoke-success-contract.sh`, real daemon; full
+files in `docs/evidence/success-contract/`):
+
+```
+contract unmet  {"status":"incomplete","verification":"contract",
+                 "success_contract":{"require":[{"kind":"action_succeeded","action":"send_email"}]},
+                 "contract_report":{"satisfied":false,"conditions":[{"condition":{…},"met":false,
+                   "detail":"`send_email` was never executed"}]},
+                 "error":"success contract not met (1 of 1 condition(s) failed): action `send_email`
+                   succeeded — `send_email` was never executed (the model's summary is kept as output,
+                   unverified)","confirmation":null}
+no contract     {"status":"completed","verification":"none","success_contract":null,
+                 "contract_report":null,"confirmation":null}
+confirmed       {"status":"completed","verification":"none",
+                 "confirmation":{"principal":"default","at_ms":1791212496052}}
+contract met    {"status":"completed","verification":"contract",
+  (api_test)     "contract_report":{"satisfied":true,…},"confirmation":null}
+journal         {"kind":"success_confirmation_decided","decision":"confirm","principal":"default","at_ms":…}
+```
+
+**Verified (this tree; clippy/fmt on Rust 1.99.0, tests on 1.97.0 local):**
+
+- `cargo test --workspace --no-fail-fast -- --include-ignored` with
+  `KELTER_TEST_POSTGRES_URL` against `pgvector/pgvector:pg16` in Docker:
+  **379 passed, 0 failed, 0 ignored** (was 348; +31: 7 `contract` unit,
+  4 `outcome` unit, 16 `kernel-core/tests/success_contract_test.rs`, 3
+  `api/tests/api_test.rs`, 1 `a2a` unit).
+- Before the new tests were added, the changed kernel failed exactly 3
+  existing tests, all three learning tests (`learned_test::
+  distillation_tags_provenance_and_forget_batch_reverses_it`,
+  `plan_distillation_test::distillation_takes_the_final_generation_not_the_first`,
+  `…::plan_mode_yields_a_plan_and_step_mode_a_fact_never_both`): their runs
+  have no contract, so they are now unverified. Each got a commented
+  `decide_success_confirmation(..Confirm..)` before `distill` — a setup step;
+  no assertion changed. Two other tests changed only to compile against the
+  new fields (`durability_test` Terminal literal, `no_effect_finish_test`
+  pattern `..`).
+- `cargo +1.99.0 clippy --workspace --all-targets -- -D warnings`,
+  `cargo +1.99.0 fmt --all --check`: clean.
+- `pnpm --dir apps/web-ui test`: 2 files, **18** tests (+4,
+  `verificationView`); `pnpm build` (tsc + vite) clean.
+- `scripts/smoke-success-contract.sh`: PASS — V (unknown action → 422, no
+  run), C (contract + model that writes → `incomplete`, reason names
+  `send_email`, `send_email` never called), U (no contract → `completed`,
+  `none`, distill skips), H (anonymous confirm 401; incomplete confirm 409;
+  confirm → distill takes it; revoke → fact forgotten, journal has
+  confirm+revoke with principal, not relearned).
+- `scripts/smoke-journal-history.sh`: still PASS (the scripted model stub
+  gained an optional `FAKE_LLM_QUEUE`; default queue unchanged).
+
+**Not verified here.** `scripts/smoke-selflearn.sh` (now confirms its seed
+run before distilling) needs a real local model — not run. No run on K12.
+The downgrade `DELETE` in ADR 0037 is written by analogy with ADR 0036's
+measured one, not measured. Glassbox's parser is unchanged — separate task.

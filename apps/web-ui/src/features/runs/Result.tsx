@@ -9,7 +9,8 @@ import { announce } from "@/lib/announcer";
 import { copyValue } from "@/lib/clipboard";
 import { axisSteps } from "@/lib/events";
 import { formatCost, shortPolicy, STATUS_GLYPH } from "@/lib/format";
-import { outputView } from "@/lib/result";
+import { outputView, verificationView } from "@/lib/result";
+import { setRunConfirmation } from "@/store/app";
 import { useAppState, useAxis } from "@/store/hooks";
 import type { Run } from "@/lib/api";
 import { ArtifactPanel } from "./ArtifactPanel";
@@ -41,6 +42,45 @@ const TONE = {
   canceled: { badge: "quiet" as const, glyph: STATUS_GLYPH.canceled, label: "Canceled" },
 };
 
+/* ADR 0037: the success basis, and the human confirm/revoke control for an
+ * unverified completed run (the only thing that admits it to learning). */
+function VerificationLine({ run }: { run: Run }) {
+  const v = verificationView(run);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  if (!v.text || v.tone === "contract_failed") return null;
+  const act = async (confirm: boolean) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await setRunConfirmation(run.id, confirm);
+      announce(confirm ? "Run confirmed" : "Confirmation revoked");
+    } catch (e) {
+      setErr(String((e as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 text-caption" aria-label="Verification">
+      <span className={v.tone === "unverified" ? "text-warning" : "text-muted-foreground"}>
+        {v.text}
+      </span>
+      {v.canConfirm && (
+        <Button variant="secondary" size="sm" disabled={busy} onClick={() => act(true)}>
+          Confirm it did the task
+        </Button>
+      )}
+      {v.canRevoke && (
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => act(false)}>
+          Revoke confirmation
+        </Button>
+      )}
+      {err && <span className="text-danger">{err}</span>}
+    </div>
+  );
+}
+
 export function Result({ run, onNewRun }: { run: Run; onNewRun: () => void }) {
   const s = useAppState();
   const { axis } = useAxis(run.id);
@@ -59,7 +99,7 @@ export function Result({ run, onNewRun }: { run: Run; onNewRun: () => void }) {
     if (status === "failed") {
       announce(`Run failed: ${(run.error ?? "").slice(0, 80)}`, "assertive");
     } else if (status === "incomplete") {
-      announce("Run incomplete: no action succeeded", "assertive");
+      announce("Run incomplete: not counted as done", "assertive");
     } else if (status === "completed") {
       announce("Run completed");
     }
@@ -112,6 +152,7 @@ export function Result({ run, onNewRun }: { run: Run; onNewRun: () => void }) {
               <h3 className="text-callout font-medium">Result</h3>
               {output != null && <CopyButton value={output} label="Copy output" />}
             </div>
+            <VerificationLine run={run} />
             {view.prose ? (
               <p className="mt-1 text-body whitespace-pre-wrap">{view.prose}</p>
             ) : (
@@ -154,7 +195,9 @@ export function Result({ run, onNewRun }: { run: Run; onNewRun: () => void }) {
            * show the kernel's verdict first and the claim only as unverified. */
           <section className="mt-4" aria-label="Incomplete">
             <h3 className="text-callout font-medium text-warning">
-              Finished without any successful action — not counted as done.
+              {verificationView(run).tone === "contract_failed"
+                ? "Success contract not met — not counted as done."
+                : "Finished without any successful action — not counted as done."}
             </h3>
             <p className="mt-1 text-body text-muted-foreground">{error ?? "incomplete"}</p>
             {view.prose && (

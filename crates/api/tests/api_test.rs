@@ -829,3 +829,237 @@ async fn run_events_include_rejections_and_resumes() {
         1
     );
 }
+
+// ---- ADR 0037: success contract + human confirmation ---------------------
+
+async fn wait_terminal(
+    client: &reqwest::Client,
+    addr: SocketAddr,
+    token: &str,
+    run_id: &str,
+) -> serde_json::Value {
+    for _ in 0..100 {
+        let run: serde_json::Value = client
+            .get(format!("http://{addr}/api/v1/runs/{run_id}"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let s = run["status"].as_str().unwrap_or("");
+        if !matches!(s, "pending" | "running") {
+            return run;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("run {run_id} never finished");
+}
+
+async fn submit_json(
+    client: &reqwest::Client,
+    addr: SocketAddr,
+    token: &str,
+    body: serde_json::Value,
+) -> reqwest::Response {
+    client
+        .post(format!("http://{addr}/api/v1/runs"))
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn bad_success_contract_is_a_422_at_creation_and_creates_nothing() {
+    let (addr, token) = spawn_server().await;
+    let client = reqwest::Client::new();
+    for bad in [
+        json!({"require": []}),
+        json!({"require": [{"kind": "action_succeeded", "action": "send_email"}]}),
+        json!({"require": [{"kind": "action_succeeded", "action": "finish"}]}),
+        json!({"require": [{"kind": "model_says_so"}]}),
+        json!({"require": [{"kind": "result_equals", "action": "echo", "pointer": "x", "equals": 1}]}),
+        json!("send_email"),
+    ] {
+        let res = submit_json(
+            &client,
+            addr,
+            &token,
+            json!({"task": "send an e-mail", "success_contract": bad}),
+        )
+        .await;
+        assert_eq!(res.status(), 422, "{bad}");
+        let msg = res.text().await.unwrap();
+        assert!(msg.contains("success_contract"), "{bad}: {msg}");
+    }
+    let runs: serde_json::Value = client
+        .get(format!("http://{addr}/api/v1/runs"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(runs.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn contract_run_reports_verification_in_run_and_history() {
+    let (addr, token) = spawn_server().await;
+    let client = reqwest::Client::new();
+    // Met: OneShotOracle echoes, then finishes.
+    let res = submit_json(
+        &client,
+        addr,
+        &token,
+        json!({"task": "echo hi", "success_contract": {"require": [
+            {"kind": "result_equals", "action": "echo", "pointer": "/echoed", "equals": "hi"}
+        ]}}),
+    )
+    .await;
+    assert_eq!(res.status(), 202);
+    let id = res.json::<serde_json::Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let run = wait_terminal(&client, addr, &token, &id).await;
+    assert_eq!(run["status"], "completed");
+    assert_eq!(run["verification"], "contract");
+    assert_eq!(run["contract_report"]["satisfied"], true);
+    assert!(run["confirmation"].is_null());
+
+    let history = fetch_events(addr, &token, &id).await;
+    assert_eq!(history["verification"], "contract");
+    assert_eq!(
+        history["success_contract"]["require"][0]["kind"],
+        "result_equals"
+    );
+    let terminal = history["journal"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "terminal")
+        .unwrap()
+        .clone();
+    assert_eq!(terminal["verification"], "contract");
+
+    // Unmet: the echo said "hi", the contract wants "bye".
+    let res = submit_json(
+        &client,
+        addr,
+        &token,
+        json!({"task": "echo hi", "success_contract": {"require": [
+            {"kind": "result_equals", "action": "echo", "pointer": "/echoed", "equals": "bye"}
+        ]}}),
+    )
+    .await;
+    let id = res.json::<serde_json::Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let run = wait_terminal(&client, addr, &token, &id).await;
+    assert_eq!(run["status"], "incomplete");
+    assert_eq!(run["verification"], "contract");
+    assert!(run["error"]
+        .as_str()
+        .unwrap()
+        .contains("success contract not met"));
+}
+
+#[tokio::test]
+async fn confirmation_endpoint_is_bearer_gated_journaled_and_reversible() {
+    let (addr, token, alice, store) = spawn_with_principals().await;
+    let client = reqwest::Client::new();
+    let res = submit_json(&client, addr, &token, json!({"task": "echo hi"})).await;
+    let id = res.json::<serde_json::Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let run = wait_terminal(&client, addr, &token, &id).await;
+    assert_eq!(run["status"], "completed");
+    assert_eq!(run["verification"], "none");
+
+    let url = format!("http://{addr}/api/v1/runs/{id}/confirmation");
+    // No token, wrong token → 401, nothing recorded.
+    assert_eq!(client.post(&url).send().await.unwrap().status(), 401);
+    assert_eq!(
+        client
+            .post(&url)
+            .bearer_auth("nope")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    // Revoke before confirm → 409.
+    assert_eq!(
+        client
+            .delete(&url)
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        409
+    );
+
+    // Confirmed by a named principal: attribution comes from the token.
+    let res = client.post(&url).bearer_auth(&alice).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["run"]["confirmation"]["principal"], "alice");
+    // Twice → 409.
+    assert_eq!(
+        client
+            .post(&url)
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        409
+    );
+
+    let res = client
+        .delete(&url)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert!(body["run"]["confirmation"].is_null());
+    assert_eq!(body["forgotten_learned_ids"], json!([]));
+
+    let uuid: uuid::Uuid = id.parse().unwrap();
+    let decisions: Vec<serde_json::Value> = store
+        .journal(uuid)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| serde_json::to_value(e).unwrap())
+        .filter(|e| e["kind"] == "success_confirmation_decided")
+        .collect();
+    assert_eq!(decisions.len(), 2);
+    assert_eq!(decisions[0]["decision"], "confirm");
+    assert_eq!(decisions[0]["principal"], "alice");
+    assert_eq!(decisions[1]["decision"], "revoke");
+    assert_eq!(decisions[1]["principal"], "default");
+
+    // Unknown run → 404.
+    let res = client
+        .post(format!(
+            "http://{addr}/api/v1/runs/{}/confirmation",
+            uuid::Uuid::new_v4()
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+}

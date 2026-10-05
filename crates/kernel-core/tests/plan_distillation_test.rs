@@ -21,10 +21,11 @@ use serde_json::json;
 use tokio::sync::Mutex;
 
 use kernel_core::{
-    ActionSchema, ActionSource, ActionSpec, ExecutionContext, ExecutionError, InMemoryLearnedStore,
-    JournalEntry, Kernel, KernelConfig, Latitude, LearnedFact, LearnedPlan, LearnedProvenance,
-    LearnedStore, Plan, PlanResilience, PolicyContext, PolicyError, PolicyOracle, Proposal,
-    ProposedAction, RunMode, RunStatus, RunStore, ValidatedAction, LEARNED_LEVEL,
+    ActionSchema, ActionSource, ActionSpec, ConfirmationDecision, ExecutionContext, ExecutionError,
+    InMemoryLearnedStore, JournalEntry, Kernel, KernelConfig, Latitude, LearnedFact, LearnedPlan,
+    LearnedProvenance, LearnedStore, Plan, PlanResilience, PolicyContext, PolicyError,
+    PolicyOracle, Proposal, ProposedAction, RunMode, RunStatus, RunStore, ValidatedAction,
+    LEARNED_LEVEL,
 };
 use memory::InMemoryProvider;
 use uuid::Uuid;
@@ -228,6 +229,11 @@ async fn distillation_takes_the_final_generation_not_the_first() {
         .filter(|e| matches!(e, JournalEntry::PlanProposed { .. }))
         .count();
     assert_eq!(generations, 2);
+    // ADR 0037: no contract → unverified → confirmed by a human before it is
+    // learnable. Setup only; the assertions below are unchanged.
+    k.decide_success_confirmation(run.id, ConfirmationDecision::Confirm, "tester")
+        .await
+        .unwrap();
 
     let report = k.distill(10).await.unwrap();
     assert_eq!(report.plans_created, 1);
@@ -282,6 +288,14 @@ async fn plan_mode_yields_a_plan_and_step_mode_a_fact_never_both() {
     .with_learned(learned.clone());
     let step_run = step_kernel.run_task("stepped task".into()).await.unwrap();
     assert_eq!(step_run.status, RunStatus::Completed);
+    // ADR 0037: both runs are unverified (no contract); confirm them so they
+    // are learnable. Setup only; the assertions below are unchanged.
+    for id in [plan_run.id, step_run.id] {
+        step_kernel
+            .decide_success_confirmation(id, ConfirmationDecision::Confirm, "tester")
+            .await
+            .unwrap();
+    }
 
     let report = step_kernel.distill(10).await.unwrap();
     assert_eq!(report.plans_created, 1);

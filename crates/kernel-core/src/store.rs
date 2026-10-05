@@ -231,6 +231,10 @@ mod tests {
             a2a_depth: 0,
             a2a_ancestry: Vec::new(),
             max_steps: None,
+            success_contract: None,
+            verification: None,
+            contract_report: None,
+            confirmation: None,
         }
     }
 
@@ -268,6 +272,8 @@ mod tests {
                         status: RunStatus::Completed,
                         output: None,
                         error: None,
+                        verification: None,
+                        contract_report: None,
                     },
                 )
                 .await

@@ -84,6 +84,12 @@ pub fn task_json(run: &Run) -> Value {
         "status": { "state": state },
         "artifacts": [],
     });
+    // ADR 0037, additive: how the kernel verified success. An inbound run
+    // carries no success contract, so a COMPLETED task here is `none`
+    // (unverified) — a caller that cares can tell, without a new A2A state.
+    if let Some(v) = run.verification {
+        task["metadata"] = json!({ "kelter.verification": v });
+    }
     if run.status == RunStatus::Completed {
         task["artifacts"] = json!([{
             // A stable, run-derived artifact id (no RNG needed here).
@@ -229,6 +235,10 @@ mod tests {
             a2a_depth: 0,
             a2a_ancestry: Vec::new(),
             max_steps: None,
+            success_contract: None,
+            verification: None,
+            contract_report: None,
+            confirmation: None,
         }
     }
 
@@ -277,6 +287,31 @@ mod tests {
         let task = task_json(&run);
         assert_eq!(task["status"]["state"], "TASK_STATE_COMPLETED");
         assert_eq!(task["artifacts"][0]["parts"][0]["text"], "HELLO WORLD");
+    }
+
+    #[test]
+    fn verification_rides_along_as_metadata_without_changing_the_state() {
+        // ADR 0037: an unverified success is still COMPLETED (no behaviour
+        // change for inbound callers); the basis is additive metadata.
+        let mut run = run_with(RunStatus::Completed, Some(json!("done")), None);
+        assert!(task_json(&run).get("metadata").is_none());
+        run.verification = Some(kernel_core::Verification::None);
+        let task = task_json(&run);
+        assert_eq!(task["status"]["state"], "TASK_STATE_COMPLETED");
+        assert_eq!(task["metadata"]["kelter.verification"], "none");
+        assert_eq!(task["artifacts"][0]["parts"][0]["text"], "done");
+
+        // A contract that failed: FAILED, reason, no artifact (ADR 0033 path).
+        let mut run = run_with(
+            RunStatus::Incomplete,
+            Some(json!({"summary": "sent"})),
+            Some("success contract not met".into()),
+        );
+        run.verification = Some(kernel_core::Verification::Contract);
+        let task = task_json(&run);
+        assert_eq!(task["status"]["state"], "TASK_STATE_FAILED");
+        assert_eq!(task["metadata"]["kelter.verification"], "contract");
+        assert_eq!(task["artifacts"].as_array().unwrap().len(), 0);
     }
 
     #[test]

@@ -1,3 +1,5 @@
+import type { Run } from "./api";
+
 /* Turning a run's terminal output into readable prose (ADR 0029).
  *
  * The kernel's own `finish` action yields `{ summary }`, and plan mode yields
@@ -56,4 +58,50 @@ function safeStringify(value: unknown): string {
     /* circular or otherwise unserializable — still never a throw */
     return String(value);
   }
+}
+
+/* ADR 0037: how a settled run's success was (not) verified, as one line for
+ * the result face. `canConfirm`/`canRevoke` mirror exactly what the kernel
+ * accepts on /runs/{id}/confirmation, so the UI never offers a 409. */
+export interface VerificationView {
+  tone: "verified" | "unverified" | "confirmed" | "contract_failed" | null;
+  text: string | null;
+  canConfirm: boolean;
+  canRevoke: boolean;
+}
+
+export function verificationView(run: Run): VerificationView {
+  const none: VerificationView = { tone: null, text: null, canConfirm: false, canRevoke: false };
+  if (run.status === "incomplete") {
+    if (run.verification === "contract" && run.contract_report && !run.contract_report.satisfied) {
+      const unmet = run.contract_report.conditions.filter((c) => !c.met).length;
+      return {
+        ...none,
+        tone: "contract_failed",
+        text: `Success contract not met (${unmet} of ${run.contract_report.conditions.length} condition(s) failed).`,
+      };
+    }
+    return none;
+  }
+  if (run.status !== "completed") return none;
+  if (run.verification === "contract") {
+    return { ...none, tone: "verified", text: "Verified by the success contract." };
+  }
+  if (run.verification === "none") {
+    if (run.confirmation) {
+      return {
+        ...none,
+        tone: "confirmed",
+        text: `Unverified by the kernel — confirmed by ${run.confirmation.principal}. Used for learning.`,
+        canRevoke: true,
+      };
+    }
+    return {
+      ...none,
+      tone: "unverified",
+      text: "Unverified — no success contract. Not used for learning until a human confirms it.",
+      canConfirm: true,
+    };
+  }
+  return none; // pre-ADR-0037 run, or an older daemon: nothing to say
 }

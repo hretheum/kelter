@@ -148,7 +148,14 @@ function connectWs() {
   socket.onmessage = (msg) => {
     const env = JSON.parse(msg.data) as RunEventEnvelope;
     ingestEnvelope(env);
-    if (["created", "completed", "failed", "incomplete"].includes(env.event.type)) {
+    const refreshOn = [
+      "created",
+      "completed",
+      "failed",
+      "incomplete",
+      "success_confirmation_decided", // ADR 0037: another client confirmed/revoked
+    ];
+    if (refreshOn.includes(env.event.type)) {
       void refreshRuns();
     }
   };
@@ -293,6 +300,17 @@ export async function cancelRun(id: string): Promise<Run> {
     if (err.status === 404 || err.status === 405) set({ cancelSupported: false });
     throw e;
   }
+}
+
+/* Human confirmation of an unverified success (ADR 0037): POST confirms,
+ * DELETE revokes. The response carries the updated run. */
+export async function setRunConfirmation(runId: string, confirm: boolean): Promise<Run> {
+  const res = await api<{ run: Run; forgotten_learned_ids: string[] }>(
+    `/api/v1/runs/${runId}/confirmation`,
+    { method: confirm ? "POST" : "DELETE" }
+  );
+  upsertRun(res.run);
+  return res.run;
 }
 
 /* Skill-activation decision (ADR 0021). The kernel emits its own

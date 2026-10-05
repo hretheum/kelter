@@ -47,6 +47,11 @@ async fn desktop_run_and_memory_survive_a_restart() {
             // daemon-wide KernelConfig::max_steps, which is what this
             // fixture wants.
             max_steps: None,
+            // ADR 0037: no success contract, no verdict yet.
+            success_contract: None,
+            verification: None,
+            contract_report: None,
+            confirmation: None,
         };
         store.put(run).await.unwrap();
         memory

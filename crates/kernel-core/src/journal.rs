@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::contract::{ContractReport, Verification};
 use crate::delegation_gate::{AgentDelegationDecision, DelegationRequestMeta};
 use crate::engine::RunStatus;
 use crate::skill_gate::{ActivationRequestMeta, SkillActivationDecision};
@@ -83,6 +84,13 @@ pub enum JournalEntry {
         output: Option<serde_json::Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// How the success verdict was reached (ADR 0037). Absent for
+        /// `failed`/`canceled` and in entries written before ADR 0037.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        verification: Option<Verification>,
+        /// The contract evaluation behind the verdict (ADR 0037), if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contract_report: Option<ContractReport>,
     },
     /// A fresh `activate_skill` proposal was gated `AskHuman` (ADR 0021): the
     /// run pauses here, durably, until a matching `SkillActivationDecided`
@@ -191,6 +199,27 @@ pub enum JournalEntry {
         /// Wall-clock milliseconds since the Unix epoch.
         at_ms: u64,
     },
+    /// INFORMATIONAL for execution (ADR 0037): a human confirmed, or revoked
+    /// the confirmation of, an unverified `completed` run — the decision that
+    /// admits it to (or removes it from) learning. Written after `Terminal`
+    /// by the authenticated API only; the run record's `confirmation` mirrors
+    /// the latest one. Never read by resume or replay.
+    SuccessConfirmationDecided {
+        decision: ConfirmationDecision,
+        principal: String,
+        /// Wall-clock milliseconds since the Unix epoch.
+        at_ms: u64,
+    },
+}
+
+/// A human's decision on an unverified success (ADR 0037).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfirmationDecision {
+    /// The run did its task: admit it to learning.
+    Confirm,
+    /// Withdraw an earlier confirmation (and what was learned from it).
+    Revoke,
 }
 
 /// Which kernel rule refused (ADR 0036). One value per distinct mechanism;
@@ -301,7 +330,9 @@ impl JournalEntry {
     pub fn is_informational(&self) -> bool {
         matches!(
             self,
-            JournalEntry::Rejected { .. } | JournalEntry::Resumed { .. }
+            JournalEntry::Rejected { .. }
+                | JournalEntry::Resumed { .. }
+                | JournalEntry::SuccessConfirmationDecided { .. }
         )
     }
 }
@@ -321,6 +352,7 @@ impl JournalEntry {
             | JournalEntry::Rejected { step, .. } => Some(*step),
             JournalEntry::TrustPosture { .. }
             | JournalEntry::Resumed { .. }
+            | JournalEntry::SuccessConfirmationDecided { .. }
             | JournalEntry::PlanProposed { .. }
             | JournalEntry::Terminal { .. } => None,
         }
@@ -468,7 +500,9 @@ pub fn fold_step(journal: &[JournalEntry], step_index: u32) -> StepJournal {
             }
             // Informational entries (ADR 0036) never shape resume — listed
             // explicitly so a future arm above cannot start matching them.
-            JournalEntry::Rejected { .. } | JournalEntry::Resumed { .. } => {}
+            JournalEntry::Rejected { .. }
+            | JournalEntry::Resumed { .. }
+            | JournalEntry::SuccessConfirmationDecided { .. } => {}
             _ => {}
         }
     }

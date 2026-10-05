@@ -14,10 +14,11 @@ use tracing::Instrument;
 use uuid::Uuid;
 
 use crate::action::{ActionSchema, ActionSpec, ValidatedAction};
+use crate::contract::{ContractReport, SuccessContract, Verification};
 use crate::delegation_gate::{AgentDelegationDecision, DelegationDecisionOutcome, DelegationGate};
 use crate::journal::{
     bounded_rejected_arguments, bounded_rejection_reason, execution_session_id, fold_step,
-    JournalEntry, RejectionSource, RejectionSubject, ResumeCause, Usage,
+    ConfirmationDecision, JournalEntry, RejectionSource, RejectionSubject, ResumeCause, Usage,
 };
 use crate::oracle::{Latitude, PolicyContext, PolicyOracle};
 use crate::outcome;
@@ -464,6 +465,50 @@ pub struct Run {
     /// is refused as a cycle if its target origin already appears here.
     #[serde(default)]
     pub a2a_ancestry: Vec<String>,
+    /// The caller's success contract (ADR 0037), fixed at creation and
+    /// validated then. `None` = no contract: success rests on the ADR 0033
+    /// floor alone and is unverified.
+    #[serde(default)]
+    pub success_contract: Option<SuccessContract>,
+    /// How the kernel reached its success verdict (ADR 0037): `contract` or
+    /// `none`. Set on every `completed`/`incomplete` run decided by this
+    /// version; `null` while the run is in flight, for `failed`/`canceled`,
+    /// and for runs that ended before ADR 0037 (learnable as before).
+    #[serde(default)]
+    pub verification: Option<Verification>,
+    /// The kernel's per-condition evaluation of `success_contract` (ADR
+    /// 0037). `None` when the run has no contract or has not finished.
+    #[serde(default)]
+    pub contract_report: Option<ContractReport>,
+    /// A human's confirmation of an unverified `completed` run (ADR 0037) —
+    /// what admits it to learning. Written only by the authenticated
+    /// confirmation endpoint; journaled with the principal.
+    #[serde(default)]
+    pub confirmation: Option<RunConfirmation>,
+}
+
+/// A human's confirmation that an unverified `completed` run really did its
+/// task (ADR 0037).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunConfirmation {
+    pub principal: String,
+    /// Wall-clock milliseconds since the Unix epoch.
+    pub at_ms: u64,
+}
+
+impl Run {
+    /// May distillation (ADR 0016/0032) learn from this run? Only a
+    /// `completed` run whose success is verified by a contract or confirmed
+    /// by a human — or one that ended before ADR 0037 (`verification` absent),
+    /// which stays learnable exactly as it was (ADR 0037, historical data).
+    pub fn learnable(&self) -> bool {
+        self.status == RunStatus::Completed
+            && match self.verification {
+                Some(Verification::Contract) => true,
+                Some(Verification::None) => self.confirmation.is_some(),
+                None => true,
+            }
+    }
 }
 
 /// A durable snapshot of one pending human skill-activation decision (ADR
@@ -575,6 +620,9 @@ pub enum RunEvent {
     },
     Completed {
         output: serde_json::Value,
+        /// How success was verified (ADR 0037, additive): `contract`, or
+        /// `none` = unverified (excluded from learning until confirmed).
+        verification: Verification,
     },
     Failed {
         error: String,
@@ -585,6 +633,17 @@ pub enum RunEvent {
     Incomplete {
         output: Option<serde_json::Value>,
         reason: String,
+        /// ADR 0037, additive: `contract` when the run carried a contract.
+        verification: Verification,
+        /// ADR 0037, additive: which contract conditions held and which did
+        /// not. `None` without a contract.
+        contract_report: Option<ContractReport>,
+    },
+    /// A human confirmed, or revoked a confirmation of, an unverified
+    /// `completed` run (ADR 0037). Emitted by `decide_success_confirmation`.
+    SuccessConfirmationDecided {
+        decision: ConfirmationDecision,
+        principal: String,
     },
     /// A fresh `activate_skill` proposal was gated `AskHuman` (ADR 0021) —
     /// the run has paused. Carries everything a client needs to render the
@@ -859,6 +918,10 @@ pub enum KernelError {
     /// pending request, or one for a different skill than is pending.
     #[error("invalid state: {0}")]
     InvalidState(String),
+    /// A caller-supplied request is malformed (ADR 0037: an invalid success
+    /// contract) — refused before anything is created.
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
 }
 
 pub struct Kernel {
@@ -1163,7 +1226,9 @@ impl Kernel {
             if facts_created + plans_created >= limit {
                 break;
             }
-            if run.status != RunStatus::Completed || already.contains(&run.id) {
+            // ADR 0037: only verified (contract) or human-confirmed successes
+            // — plus pre-ADR-0037 runs, learnable as before.
+            if !run.learnable() || already.contains(&run.id) {
                 continue;
             }
             let provenance = LearnedProvenance {
@@ -1331,12 +1396,48 @@ impl Kernel {
             .await
     }
 
+    /// [`Self::create_run_bounded`] with an optional success contract (ADR
+    /// 0037). The contract is validated against the action space offered
+    /// right now; a bad one is refused with [`KernelError::InvalidRequest`]
+    /// and no run is created.
+    pub async fn create_run_with_contract(
+        &self,
+        task: String,
+        max_steps: Option<u32>,
+        contract: Option<SuccessContract>,
+    ) -> Result<Uuid, KernelError> {
+        if let Some(c) = &contract {
+            let known: Vec<String> = self
+                .current_action_schema()
+                .await?
+                .actions
+                .into_iter()
+                .map(|a| a.name)
+                .collect();
+            crate::contract::validate(c, &known).map_err(KernelError::InvalidRequest)?;
+        }
+        self.create_run_inner(task, 0, Vec::new(), max_steps, contract)
+            .await
+    }
+
     async fn create_run_full(
         &self,
         task: String,
         a2a_depth: u32,
         a2a_ancestry: Vec<String>,
         max_steps: Option<u32>,
+    ) -> Result<Uuid, KernelError> {
+        self.create_run_inner(task, a2a_depth, a2a_ancestry, max_steps, None)
+            .await
+    }
+
+    async fn create_run_inner(
+        &self,
+        task: String,
+        a2a_depth: u32,
+        a2a_ancestry: Vec<String>,
+        max_steps: Option<u32>,
+        success_contract: Option<SuccessContract>,
     ) -> Result<Uuid, KernelError> {
         let run = Run {
             id: Uuid::new_v4(),
@@ -1358,6 +1459,10 @@ impl Kernel {
             a2a_depth,
             a2a_ancestry,
             max_steps,
+            success_contract,
+            verification: None,
+            contract_report: None,
+            confirmation: None,
         };
         let id = run.id;
         self.store.put(run).await?;
@@ -1410,6 +1515,8 @@ impl Kernel {
                     status: RunStatus::Canceled,
                     output: None,
                     error: Some(reason.to_string()),
+                    verification: None,
+                    contract_report: None,
                 },
             )
             .await?;
@@ -1569,6 +1676,99 @@ impl Kernel {
         );
         tracing::info!(%run_id, %principal, "delegation input provided");
         Ok(run)
+    }
+
+    /// A human confirms — or revokes a confirmation of — an UNVERIFIED
+    /// `completed` run (ADR 0037): the only way such a run becomes learnable.
+    /// Journaled (`success_confirmation_decided`, with the principal) before
+    /// the run record changes, like every human decision (ADR 0021/0023).
+    ///
+    /// There is no model path to this: it is not an action, it is never in
+    /// any action schema, and only the authenticated API calls it.
+    ///
+    /// Refused (`InvalidState`) unless the run is `completed` with
+    /// `verification: none`: a contract-verified run needs no confirmation, an
+    /// `incomplete`/`failed` run cannot be confirmed into success, and a
+    /// pre-ADR-0037 run is already learnable. Confirming twice, or revoking
+    /// what is not confirmed, is refused too — every journaled decision
+    /// changes state.
+    ///
+    /// Revoking also forgets every learned artifact (fact or plan) distilled
+    /// from this run alone, so a revoked success leaves no learning behind;
+    /// the returned ids say what was forgotten.
+    pub async fn decide_success_confirmation(
+        &self,
+        run_id: Uuid,
+        decision: ConfirmationDecision,
+        principal: &str,
+    ) -> Result<(Run, Vec<Uuid>), KernelError> {
+        let mut run = self.store.get(run_id).await?;
+        if run.status != RunStatus::Completed || run.verification != Some(Verification::None) {
+            return Err(KernelError::InvalidState(format!(
+                "run {run_id} is not an unverified completed run (status {:?}, verification \
+                 {:?}) — only those can be confirmed",
+                run.status, run.verification
+            )));
+        }
+        match (decision, run.confirmation.is_some()) {
+            (ConfirmationDecision::Confirm, true) => {
+                return Err(KernelError::InvalidState(format!(
+                    "run {run_id} is already confirmed"
+                )))
+            }
+            (ConfirmationDecision::Revoke, false) => {
+                return Err(KernelError::InvalidState(format!(
+                    "run {run_id} has no confirmation to revoke"
+                )))
+            }
+            _ => {}
+        }
+        let at_ms = now_ms();
+        self.store
+            .append_journal(
+                run_id,
+                JournalEntry::SuccessConfirmationDecided {
+                    decision,
+                    principal: principal.to_string(),
+                    at_ms,
+                },
+            )
+            .await?;
+        run.confirmation = match decision {
+            ConfirmationDecision::Confirm => Some(RunConfirmation {
+                principal: principal.to_string(),
+                at_ms,
+            }),
+            ConfirmationDecision::Revoke => None,
+        };
+        self.store.put(run.clone()).await?;
+
+        let mut forgotten = Vec::new();
+        if decision == ConfirmationDecision::Revoke {
+            if let Some(learned) = &self.learned {
+                let sole = |ids: &[Uuid]| ids == [run_id];
+                for f in learned.list().await? {
+                    if sole(&f.provenance.source_run_ids) && learned.forget(f.id).await? {
+                        forgotten.push(f.id);
+                    }
+                }
+                for p in learned.list_plans().await? {
+                    if sole(&p.provenance.source_run_ids) && learned.forget(p.id).await? {
+                        forgotten.push(p.id);
+                    }
+                }
+            }
+        }
+        self.emit(
+            run_id,
+            0,
+            RunEvent::SuccessConfirmationDecided {
+                decision,
+                principal: principal.to_string(),
+            },
+        );
+        tracing::info!(%run_id, ?decision, %principal, forgotten = forgotten.len(), "success confirmation decided");
+        Ok((run, forgotten))
     }
 
     fn emit(&self, run_id: Uuid, seq: u64, event: RunEvent) {
@@ -2067,6 +2267,8 @@ impl Kernel {
             status,
             output,
             error,
+            verification,
+            contract_report,
         }) = journal
             .iter()
             .rev()
@@ -2076,6 +2278,8 @@ impl Kernel {
             run.status = *status;
             run.output = output.clone();
             run.error = error.clone();
+            run.verification = *verification;
+            run.contract_report = contract_report.clone();
             run.cost_usd = self.config.pricing.cost(&run.policy, &run.usage);
             self.store.put(run.clone()).await?;
             return Ok(run);
@@ -2985,20 +3189,17 @@ impl Kernel {
             // The model proposes `finish`; the kernel decides whether the
             // run earned success (ADR 0033): with no effective step behind
             // it, the claim is kept as output but the status is Incomplete.
+            // ADR 0037 adds the caller's success contract on top of that
+            // floor, checked here against the trace — never by the model.
             if validated.action() == FINISH_ACTION {
-                terminal = Some(if outcome::effective_steps(&run.steps) > 0 {
-                    (
-                        RunStatus::Completed,
-                        Some(validated.arguments().clone()),
-                        None,
-                    )
-                } else {
-                    (
-                        RunStatus::Incomplete,
-                        Some(validated.arguments().clone()),
-                        Some(outcome::no_effect_reason(&run.steps)),
-                    )
-                });
+                let verdict = outcome::verdict(&run.steps, run.success_contract.as_ref());
+                run.verification = Some(verdict.verification);
+                run.contract_report = verdict.report;
+                terminal = Some((
+                    verdict.status,
+                    Some(validated.arguments().clone()),
+                    verdict.reason,
+                ));
                 break;
             }
 
@@ -3396,6 +3597,13 @@ impl Kernel {
     ) -> Result<Run, KernelError> {
         let run_id = run.id;
 
+        // The verification basis exists only where the kernel judged success
+        // (ADR 0037); a failed or canceled run carries none.
+        if !matches!(status, RunStatus::Completed | RunStatus::Incomplete) {
+            run.verification = None;
+            run.contract_report = None;
+        }
+
         // Terminal state is journaled first, then applied to the run record.
         self.store
             .append_journal(
@@ -3404,6 +3612,8 @@ impl Kernel {
                     status,
                     output: output.clone(),
                     error: error.clone(),
+                    verification: run.verification,
+                    contract_report: run.contract_report.clone(),
                 },
             )
             .await?;
@@ -3444,7 +3654,14 @@ impl Kernel {
 
         match (&run.status, output, error) {
             (RunStatus::Completed, Some(out), _) => {
-                self.emit(run_id, seq, RunEvent::Completed { output: out });
+                self.emit(
+                    run_id,
+                    seq,
+                    RunEvent::Completed {
+                        output: out,
+                        verification: run.verification.unwrap_or(Verification::None),
+                    },
+                );
             }
             (RunStatus::Incomplete, out, err) => {
                 self.emit(
@@ -3453,6 +3670,8 @@ impl Kernel {
                     RunEvent::Incomplete {
                         output: out,
                         reason: err.unwrap_or_else(|| "unknown".into()),
+                        verification: run.verification.unwrap_or(Verification::None),
+                        contract_report: run.contract_report.clone(),
                     },
                 );
             }
@@ -4516,14 +4735,13 @@ impl Kernel {
                     }));
                     // Same success predicate as step mode (ADR 0033): a plan
                     // whose every node is a review dispatched nothing.
-                    if outcome::effective_steps(&run.steps) == 0 {
-                        let reason = outcome::no_effect_reason(&run.steps);
-                        return self
-                            .finalize_run(run, RunStatus::Incomplete, output, Some(reason), seq)
-                            .await;
-                    }
+                    // ADR 0037: and the same contract check, over the same
+                    // run-level trace (every generation's recorded steps).
+                    let verdict = outcome::verdict(&run.steps, run.success_contract.as_ref());
+                    run.verification = Some(verdict.verification);
+                    run.contract_report = verdict.report;
                     return self
-                        .finalize_run(run, RunStatus::Completed, output, None, seq)
+                        .finalize_run(run, verdict.status, output, verdict.reason, seq)
                         .await;
                 }
                 Some(err) => {
