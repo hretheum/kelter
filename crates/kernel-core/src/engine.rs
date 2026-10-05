@@ -15,7 +15,10 @@ use uuid::Uuid;
 
 use crate::action::{ActionSchema, ActionSpec, ValidatedAction};
 use crate::delegation_gate::{AgentDelegationDecision, DelegationDecisionOutcome, DelegationGate};
-use crate::journal::{fold_step, JournalEntry, Usage};
+use crate::journal::{
+    bounded_rejected_arguments, bounded_rejection_reason, execution_session_id, fold_step,
+    JournalEntry, RejectionSource, RejectionSubject, ResumeCause, Usage,
+};
 use crate::oracle::{Latitude, PolicyContext, PolicyOracle};
 use crate::outcome;
 use crate::skill_gate::{ActivationAuthorization, SkillActivationDecision};
@@ -550,6 +553,14 @@ pub enum RunEvent {
         attempt: u32,
         /// See [`RunEvent::Proposed::branch`].
         branch: Option<String>,
+        /// The `seq` of the `Proposed` event this rejection refers to, within
+        /// the same execution's event stream (ADR 0036, additive): the
+        /// refused proposal itself, the step's accepted proposal for a
+        /// refused delegation retry/fallback, or the plan-level proposal for a
+        /// refused plan node. `None` when no `Proposed` event exists for it
+        /// (a failed model call, or a revised plan rejected before it was
+        /// announced). Replaces pairing by `seq + 1`.
+        proposal_seq: Option<u64>,
     },
     Executed {
         step: u32,
@@ -876,6 +887,63 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+/// One refusal, recorded twice (ADR 0036): durably as an informational
+/// `JournalEntry::Rejected` and live as `RunEvent::Rejected`.
+struct Rejection {
+    step: u32,
+    attempt: u32,
+    source: RejectionSource,
+    subject: RejectionSubject,
+    reason: String,
+    /// The refused proposal's action (`Proposal`), the agent actually
+    /// attempted (`Decision`), or the node's action (`PlanNode`).
+    action: Option<String>,
+    /// Only for `Proposal`: the refused proposal's arguments, journaled
+    /// nowhere else.
+    arguments: Option<serde_json::Value>,
+    branch: Option<String>,
+    proposal_seq: Option<u64>,
+}
+
+/// Why this execution resumes (ADR 0036): the last non-informational journal
+/// entry decides. A resolution of a human pause there means the run was
+/// waiting and was released; anything else means the previous execution
+/// simply stopped.
+fn resume_cause(journal: &[JournalEntry]) -> ResumeCause {
+    let last = journal.iter().rev().find(|e| !e.is_informational());
+    match last {
+        Some(JournalEntry::SkillActivationDecided { .. })
+        | Some(JournalEntry::AgentDelegationDecided { .. }) => ResumeCause::PauseResolved,
+        Some(JournalEntry::Note { key, .. }) if key == A2A_CONTINUATION_INPUT_NOTE => {
+            ResumeCause::PauseResolved
+        }
+        _ => ResumeCause::Interrupted,
+    }
+}
+
+/// Whether an earlier execution of this run left durable state (ADR 0036).
+/// Every execution writes a non-`Note` entry before (or together with) any
+/// `Note` of its own — action-source notes follow an `Intent`, a
+/// continuation note follows its `AgentDelegationInputRequested` — while the
+/// only notes written BEFORE a first execution are the API's caller
+/// attributions. So "any non-`Note` entry, or any recorded step" separates a
+/// resume from a first execution without naming note keys. (The pre-ADR-0036
+/// `!journal.is_empty()` test fired on every API-created run because of
+/// that attribution note.)
+fn has_prior_execution(run_steps: usize, journal: &[JournalEntry]) -> bool {
+    run_steps > 0
+        || journal
+            .iter()
+            .any(|e| !matches!(e, JournalEntry::Note { .. }))
 }
 
 /// The most recent `SkillActivationRequested` in the journal with no later
@@ -1508,6 +1576,65 @@ impl Kernel {
         let _ = self.events.send(RunEventEnvelope { run_id, seq, event });
     }
 
+    /// Record a refusal (ADR 0036): journal it (best-effort — the entry is
+    /// informational, so a store hiccup here is logged and never changes
+    /// what the run does next), then emit the live event and advance `seq`.
+    async fn reject(&self, run_id: Uuid, seq: &mut u64, r: Rejection) {
+        let entry = JournalEntry::Rejected {
+            step: r.step,
+            attempt: r.attempt,
+            source: r.source,
+            subject: r.subject,
+            reason: bounded_rejection_reason(&r.reason),
+            action: r.action,
+            arguments: r.arguments.as_ref().map(bounded_rejected_arguments),
+            branch: r.branch.clone(),
+            at_ms: now_ms(),
+        };
+        if let Err(e) = self.store.append_journal(run_id, entry).await {
+            tracing::warn!(
+                %run_id, step = r.step,
+                "journal: could not record a rejection (informational; the run continues): {e}"
+            );
+        }
+        self.emit(
+            run_id,
+            *seq,
+            RunEvent::Rejected {
+                step: r.step,
+                reason: r.reason,
+                attempt: r.attempt,
+                branch: r.branch,
+                proposal_seq: r.proposal_seq,
+            },
+        );
+        *seq += 1;
+    }
+
+    /// Record that this execution resumes durable state (ADR 0036). Best-
+    /// effort for the same reason as [`Self::reject`].
+    async fn record_resumed(
+        &self,
+        run_id: Uuid,
+        journal: &[JournalEntry],
+        at_step: u32,
+        replayed_steps: Vec<u32>,
+    ) {
+        let entry = JournalEntry::Resumed {
+            at_step,
+            session: execution_session_id().to_string(),
+            cause: resume_cause(journal),
+            replayed_steps,
+            at_ms: now_ms(),
+        };
+        if let Err(e) = self.store.append_journal(run_id, entry).await {
+            tracing::warn!(
+                %run_id,
+                "journal: could not record the resume (informational; the run continues): {e}"
+            );
+        }
+    }
+
     /// Governed check before a run may attempt one more A2A delegation (ADR
     /// 0022): budget, chain depth, and cycle detection — the kernel's
     /// admission-control point, mirroring the ADR 0020/0021 skill-gate Deny
@@ -1593,7 +1720,22 @@ impl Kernel {
         schema: &ActionSchema,
         seq: &mut u64,
         first_failure: serde_json::Value,
+        decision_seq: Option<u64>,
     ) -> Result<(serde_json::Value, bool, Vec<(String, u64)>), KernelError> {
+        // Every refusal below refers to this step's accepted, journaled
+        // `Decision` (ADR 0036) — never to an adjacent event.
+        let refusal =
+            |attempt: u32, source: RejectionSource, agent: &str, reason: String| Rejection {
+                step: step_index,
+                attempt,
+                source,
+                subject: RejectionSubject::Decision,
+                reason,
+                action: Some(agent.to_string()),
+                arguments: None,
+                branch: None,
+                proposal_seq: decision_seq,
+            };
         // Preserve the caller's own failure reason (e.g. "circuit open...")
         // as the outcome if NEITHER phase below ever dials anything — never
         // silently discard it behind a placeholder. This matters whenever
@@ -1630,33 +1772,33 @@ impl Kernel {
                     break;
                 };
                 if let Err(reason) = self.authorize_delegation(run, attempted, &origin) {
-                    self.emit(
+                    self.reject(
                         run_id,
-                        *seq,
-                        RunEvent::Rejected {
-                            step: step_index,
-                            reason: format!("retry refused: {reason}"),
-                            attempt: attempt_n,
-                            branch: None,
-                        },
-                    );
-                    *seq += 1;
+                        seq,
+                        refusal(
+                            attempt_n,
+                            RejectionSource::DelegationLimit,
+                            primary_action,
+                            format!("retry refused: {reason}"),
+                        ),
+                    )
+                    .await;
                     aborted = true;
                     break;
                 }
                 attempted += 1;
                 if let Some(gate_refusal) = self.delegation_gate_refusal(primary_action, &origin) {
-                    self.emit(
+                    self.reject(
                         run_id,
-                        *seq,
-                        RunEvent::Rejected {
-                            step: step_index,
-                            reason: gate_refusal,
-                            attempt: attempt_n,
-                            branch: None,
-                        },
-                    );
-                    *seq += 1;
+                        seq,
+                        refusal(
+                            attempt_n,
+                            RejectionSource::DelegationGate,
+                            primary_action,
+                            gate_refusal,
+                        ),
+                    )
+                    .await;
                     aborted = true;
                     break;
                 }
@@ -1679,12 +1821,14 @@ impl Kernel {
                 if ok {
                     break;
                 }
-                self.emit(
+                self.reject(
                     run_id,
-                    *seq,
-                    RunEvent::Rejected {
-                        step: step_index,
-                        reason: format!(
+                    seq,
+                    refusal(
+                        attempt_n,
+                        RejectionSource::DelegationRetry,
+                        primary_action,
+                        format!(
                             "delegation attempt to '{primary_action}' failed: {} — retrying \
                              ({attempt_n}/{})",
                             result
@@ -1693,11 +1837,9 @@ impl Kernel {
                                 .unwrap_or("unknown error"),
                             self.config.resilience.max_retries_per_delegation
                         ),
-                        attempt: attempt_n,
-                        branch: None,
-                    },
-                );
-                *seq += 1;
+                    ),
+                )
+                .await;
             }
         }
 
@@ -1713,52 +1855,52 @@ impl Kernel {
                         self.tools.circuit_state(candidate),
                         CircuitCheck::Open { .. }
                     ) {
-                        self.emit(
+                        self.reject(
                             run_id,
-                            *seq,
-                            RunEvent::Rejected {
-                                step: step_index,
-                                reason: format!(
+                            seq,
+                            refusal(
+                                (i + 1) as u32,
+                                RejectionSource::CircuitOpen,
+                                candidate,
+                                format!(
                                     "sanctioned fallback '{candidate}' skipped — its circuit is \
                                      open"
                                 ),
-                                attempt: (i + 1) as u32,
-                                branch: None,
-                            },
-                        );
-                        *seq += 1;
+                            ),
+                        )
+                        .await;
                         continue;
                     }
                     let Some(origin) = self.tools.a2a_origin(candidate) else {
                         continue;
                     };
                     if let Err(reason) = self.authorize_delegation(run, attempted, &origin) {
-                        self.emit(
+                        self.reject(
                             run_id,
-                            *seq,
-                            RunEvent::Rejected {
-                                step: step_index,
-                                reason: format!("fallback refused: {reason}"),
-                                attempt: (i + 1) as u32,
-                                branch: None,
-                            },
-                        );
-                        *seq += 1;
+                            seq,
+                            refusal(
+                                (i + 1) as u32,
+                                RejectionSource::DelegationLimit,
+                                candidate,
+                                format!("fallback refused: {reason}"),
+                            ),
+                        )
+                        .await;
                         break;
                     }
                     attempted += 1;
                     if let Some(gate_refusal) = self.delegation_gate_refusal(candidate, &origin) {
-                        self.emit(
+                        self.reject(
                             run_id,
-                            *seq,
-                            RunEvent::Rejected {
-                                step: step_index,
-                                reason: gate_refusal,
-                                attempt: (i + 1) as u32,
-                                branch: None,
-                            },
-                        );
-                        *seq += 1;
+                            seq,
+                            refusal(
+                                (i + 1) as u32,
+                                RejectionSource::DelegationGate,
+                                candidate,
+                                gate_refusal,
+                            ),
+                        )
+                        .await;
                         break;
                     }
                     let (r, o, attrs) = self
@@ -2029,7 +2171,7 @@ impl Kernel {
             return Ok(run);
         }
 
-        let resumed = !run.steps.is_empty() || !journal.is_empty();
+        let resumed = has_prior_execution(run.steps.len(), &journal);
         if resumed {
             tracing::info!(
                 %run_id,
@@ -2041,6 +2183,58 @@ impl Kernel {
 
         run.status = RunStatus::Running;
         self.store.put(run.clone()).await?;
+
+        // Make the resume visible in the run's own history (ADR 0036). The
+        // entry is computed from the journal snapshot loaded above — the same
+        // snapshot every replay decision below reads — and is appended AFTER
+        // that snapshot was taken, so this execution cannot see it; a later
+        // one ignores it (informational, see `fold_step`).
+        if resumed {
+            let (at_step, replayed_steps) = if self.config.mode == RunMode::Plan {
+                // The active generation is the last journaled plan; it is
+                // replayed, never re-queried.
+                #[allow(clippy::cast_possible_truncation)]
+                let generations = journal
+                    .iter()
+                    .filter(|e| matches!(e, JournalEntry::PlanProposed { .. }))
+                    .count() as u32;
+                match generations.checked_sub(1) {
+                    Some(g) => (g * PLAN_GENERATION_STRIDE, vec![g * PLAN_GENERATION_STRIDE]),
+                    None => (0, Vec::new()),
+                }
+            } else {
+                // Only the first step after a resume can be replayed: earlier
+                // ones are already recorded, and the snapshot holds nothing
+                // later. Replayed = a journaled Decision, or a resolved Allow
+                // on a human ask (whose decision is the model's journaled
+                // original proposal).
+                #[allow(clippy::cast_possible_truncation)]
+                let at_step = run.steps.len() as u32;
+                let f = fold_step(&journal, at_step);
+                let allowed_skill = f.skill_activation.as_ref().is_some_and(|p| {
+                    matches!(
+                        p.decision,
+                        Some(
+                            SkillActivationDecision::AllowOnce
+                                | SkillActivationDecision::AllowAlways
+                        )
+                    )
+                });
+                let allowed_delegation = f.delegation.as_ref().is_some_and(|p| {
+                    matches!(
+                        p.decision,
+                        Some(
+                            AgentDelegationDecision::AllowOnce
+                                | AgentDelegationDecision::AllowAlways
+                        )
+                    )
+                });
+                let replayed = f.decision.is_some() || allowed_skill || allowed_delegation;
+                (at_step, if replayed { vec![at_step] } else { Vec::new() })
+            };
+            self.record_resumed(run_id, &journal, at_step, replayed_steps)
+                .await;
+        }
 
         // Journal the extension trust posture once (ADR 0012): what ran, and
         // under which trust mode — durably attributable, not re-derived.
@@ -2130,6 +2324,9 @@ impl Kernel {
             // iteration after a resume).
             let mut folded = fold_step(&journal, step_index);
             let step_span = tracing::info_span!("kelter.step", step = step_index);
+            // `seq` of this step's accepted (or replayed) `Proposed` event —
+            // what a refused delegation retry/fallback refers to (ADR 0036).
+            let mut decision_seq: Option<u64> = None;
 
             // A decided pending skill-activation request (ADR 0021): only
             // DECIDED ones reach here (the top-of-function early check above
@@ -2309,6 +2506,7 @@ impl Kernel {
                     action = %action,
                     "resume: replaying journaled decision — model NOT queried"
                 );
+                decision_seq = Some(seq);
                 self.emit(
                     run_id,
                     seq,
@@ -2375,23 +2573,48 @@ impl Kernel {
                         Err(e) => {
                             let reason = format!("policy error: {e}");
                             tracing::warn!(%run_id, step = step_index, attempt, "{reason}");
-                            self.emit(
+                            self.reject(
                                 run_id,
-                                seq,
-                                RunEvent::Rejected {
+                                &mut seq,
+                                Rejection {
                                     step: step_index,
-                                    reason: reason.clone(),
                                     attempt,
+                                    source: RejectionSource::PolicyError,
+                                    subject: RejectionSubject::None,
+                                    reason: reason.clone(),
+                                    action: None,
+                                    arguments: None,
                                     branch: None,
+                                    proposal_seq: None,
                                 },
-                            );
-                            seq += 1;
+                            )
+                            .await;
                             last_error = Some(reason);
                             continue;
                         }
                     };
                     let usage = proposal.usage;
                     let proposed = proposal.action;
+                    // Kept for the journal (ADR 0036): validation consumes
+                    // the proposal, and a refused one is journaled nowhere
+                    // else.
+                    let proposal_seq = seq;
+                    let refused = |source: RejectionSource,
+                                   action: &str,
+                                   args: &serde_json::Value,
+                                   reason: String| Rejection {
+                        step: step_index,
+                        attempt,
+                        source,
+                        subject: RejectionSubject::Proposal,
+                        reason,
+                        action: Some(action.to_string()),
+                        arguments: Some(args.clone()),
+                        branch: None,
+                        proposal_seq: Some(proposal_seq),
+                    };
+                    let proposed_action = proposed.action.clone();
+                    let proposed_arguments = proposed.arguments.clone();
 
                     self.emit(
                         run_id,
@@ -2462,17 +2685,17 @@ impl Kernel {
                                         prior.result
                                     )
                                 };
-                                self.emit(
+                                self.reject(
                                     run_id,
-                                    seq,
-                                    RunEvent::Rejected {
-                                        step: step_index,
-                                        reason: reason.clone(),
-                                        attempt,
-                                        branch: None,
-                                    },
-                                );
-                                seq += 1;
+                                    &mut seq,
+                                    refused(
+                                        RejectionSource::Duplicate,
+                                        v.action(),
+                                        v.arguments(),
+                                        reason.clone(),
+                                    ),
+                                )
+                                .await;
                                 last_error = Some(reason);
                                 continue;
                             }
@@ -2509,17 +2732,17 @@ impl Kernel {
                                     }
                                 };
                                 if let Some(reason) = refusal {
-                                    self.emit(
+                                    self.reject(
                                         run_id,
-                                        seq,
-                                        RunEvent::Rejected {
-                                            step: step_index,
-                                            reason: reason.clone(),
-                                            attempt,
-                                            branch: None,
-                                        },
-                                    );
-                                    seq += 1;
+                                        &mut seq,
+                                        refused(
+                                            RejectionSource::DelegationLimit,
+                                            v.action(),
+                                            v.arguments(),
+                                            reason.clone(),
+                                        ),
+                                    )
+                                    .await;
                                     last_error = Some(reason);
                                     continue;
                                 }
@@ -2539,17 +2762,17 @@ impl Kernel {
                                         DelegationDecisionOutcome::Allow(_) => { /* fall through */
                                         }
                                         DelegationDecisionOutcome::Deny(reason) => {
-                                            self.emit(
+                                            self.reject(
                                                 run_id,
-                                                seq,
-                                                RunEvent::Rejected {
-                                                    step: step_index,
-                                                    reason: reason.clone(),
-                                                    attempt,
-                                                    branch: None,
-                                                },
-                                            );
-                                            seq += 1;
+                                                &mut seq,
+                                                refused(
+                                                    RejectionSource::DelegationGate,
+                                                    v.action(),
+                                                    v.arguments(),
+                                                    reason.clone(),
+                                                ),
+                                            )
+                                            .await;
                                             last_error = Some(reason);
                                             continue;
                                         }
@@ -2628,17 +2851,17 @@ impl Kernel {
                                     match gate.authorize_activation(name, &run.active_skills) {
                                         ActivationAuthorization::Allow(_) => { /* fall through */ }
                                         ActivationAuthorization::Deny(reason) => {
-                                            self.emit(
+                                            self.reject(
                                                 run_id,
-                                                seq,
-                                                RunEvent::Rejected {
-                                                    step: step_index,
-                                                    reason: reason.clone(),
-                                                    attempt,
-                                                    branch: None,
-                                                },
-                                            );
-                                            seq += 1;
+                                                &mut seq,
+                                                refused(
+                                                    RejectionSource::SkillGate,
+                                                    v.action(),
+                                                    v.arguments(),
+                                                    reason.clone(),
+                                                ),
+                                            )
+                                            .await;
                                             last_error = Some(reason);
                                             continue;
                                         }
@@ -2716,22 +2939,23 @@ impl Kernel {
                                 )
                                 .await?;
                             last_error = None;
+                            decision_seq = Some(proposal_seq);
                             chosen = Some(v);
                             break;
                         }
                         Err(e) => {
                             let reason = e.to_string();
-                            self.emit(
+                            self.reject(
                                 run_id,
-                                seq,
-                                RunEvent::Rejected {
-                                    step: step_index,
-                                    reason: reason.clone(),
-                                    attempt,
-                                    branch: None,
-                                },
-                            );
-                            seq += 1;
+                                &mut seq,
+                                refused(
+                                    RejectionSource::Schema,
+                                    &proposed_action,
+                                    &proposed_arguments,
+                                    reason.clone(),
+                                ),
+                            )
+                            .await;
                             last_error = Some(format!(
                                 "your previous proposal was rejected: {reason}. Propose again."
                             ));
@@ -3086,6 +3310,7 @@ impl Kernel {
                                 &schema,
                                 &mut seq,
                                 result.clone(),
+                                decision_seq,
                             )
                             .await?;
                         result = r;
@@ -3588,17 +3813,28 @@ impl Kernel {
                         tracing::warn!(%run_id, "{reason}");
                         if was_replan && replans_used < resilience.max_replans {
                             replans_used += 1;
-                            self.emit(
+                            // The refused revision is never journaled as a
+                            // `PlanProposed`, so the entry carries it (ADR
+                            // 0036); it was never announced as `Proposed`.
+                            self.reject(
                                 run_id,
-                                seq,
-                                RunEvent::Rejected {
+                                &mut seq,
+                                Rejection {
                                     step: step_base,
-                                    reason: reason.clone(),
                                     attempt: replans_used,
+                                    source: RejectionSource::PlanValidation,
+                                    subject: RejectionSubject::Proposal,
+                                    reason: reason.clone(),
+                                    action: Some(crate::plan::PROPOSE_PLAN_ACTION.into()),
+                                    arguments: Some(
+                                        serde_json::to_value(&plan)
+                                            .unwrap_or(serde_json::Value::Null),
+                                    ),
                                     branch: None,
+                                    proposal_seq: None,
                                 },
-                            );
-                            seq += 1;
+                            )
+                            .await;
                             replan_guidance = Some(format!(
                                 "{}\nYour previous revised plan was REJECTED by validation: {}. \
                              Propose a corrected plan.",
@@ -3630,6 +3866,25 @@ impl Kernel {
                     .await?;
                 plans.push(plan);
             }
+            // What a refused node of this generation refers to (ADR 0036).
+            let plan_seq = seq;
+            let node_refusal = |step: u32,
+                                attempt: u32,
+                                source: RejectionSource,
+                                node: &crate::plan::PlanNode,
+                                reason: String| {
+                Rejection {
+                    step,
+                    attempt,
+                    source,
+                    subject: RejectionSubject::PlanNode,
+                    reason,
+                    action: node.action.clone(),
+                    arguments: None,
+                    branch: Some(node.id.clone()),
+                    proposal_seq: Some(plan_seq),
+                }
+            };
             self.emit(
                 run_id,
                 seq,
@@ -3839,17 +4094,18 @@ impl Kernel {
                                      this run",
                                     fold.agent
                                 );
-                                    self.emit(
+                                    self.reject(
                                         run_id,
-                                        seq,
-                                        RunEvent::Rejected {
+                                        &mut seq,
+                                        node_refusal(
                                             step,
-                                            reason: reason.clone(),
-                                            attempt: 0,
-                                            branch: Some(node.id.clone()),
-                                        },
-                                    );
-                                    seq += 1;
+                                            0,
+                                            RejectionSource::OperatorDenied,
+                                            node,
+                                            reason.clone(),
+                                        ),
+                                    )
+                                    .await;
                                     let result = serde_json::json!({ "error": reason });
                                     self.record_node_step(
                                         &mut run,
@@ -3946,7 +4202,8 @@ impl Kernel {
                             Some(origin) => {
                                 self.authorize_delegation(&run, a2a_attempts, origin).err()
                             }
-                        };
+                        }
+                        .map(|reason| (RejectionSource::DelegationLimit, reason));
                         a2a_attempts += 1;
                         // Circuit-breaker (ADR 0023): an open circuit is a node
                         // failure here — plan-mode does not retry/fall back within
@@ -3958,24 +4215,23 @@ impl Kernel {
                                 CircuitCheck::Open { .. }
                             )
                             .then(|| {
-                                format!(
-                                    "agent circuit open for '{action_name}' — refusing to dial \
-                                 (plan-mode does not retry/fall back within a node this round)"
+                                (
+                                    RejectionSource::CircuitOpen,
+                                    format!(
+                                        "agent circuit open for '{action_name}' — refusing to \
+                                         dial (plan-mode does not retry/fall back within a node \
+                                         this round)"
+                                    ),
                                 )
                             })
                         });
-                        if let Some(reason) = refusal {
-                            self.emit(
+                        if let Some((source, reason)) = refusal {
+                            self.reject(
                                 run_id,
-                                seq,
-                                RunEvent::Rejected {
-                                    step,
-                                    reason: reason.clone(),
-                                    attempt: 0,
-                                    branch: Some(node.id.clone()),
-                                },
-                            );
-                            seq += 1;
+                                &mut seq,
+                                node_refusal(step, 0, source, node, reason.clone()),
+                            )
+                            .await;
                             let result = serde_json::json!({ "error": reason });
                             self.record_node_step(&mut run, step, node, result.clone(), false)
                                 .await?;
@@ -4001,17 +4257,18 @@ impl Kernel {
                             match gate.authorize_delegation_to(&action_name, &origin) {
                                 DelegationDecisionOutcome::Allow(_) => { /* dispatch below */ }
                                 DelegationDecisionOutcome::Deny(reason) => {
-                                    self.emit(
+                                    self.reject(
                                         run_id,
-                                        seq,
-                                        RunEvent::Rejected {
+                                        &mut seq,
+                                        node_refusal(
                                             step,
-                                            reason: reason.clone(),
-                                            attempt: 0,
-                                            branch: Some(node.id.clone()),
-                                        },
-                                    );
-                                    seq += 1;
+                                            0,
+                                            RejectionSource::DelegationGate,
+                                            node,
+                                            reason.clone(),
+                                        ),
+                                    )
+                                    .await;
                                     let result = serde_json::json!({ "error": reason });
                                     self.record_node_step(
                                         &mut run,
@@ -4127,23 +4384,24 @@ impl Kernel {
                             max = resilience.max_node_retries,
                             "plan node failed — retrying (bounded)"
                         );
-                        self.emit(
+                        self.reject(
                             run_id,
-                            seq,
-                            RunEvent::Rejected {
-                                step: outcome.node_index,
-                                reason: truncate_chars(
+                            &mut seq,
+                            node_refusal(
+                                outcome.node_index,
+                                attempt,
+                                RejectionSource::NodeRetry,
+                                node,
+                                truncate_chars(
                                     &format!(
                                         "node '{}' attempt failed — retrying: {}",
                                         node.id, outcome.result
                                     ),
                                     400,
                                 ),
-                                attempt,
-                                branch: Some(node.id.clone()),
-                            },
-                        );
-                        seq += 1;
+                            ),
+                        )
+                        .await;
                         dispatched.remove(&node_index);
                         retry_fresh.insert(node_index);
                         continue;

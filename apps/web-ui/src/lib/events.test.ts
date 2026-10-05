@@ -109,3 +109,46 @@ describe("incomplete terminal (ADR 0033)", () => {
     expect(axisFor(RUN).terminal?.kind).toBe("incomplete");
   });
 });
+
+describe("ingestReplay — journaled refusals (ADR 0036)", () => {
+  it("folds `rejected` entries into the step and dedupes against live", () => {
+    ingestReplay(RUN, { task: "t", policy: "p" }, [
+      {
+        kind: "rejected",
+        step: 0,
+        attempt: 0,
+        source: "schema",
+        subject: "proposal",
+        reason: "bad args",
+        action: "echo",
+        arguments: { msg: 1 },
+        at_ms: 1,
+      },
+      { kind: "decision", step: 0, action: "echo", arguments: { message: "hi" } },
+      {
+        kind: "resumed",
+        at_step: 0,
+        session: "s",
+        cause: "interrupted",
+        replayed_steps: [0],
+        at_ms: 2,
+      },
+    ]);
+    // The same refusal arriving live must not double.
+    ingestEnvelope(
+      env(1, {
+        type: "rejected",
+        step: 0,
+        reason: "bad args",
+        attempt: 0,
+        branch: null,
+        proposal_seq: null,
+      })
+    );
+    const step = axisSteps(axisFor(RUN))[0];
+    // The refused proposal never becomes the step's action.
+    expect(step.action).toBe("echo");
+    expect(step.arguments).toEqual({ message: "hi" });
+    expect(step.rejections).toEqual([{ reason: "bad args", attempt: 0 }]);
+  });
+});

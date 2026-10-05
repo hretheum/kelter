@@ -159,7 +159,15 @@ export type RunEvent =
       // for ordinary step-mode events — today's single-lane behavior.
       branch: string | null;
     }
-  | { type: "rejected"; step: number; reason: string; attempt: number; branch: string | null }
+  | {
+      type: "rejected";
+      step: number;
+      reason: string;
+      attempt: number;
+      branch: string | null;
+      /* seq of the Proposed this refuses (ADR 0036); null when none exists. */
+      proposal_seq?: number | null;
+    }
   | {
       type: "executed";
       step: number;
@@ -335,6 +343,29 @@ export type JournalEntry =
   | { kind: "receipt"; step: number; ok: boolean; result: unknown }
   | { kind: "trust_posture"; entries: [string, string][] }
   | { kind: "plan_proposed"; plan: unknown }
+  /* ADR 0036 — informational. `subject` says what was refused: the proposal
+   * carried inline ("proposal"), this step's decision ("decision"), plan
+   * node `branch` ("plan_node"), or nothing proposed ("none"). */
+  | {
+      kind: "rejected";
+      step: number;
+      attempt: number;
+      source: string;
+      subject: "proposal" | "decision" | "plan_node" | "none";
+      reason: string;
+      action?: string;
+      arguments?: unknown;
+      branch?: string;
+      at_ms: number;
+    }
+  | {
+      kind: "resumed";
+      at_step: number;
+      session: string;
+      cause: "interrupted" | "pause_resolved";
+      replayed_steps: number[];
+      at_ms: number;
+    }
   | {
       kind: "terminal";
       status: RunStatus;
