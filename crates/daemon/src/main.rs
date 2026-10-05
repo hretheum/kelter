@@ -470,6 +470,12 @@ async fn main() -> anyhow::Result<()> {
     let (oracle, latitude) = policy::build_oracle(&cfg.policy)
         .context("failed to build policy adapter from [policy] config")?;
     tracing::info!("policy engine: {}", oracle.describe());
+    // The id every `resumed` journal entry this process writes carries (ADR
+    // 0036) — logged once so a journal row can be matched to this log.
+    tracing::info!(
+        session = %kernel_core::journal::execution_session_id(),
+        "execution session"
+    );
     let swappable = Arc::new(policy::SwappableOracle::new(oracle));
 
     // Tool substrate: spawn MCP servers (default: the bundled reference
