@@ -128,20 +128,46 @@ secret never appears in captured log output.
 
 Since logs go to stdout, cap them at the platform — not in the app.
 
-**Quadlet / Podman** (`deploy/kelter.container`):
+**Quadlet / Podman** (`deploy/kelter.container`) — **journald is the
+recommended driver under rootless Podman** (changed 2026-10-05, decision D19):
 
 ```ini
 [Container]
-LogDriver=k8s-file
-LogOpt=max-size=10mb
-LogOpt=max-file=3      # total ≤ 3 × 10 MB = 30 MB, rotated by podman
+LogDriver=journald     # podman run --log-driver journald
 ```
 
-Validate with the podman quadlet generator: `quadlet -dryrun -user` (the
-generated `podman run` carries `--log-driver` + `--log-opt max-size/max-file`).
-Alternative: `LogDriver=journald` and cap via journald
-(`/etc/systemd/journald.conf` → `SystemMaxUse=`). **Bare daemon** (no
-container): redirect stdout to a file and rotate it with `logrotate`, e.g.
+Why not `k8s-file` + `LogOpt=max-size=10mb` / `LogOpt=max-file=3` (the
+ADR 0017 original): on K12 (rootless Podman, Fedora CoreOS) `max-file` was not
+applied, so the "≤ 3 × 10 MB" cap the unit promised did not hold — a cap that
+exists only in the unit file is not a cap. journald enforces its limit itself,
+for every unit on the host, and rootless containers' logs land in the user
+journal (`journalctl --user -u kelter`), with the structured fields journald
+adds (`CONTAINER_NAME`, …).
+
+The cap then lives in journald, and **must be set explicitly** — the default
+(10 % of the filesystem, at most 4 GiB per journal) is a size nobody chose:
+
+```ini
+# /etc/systemd/journald.conf.d/50-size.conf   (root; on FCOS via Butane/Ignition)
+[Journal]
+SystemMaxUse=500M
+```
+
+then `systemctl restart systemd-journald`. `SystemMaxUse=` bounds the
+persistent journal (`/var/log/journal`) as a whole — system and per-user
+journal files alike — so the user units' logs are inside the cap. Check it
+with `journalctl --disk-usage`. Pick the value for the host; 500M is an
+example, not a measurement. Note the trade-off: the cap is host-wide, so a
+noisy neighbour unit can push kelter's older lines out before the cap is hit
+by kelter itself.
+
+Validate the unit with the podman quadlet generator: `quadlet -dryrun -user`
+(the generated `podman run` carries `--log-driver journald`);
+`scripts/check-quadlet.sh` does that and compares it with the installed unit.
+`k8s-file` + `LogOpt=` is still accepted by the generator, but ADR 0017 only
+ever verified it as a dry-run (podman 6.0.1) — if you choose it, confirm on
+the host that the rotated files actually stop at `max-file`. **Bare daemon** (no container): redirect
+stdout to a file and rotate it with `logrotate`, e.g.
 `kelter --config config.toml >> /var/log/kelter.log 2>&1`.
 
 ## Store retention (data-lifecycle, ADR 0017)

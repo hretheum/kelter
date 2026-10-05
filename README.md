@@ -155,6 +155,7 @@ cargo run -p daemon -- --config config.toml
 ```sh
 cd deploy && docker compose up
 # Podman/systemd: copy deploy/kelter.container to ~/.config/containers/systemd/
+# (deployment specifics as drop-ins — K12's: deploy/k12/README.md)
 ```
 
 **Desktop**

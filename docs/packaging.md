@@ -65,6 +65,6 @@ is the analogous human step on Windows.
 ## Deploy to the K12 homelab host — HUMAN STEP (hardware pending)
 
 The headless daemon ships as a Podman Quadlet (`deploy/kelter.container`),
-validated locally with `scripts/validate-quadlet.sh`. Deploying it to the K12
-host is deferred until that hardware arrives; it is a human step (copy the unit,
-`systemctl --user daemon-reload`, start, verify) — not done here.
+validated with `scripts/validate-quadlet.sh`. Deploying it to K12 is a human
+step: the canonical unit plus K12's drop-ins, installed and drift-checked as in
+[`deploy/k12/README.md`](../deploy/k12/README.md) (decision D19).
