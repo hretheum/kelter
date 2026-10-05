@@ -406,6 +406,14 @@ pub fn router_full_with_skipped(
         // journal replay for the historical execution axis, and cancel.
         .route("/api/v1/runs/{id}/events", get(get_run_events))
         .route("/api/v1/runs/{id}/cancel", post(cancel_run))
+        // Human confirmation of an unverified success (ADR 0037): POST
+        // confirms, DELETE revokes. The only way a `completed` run without a
+        // success contract becomes learnable. Bearer; journaled with the
+        // principal. No model path reaches it.
+        .route(
+            "/api/v1/runs/{id}/confirmation",
+            post(confirm_run).delete(revoke_run_confirmation),
+        )
         // Run-produced files (ADR 0029): list + read the files a run's own
         // journal says it wrote — never a workspace directory listing, never
         // an arbitrary filesystem path. Bearer. 404 when no files service is
@@ -727,6 +735,11 @@ struct CreateRun {
     /// Per-run step-budget override (B4); omitted = the daemon default.
     #[serde(default)]
     max_steps: Option<u32>,
+    /// Optional success contract (ADR 0037). Parsed and validated by hand so
+    /// a malformed one is a 422 that says what is wrong, before any run
+    /// exists.
+    #[serde(default)]
+    success_contract: Option<serde_json::Value>,
 }
 
 /// Hard ceiling on the per-run override — a client cannot buy an unbounded
@@ -754,9 +767,22 @@ async fn create_run(
                 .into_response();
         }
     }
+    let contract = match req.success_contract {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => match serde_json::from_value::<kernel_core::SuccessContract>(v) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!("invalid success_contract: {e}"),
+                )
+                    .into_response()
+            }
+        },
+    };
     match state
         .kernel
-        .create_run_bounded(req.task, req.max_steps)
+        .create_run_with_contract(req.task, req.max_steps, contract)
         .await
     {
         Ok(run_id) => {
@@ -796,6 +822,72 @@ async fn create_run(
                 Json(serde_json::json!({ "run_id": run_id })),
             )
                 .into_response()
+        }
+        Err(kernel_core::KernelError::InvalidRequest(msg)) => {
+            (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// POST /api/v1/runs/{id}/confirmation (ADR 0037): a human confirms that an
+/// unverified `completed` run (no success contract) really did its task,
+/// admitting it to learning. 409 for any other run, or if already confirmed.
+async fn confirm_run(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    decide_confirmation(
+        state,
+        headers,
+        id,
+        kernel_core::ConfirmationDecision::Confirm,
+    )
+    .await
+}
+
+/// DELETE /api/v1/runs/{id}/confirmation (ADR 0037): revoke a confirmation;
+/// the run leaves learning and what was distilled from it alone is forgotten.
+async fn revoke_run_confirmation(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    decide_confirmation(
+        state,
+        headers,
+        id,
+        kernel_core::ConfirmationDecision::Revoke,
+    )
+    .await
+}
+
+async fn decide_confirmation(
+    state: ApiState,
+    headers: HeaderMap,
+    id: Uuid,
+    decision: kernel_core::ConfirmationDecision,
+) -> Response {
+    let principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    match state
+        .kernel
+        .decide_success_confirmation(id, decision, &principal)
+        .await
+    {
+        Ok((run, forgotten)) => Json(serde_json::json!({
+            "run": run,
+            "forgotten_learned_ids": forgotten,
+        }))
+        .into_response(),
+        Err(kernel_core::KernelError::InvalidState(msg)) => {
+            (StatusCode::CONFLICT, msg).into_response()
+        }
+        Err(kernel_core::KernelError::Store(kernel_core::StoreError::NotFound(_))) => {
+            (StatusCode::NOT_FOUND, "run not found").into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -891,6 +983,10 @@ async fn get_run_events(
             "task": run.task,
             "policy": run.policy,
             "status": run.status,
+            // ADR 0037, additive: the success basis and contract.
+            "verification": run.verification,
+            "success_contract": run.success_contract,
+            "confirmation": run.confirmation,
             "journal": journal,
         }))
         .into_response(),

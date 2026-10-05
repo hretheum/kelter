@@ -16,10 +16,10 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use kernel_core::{
-    ActionSchema, ActionSource, ActionSpec, ExecutionContext, ExecutionError, InMemoryLearnedStore,
-    Kernel, KernelConfig, Latitude, LearnedFact, LearnedPlan, LearnedProvenance, LearnedStore,
-    NodeType, Plan, PlanNode, PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction,
-    RunStatus, ValidatedAction, LEARNED_LEVEL,
+    ActionSchema, ActionSource, ActionSpec, ConfirmationDecision, ExecutionContext, ExecutionError,
+    InMemoryLearnedStore, Kernel, KernelConfig, Latitude, LearnedFact, LearnedPlan,
+    LearnedProvenance, LearnedStore, NodeType, Plan, PlanNode, PolicyContext, PolicyError,
+    PolicyOracle, Proposal, ProposedAction, RunStatus, ValidatedAction, LEARNED_LEVEL,
 };
 use memory::{InMemoryProvider, MemoryProvider};
 use uuid::Uuid;
@@ -275,6 +275,13 @@ async fn distillation_tags_provenance_and_forget_batch_reverses_it() {
         .await
         .unwrap();
     assert_eq!(run.status, RunStatus::Completed);
+    // ADR 0037: a run without a success contract is unverified and learnable
+    // only once a human confirms it. Setup only — this test is about
+    // provenance and batch forget, so the run is confirmed first.
+    kernel
+        .decide_success_confirmation(run.id, ConfirmationDecision::Confirm, "tester")
+        .await
+        .unwrap();
 
     let report = kernel.distill(10).await.unwrap();
     assert_eq!(report.facts_created, 1);

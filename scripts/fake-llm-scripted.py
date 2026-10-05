@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Scripted OpenAI-compatible /v1/chat/completions: replies from a queue,
 # then `finish` forever. Logs every reply it served to calls.log (cwd).
-import json, sys
+import json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 QUEUE = [
@@ -14,6 +14,10 @@ QUEUE = [
     {"action": "append_ledger", "arguments": {"entry": "durable-hello"}},
 ]
 FINISH = {"action": "finish", "arguments": {"summary": "done"}}
+# Another smoke can supply its own script: FAKE_LLM_QUEUE=<path to a JSON list>.
+if os.environ.get("FAKE_LLM_QUEUE"):
+    with open(os.environ["FAKE_LLM_QUEUE"]) as f:
+        QUEUE = json.load(f)
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass

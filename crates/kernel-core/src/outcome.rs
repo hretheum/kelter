@@ -19,6 +19,7 @@
 //! to have sent an e-mail still completes. Closing that gap needs a verifier,
 //! not a counter.
 
+use crate::contract::{ContractReport, SuccessContract, Verification};
 use crate::engine::{StepRecord, ACTIVATE_SKILL_ACTION, DEACTIVATE_SKILL_ACTION, FINISH_ACTION};
 use crate::plan::REVIEW_ACTION;
 
@@ -73,6 +74,48 @@ pub fn no_effect_reason(steps: &[StepRecord]) -> String {
     }
 }
 
+/// The kernel's success verdict for a run that claims to be done (the model
+/// proposed `finish`, or the last plan generation finished clean).
+#[derive(Debug, Clone)]
+pub struct SuccessVerdict {
+    pub status: crate::RunStatus,
+    /// The `error` an `incomplete` run carries; `None` for `completed`.
+    pub reason: Option<String>,
+    pub verification: Verification,
+    pub report: Option<ContractReport>,
+}
+
+/// ADR 0033 floor, then ADR 0037 contract. Pure and deterministic, so a
+/// replay reaches the same verdict without the model:
+///
+/// 1. no effective step → `incomplete` (the ADR 0033 reason), whatever the
+///    contract says;
+/// 2. a contract → `completed` iff every condition holds, else `incomplete`
+///    naming the conditions that failed; `verification: contract`;
+/// 3. no contract → `completed`, `verification: none` (unverified).
+pub fn verdict(steps: &[StepRecord], contract: Option<&SuccessContract>) -> SuccessVerdict {
+    let report = contract.map(|c| crate::contract::evaluate(c, steps));
+    let verification = if contract.is_some() {
+        Verification::Contract
+    } else {
+        Verification::None
+    };
+    let (status, reason) = if effective_steps(steps) == 0 {
+        (crate::RunStatus::Incomplete, Some(no_effect_reason(steps)))
+    } else {
+        match &report {
+            Some(r) if !r.satisfied => (crate::RunStatus::Incomplete, Some(r.unmet_reason())),
+            _ => (crate::RunStatus::Completed, None),
+        }
+    };
+    SuccessVerdict {
+        status,
+        reason,
+        verification,
+        report,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +163,50 @@ mod tests {
             step(REVIEW_STEP_ACTION, true),
         ];
         assert_eq!(effective_steps(&steps), 1);
+    }
+
+    fn send_email_contract() -> SuccessContract {
+        serde_json::from_value(serde_json::json!({
+            "require": [{"kind": "action_succeeded", "action": "send_email"}]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn verdict_without_contract_is_completed_but_unverified() {
+        let v = verdict(&[step("write_file", true)], None);
+        assert_eq!(v.status, crate::RunStatus::Completed);
+        assert_eq!(v.verification, Verification::None);
+        assert!(v.reason.is_none() && v.report.is_none());
+    }
+
+    #[test]
+    fn verdict_with_unmet_contract_is_incomplete_with_the_failing_condition() {
+        let c = send_email_contract();
+        let v = verdict(&[step("write_file", true)], Some(&c));
+        assert_eq!(v.status, crate::RunStatus::Incomplete);
+        assert_eq!(v.verification, Verification::Contract);
+        let reason = v.reason.unwrap();
+        assert!(reason.contains("success contract not met"), "{reason}");
+        assert!(reason.contains("send_email"), "{reason}");
+        assert!(!v.report.unwrap().satisfied);
+    }
+
+    #[test]
+    fn verdict_with_met_contract_is_completed_and_verified() {
+        let c = send_email_contract();
+        let v = verdict(&[step("send_email", true)], Some(&c));
+        assert_eq!(v.status, crate::RunStatus::Completed);
+        assert_eq!(v.verification, Verification::Contract);
+        assert!(v.report.unwrap().satisfied);
+    }
+
+    #[test]
+    fn verdict_keeps_the_adr_0033_floor_first() {
+        let c = send_email_contract();
+        let v = verdict(&[step(FINISH_ACTION, true)], Some(&c));
+        assert_eq!(v.status, crate::RunStatus::Incomplete);
+        assert!(v.reason.unwrap().contains("without executing any action"));
     }
 
     #[test]

@@ -100,6 +100,25 @@ export interface Run {
   created_at: number;
   cost_usd: number | null;
   active_skills: string[];
+  /* ADR 0037 (additive; absent on older daemons). How the kernel judged
+   * success: "contract" = checked against the caller's success contract,
+   * "none" = no contract (unverified — kept out of learning until a human
+   * confirms), null = in flight, failed/canceled, or a pre-0037 run. */
+  verification?: Verification | null;
+  contract_report?: ContractReport | null;
+  confirmation?: RunConfirmation | null;
+}
+
+export type Verification = "none" | "contract";
+
+export interface ContractReport {
+  satisfied: boolean;
+  conditions: { condition: { kind: string; action: string }; met: boolean; detail: string }[];
+}
+
+export interface RunConfirmation {
+  principal: string;
+  at_ms: number;
 }
 
 /* A human's answer to a paused activate_skill request (ADR 0021). Deny/allow
@@ -177,9 +196,16 @@ export type RunEvent =
       branch: string | null;
     }
   | { type: "reflection_written"; episode_id: string }
-  | { type: "completed"; output: unknown }
+  | { type: "completed"; output: unknown; verification?: Verification }
   | { type: "failed"; error: string }
-  | { type: "incomplete"; output: unknown; reason: string }
+  | {
+      type: "incomplete";
+      output: unknown;
+      reason: string;
+      verification?: Verification;
+      contract_report?: ContractReport | null;
+    }
+  | { type: "success_confirmation_decided"; decision: "confirm" | "revoke"; principal: string }
   | ({ type: "skill_activation_requested" } & PendingSkillActivationUi)
   | {
       type: "skill_activation_decided";

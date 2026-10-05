@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { outputView } from "./result";
+import { outputView, verificationView } from "./result";
+import type { Run } from "./api";
 
 describe("outputView", () => {
   it("renders the kernel finish shape as prose", () => {
@@ -42,5 +43,76 @@ describe("outputView", () => {
     const a: Record<string, unknown> = {};
     a.self = a;
     expect(() => outputView(a)).not.toThrow();
+  });
+});
+
+describe("verificationView (ADR 0037)", () => {
+  const base: Run = {
+    id: "r",
+    task: "t",
+    status: "completed",
+    steps: [],
+    output: null,
+    error: null,
+    policy: "p",
+    created_at: 0,
+    cost_usd: null,
+    active_skills: [],
+  };
+
+  it("offers confirmation only for an unverified completed run", () => {
+    const v = verificationView({ ...base, verification: "none", confirmation: null });
+    expect(v.tone).toBe("unverified");
+    expect(v.canConfirm).toBe(true);
+    expect(v.canRevoke).toBe(false);
+  });
+
+  it("offers revoke once confirmed, and names the principal", () => {
+    const v = verificationView({
+      ...base,
+      verification: "none",
+      confirmation: { principal: "eryk", at_ms: 1 },
+    });
+    expect(v.tone).toBe("confirmed");
+    expect(v.text).toContain("eryk");
+    expect(v.canConfirm).toBe(false);
+    expect(v.canRevoke).toBe(true);
+  });
+
+  it("treats a pre-ADR-0037 completed run (no verification) as unverified", () => {
+    for (const run of [{ ...base }, { ...base, verification: null }]) {
+      const v = verificationView(run);
+      expect(v.tone).toBe("unverified");
+      expect(v.canConfirm).toBe(true);
+    }
+  });
+
+  it("never offers confirmation for contract-verified or incomplete runs", () => {
+    for (const run of [
+      { ...base, verification: "contract" as const },
+      { ...base, status: "incomplete" as const, verification: "none" as const },
+      { ...base, status: "failed" as const },
+    ]) {
+      const v = verificationView(run);
+      expect(v.canConfirm).toBe(false);
+      expect(v.canRevoke).toBe(false);
+    }
+    expect(verificationView({ ...base, verification: "contract" }).tone).toBe("verified");
+  });
+
+  it("explains a failed contract on an incomplete run", () => {
+    const v = verificationView({
+      ...base,
+      status: "incomplete",
+      verification: "contract",
+      contract_report: {
+        satisfied: false,
+        conditions: [
+          { condition: { kind: "action_succeeded", action: "send_email" }, met: false, detail: "never executed" },
+        ],
+      },
+    });
+    expect(v.tone).toBe("contract_failed");
+    expect(v.text).toContain("1 of 1");
   });
 });

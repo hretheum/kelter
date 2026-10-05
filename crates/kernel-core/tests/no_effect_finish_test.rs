@@ -210,7 +210,7 @@ async fn immediate_finish_is_incomplete_not_completed() {
     while let Ok(env) = rx.try_recv() {
         match env.event {
             RunEvent::Completed { .. } => panic!("an action-less run must not emit Completed"),
-            RunEvent::Incomplete { output, reason } => {
+            RunEvent::Incomplete { output, reason, .. } => {
                 assert_eq!(output.unwrap()["summary"], "The e-mail has been sent.");
                 assert!(reason.contains("without executing any action"));
                 saw_incomplete = true;

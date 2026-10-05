@@ -85,6 +85,9 @@ log "=== 1: run a task, then distil ==="
 R1=$(submit "Append the entry learn-src to the ledger using append_ledger. Then finish.")
 [ "$(wait_done "$R1")" = completed ] || die "seed run did not complete"
 
+# ADR 0037: a run without a success contract is unverified and learnable only
+# once a human confirms it.
+authpost "/api/v1/runs/$R1/confirmation" >/dev/null || die "could not confirm the seed run"
 REP=$(authpost /api/v1/learn/distill '{"limit":10}')
 BATCH=$(printf '%s' "$REP" | python3 -c 'import json,sys;print(json.load(sys.stdin)["batch_id"])')
 CNT=$(printf '%s' "$REP" | python3 -c 'import json,sys;print(json.load(sys.stdin)["facts_created"])')

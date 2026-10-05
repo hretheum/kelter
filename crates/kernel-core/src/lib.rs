@@ -10,9 +10,11 @@
 //!   gated reflection.
 //! - [`outcome`] — the success predicate: which steps let a run complete
 //!   (ADR 0033).
+//! - [`contract`] — the caller's declarative success contract (ADR 0037).
 //! - [`store`] — run persistence trait + in-memory implementation.
 
 pub mod action;
+pub mod contract;
 pub mod cost;
 pub mod delegation_gate;
 pub mod engine;
@@ -29,6 +31,9 @@ pub use action::{
     ActionSchema, ActionSpec, ProposedAction, ValidatedAction, ValidationError, A2A_ANCESTRY_ARG,
     A2A_DEPTH_ARG, IDEMPOTENCY_KEY_ARG,
 };
+pub use contract::{
+    ConditionResult, ContractCondition, ContractReport, SuccessContract, Verification,
+};
 pub use cost::{ModelPrice, PricingTable};
 pub use delegation_gate::{
     AgentDelegationDecision, DelegationDecisionOutcome, DelegationGate, DelegationRequestMeta,
@@ -37,11 +42,13 @@ pub use engine::{
     crash_point, is_a2a_action, ActionSource, AgentUsage, CircuitCheck, CompositeActionSource,
     DelegationLimits, ExecutionContext, ExecutionError, Kernel, KernelConfig, KernelError,
     PendingDelegation, PendingDelegationInput, PendingSkillActivation, PlanResilience,
-    ResilienceConfig, Run, RunEvent, RunEventEnvelope, RunMode, RunStatus, StepRecord,
-    A2A_CONTINUATION_INPUT_NOTE, ACTIVATE_SKILL_ACTION, DEACTIVATE_SKILL_ACTION, FINISH_ACTION,
-    MAX_PROGRESS_NOTES_PER_STEP,
+    ResilienceConfig, Run, RunConfirmation, RunEvent, RunEventEnvelope, RunMode, RunStatus,
+    StepRecord, A2A_CONTINUATION_INPUT_NOTE, ACTIVATE_SKILL_ACTION, DEACTIVATE_SKILL_ACTION,
+    FINISH_ACTION, MAX_PROGRESS_NOTES_PER_STEP,
 };
-pub use journal::{JournalEntry, PendingActivationFold, PendingDelegationFold, Usage};
+pub use journal::{
+    ConfirmationDecision, JournalEntry, PendingActivationFold, PendingDelegationFold, Usage,
+};
 pub use learned::{
     DistillReport, InMemoryLearnedStore, LearnedFact, LearnedPlan, LearnedProvenance, LearnedStore,
     LEARNED_LEVEL,
