@@ -930,26 +930,38 @@ async fn cancel_run(
 
 /// Shared preamble of the two run-files handlers (ADR 0029): auth, the
 /// 404-when-absent capability convention, run existence, then the run's
-/// journal. `Ok` carries the service + journal; `Err` is the ready response.
+/// journal. `Ok` carries the service + journal; `Err` is the ready response,
+/// boxed so the `Result` stays small (`clippy::result_large_err`: an axum
+/// `Response` is ≥128 bytes, and this is a plain fn, not a handler).
 async fn run_files_preamble(
     state: &ApiState,
     headers: &HeaderMap,
     id: Uuid,
-) -> Result<(Arc<RunFilesService>, Vec<kernel_core::JournalEntry>), Response> {
+) -> Result<(Arc<RunFilesService>, Vec<kernel_core::JournalEntry>), Box<Response>> {
     auth_gate(state, headers, None)?;
     let Some(files) = state.files.clone() else {
-        return Err((StatusCode::NOT_FOUND, "run files not supported").into_response());
+        return Err(Box::new(
+            (StatusCode::NOT_FOUND, "run files not supported").into_response(),
+        ));
     };
     match state.kernel.store().get(id).await {
         Ok(_) => {}
         Err(kernel_core::StoreError::NotFound(_)) => {
-            return Err((StatusCode::NOT_FOUND, "run not found").into_response())
+            return Err(Box::new(
+                (StatusCode::NOT_FOUND, "run not found").into_response(),
+            ))
         }
-        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()),
+        Err(e) => {
+            return Err(Box::new(
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            ))
+        }
     }
     match state.kernel.store().journal(id).await {
         Ok(journal) => Ok((files, journal)),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()),
+        Err(e) => Err(Box::new(
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        )),
     }
 }
 
@@ -962,7 +974,7 @@ async fn list_run_files(
 ) -> Response {
     let (files, journal) = match run_files_preamble(&state, &headers, id).await {
         Ok(ok) => ok,
-        Err(rejection) => return rejection,
+        Err(rejection) => return *rejection,
     };
     Json(serde_json::json!({ "run_id": id, "files": files.list(&journal) })).into_response()
 }
@@ -980,7 +992,7 @@ async fn get_run_file(
 ) -> Response {
     let (files, journal) = match run_files_preamble(&state, &headers, id).await {
         Ok(ok) => ok,
-        Err(rejection) => return rejection,
+        Err(rejection) => return *rejection,
     };
     match files.read(&journal, &name) {
         Ok(content) => Json(serde_json::json!({
