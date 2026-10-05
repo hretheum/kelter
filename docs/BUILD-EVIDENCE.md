@@ -3015,6 +3015,10 @@ journal         {"kind":"success_confirmation_decided","decision":"confirm","pri
   pattern `..`).
 - `cargo +1.99.0 clippy --workspace --all-targets -- -D warnings`,
   `cargo +1.99.0 fmt --all --check`: clean.
+- Desktop (`apps/desktop/src-tauri`; `Run` gained 4 fields, its test
+  literal updated): `cargo +1.99.0 fmt --all --check` clean, `cargo +1.99.0
+  clippy --all-targets -- -D warnings` clean, `cargo +1.99.0 test
+  --all-targets` 2 passed (after installing the CI's GTK/WebKit dev packages).
 - `pnpm --dir apps/web-ui test`: 2 files, **18** tests (+4,
   `verificationView`); `pnpm build` (tsc + vite) clean.
 - `scripts/smoke-success-contract.sh`: PASS — V (unknown action → 422, no
