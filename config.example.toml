@@ -60,7 +60,7 @@ mode = "step"        # "step" (one action at a time) | "plan" (validated durable
 # An unknown policy value is a startup ERROR (a typo in a safety gate fails closed).
 # [approval]
 # default = "allow"          # allow | ask | deny — for mutating actions with no entry below
-# ask_timeout_secs = 300     # no decision in time = deny (principal system:timeout); 0 = wait forever
+# ask_timeout_secs = 300     # no decision in time = deny (principal system:timeout); must be > 0
 # [approval.actions]
 # zastosuj_patch = "ask"     # pause the run; decide via POST /api/v1/runs/{id}/action-approval
 # uruchom_komende = "deny"   # refused, journaled (rejected/action_policy), the model is told

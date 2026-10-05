@@ -9,7 +9,7 @@ provenance_metadata:
 
 # ADR 0039: Cost budgets, enforced before they are crossed
 
-Status: accepted (two choices left to the maintainer under "Open") · Date: 2026-10-05 · Builds on: Phase 8 item B (pricing, `cost.rs`), ADR 0022 (the governed-refusal shape of the delegation budget), ADR 0036 (refusals journaled), ADR 0018 (principals) · Touches: ADR 0033/0037 (terminal statuses), ADR 0038 (pauses excluded from wall time)
+Status: accepted (maintainer decisions 2026-10-05 recorded under "Decided") · Date: 2026-10-05 · Builds on: Phase 8 item B (pricing, `cost.rs`), ADR 0022 (the governed-refusal shape of the delegation budget), ADR 0036 (refusals journaled), ADR 0018 (principals) · Touches: ADR 0033/0037 (terminal statuses), ADR 0038 (pauses excluded from wall time)
 
 ## Context
 
@@ -146,6 +146,15 @@ every other `Run` field. The stop condition "a counter needs a schema
 migration" was therefore not hit — by not building a counter. Re-read before
 every model call, so a concurrent run's spend is seen at the next call.
 
+**Decided (maintainer, 2026-10-05): the derived counter stays.** Its known
+inaccuracy is accepted for now: when **one principal runs several runs in
+parallel**, each run sees the others' spend only at its own next checkpoint,
+so runs checking in at the same moment can together overshoot the daily
+ceiling (by up to one worst-case call each); and retention pruning that
+day's runs would hide their spend. A separate per-principal ledger table —
+exact under concurrency and pruning, with its schema migration — comes with
+**KR1.4**, not in this ADR.
+
 ### 7. Stopping = a recorded refusal and `failed` with a structured reason
 
 On a stop (`record_budget_stop`, `engine.rs:2101`):
@@ -169,8 +178,8 @@ have to be added to every terminal-status list — retention's SQL
 mapping, the web UI, Glassbox — and an old client matching exhaustively would
 break; `failed` + `budget_stop` is additive and machine-distinguishable.
 `incomplete` keeps its ADR 0033/0037 meaning (finished, success not earned):
-a budget stop is not a verdict on success. **Open for the maintainer** (see
-below).
+a budget stop is not a verdict on success. **Decided (maintainer,
+2026-10-05): `failed` + `budget_stop` stays** — no new terminal status.
 
 ## Consequences
 
@@ -187,7 +196,9 @@ below).
   unchanged.
 - **Concurrent runs of one principal** each see the others' spend at their
   next call, not continuously: two runs checking in the same instant can
-  together exceed the daily ceiling by up to one worst-case call each.
+  together exceed the daily ceiling by up to one worst-case call each — the
+  daily counter can be wrong under parallel runs of one principal. Accepted
+  until KR1.4 adds a ledger table (§6).
 - **The day is the UTC day of creation.** A run created at 23:59 UTC spends
   against that day. Retention pruning today's runs (only if `max_runs` is
   tiny) would hide their spend.
@@ -199,14 +210,14 @@ below).
   call overshoot; the next checkpoint then stops the run with `used > max`
   visible in `budget_stop`.
 
-## Open (for the maintainer)
+## Decided (maintainer, 2026-10-05)
 
-1. **Terminal state on a budget stop**: `failed` + `budget_stop` (built) vs a
-   new terminal status `budget_exceeded`. The trade-off is §7.
-2. **The daily counter**: derived from run records (built, no migration) vs a
-   durable per-principal ledger table (exact under concurrency and pruning,
-   needs migration v-next). The derived one is sufficient until runs of one
-   principal run concurrently at scale.
+1. **Terminal state on a budget stop**: `failed` + `budget_stop`, as built —
+   no new terminal status (§7).
+2. **The daily counter**: stays derived from run records (no migration). It
+   can be wrong when one principal runs runs in parallel (§6, Known limits);
+   a durable per-principal ledger table with its migration comes with
+   **KR1.4**.
 
 ### For Glassbox — the exact contract (input to KR4.5)
 

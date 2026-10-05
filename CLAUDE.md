@@ -48,10 +48,10 @@ workspace).
 `architecture-overview.md`. Decisions → `docs/adr/` (0001–0039). The 2026-07-21
 adversarial audit + its fix passes → `docs/audit/AUDIT-2026-07-21.md`.
 
-**Testing.** `cargo test --workspace` is hermetic — 409 tests, plus 9
+**Testing.** `cargo test --workspace` is hermetic — 411 tests, plus 9
 `pgstore` tests that are `#[ignore]`d because they need a real Postgres. To run
 those too: start a `pgvector/pgvector:pg16` container, export
-`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (418 total — the
+`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (420 total — the
 figure CI reports). CI does this via a `services:` block. Bare `cargo test`
 reports them as `9 ignored`, never as a green pass. `cargo clippy --workspace
 --all-targets -D warnings` and `cargo fmt --check` are the bar. web-ui:
@@ -159,9 +159,12 @@ put a `budget_check` before it; if you add a side effect, declare
    `completed` as `Success`; Eryk wants a separate PR (an `Unverified`
    outcome that reflection/retrieval do not treat as success). The web UI
    shows/confirms verification but cannot submit a contract yet.
-5. **ADR 0038/0039 open choices** — terminal state on a budget stop (`failed`
-   + `budget_stop` built, vs a new status) and the daily counter (derived
-   from run records, built, vs a ledger table with a migration). Eryk's call.
+5. **ADR 0038/0039 follow-ups** (decided 2026-10-05) — budget stop stays
+   `failed` + `budget_stop`; the daily $ counter stays derived from run
+   records and can be wrong under parallel runs of one principal until
+   **KR1.4** adds a ledger table; unkeyed side-effect tools still bypass the
+   gate — **KR1.2b**. Startup now refuses `ask_timeout_secs = 0` and a policy
+   on a non-mutating action.
 6. **Phase 23 loose ends** — no plan leg in `scripts/smoke-selflearn.sh`, no
    web-UI surface for learned plans, and the `adopt_learned_plan` branch in
    `execute_plan` is unreviewed (it sits inside ADR 0030 generation /

@@ -9,7 +9,7 @@ provenance_metadata:
 
 # ADR 0038: A human gate on mutating actions
 
-Status: accepted (open points for the maintainer under "Open") · Date: 2026-10-05 · Builds on: ADR 0021/0023/0025/0026 (the durable human pause), ADR 0031 (what "mutating" means), ADR 0036 (refusals in the journal) · Touches: ADR 0007 (journal, exactly-once), ADR 0010/0030 (plan mode), ADR 0018 (principals), ADR 0033/0037 (verdict)
+Status: accepted (maintainer decisions 2026-10-05 recorded under "Decided") · Date: 2026-10-05 · Builds on: ADR 0021/0023/0025/0026 (the durable human pause), ADR 0031 (what "mutating" means), ADR 0036 (refusals in the journal) · Touches: ADR 0007 (journal, exactly-once), ADR 0010/0030 (plan mode), ADR 0018 (principals), ADR 0033/0037 (verdict)
 
 ## Context
 
@@ -29,7 +29,7 @@ nothing of the kind. `zastosuj_patch`, `uruchom_komende`, `append_ledger`,
 ```toml
 [approval]
 default = "allow"          # for mutating actions with no entry
-ask_timeout_secs = 300     # no decision in time = deny; 0 = wait forever
+ask_timeout_secs = 300     # no decision in time = deny; must be > 0
 [approval.actions]
 zastosuj_patch = "ask"
 uruchom_komende = "deny"
@@ -43,10 +43,16 @@ durable declaration — already what makes exactly-once resume work — so no ne
 manifest field and nothing the model can influence. Consequences, by design:
 
 - read-only tools (`czytaj_plik`, `git_status`, `git_diff`) are never gated,
-  even when the config names them — the daemon logs a WARN at startup for
-  such an entry (`log_governance`, `daemon/src/main.rs`);
+  and a config entry naming one is a **startup error**
+  (`ApprovalConfig::check_against`, `daemon/src/config.rs`, called from
+  `log_governance` in `daemon/src/main.rs`) — the entry could never take
+  effect, and the operator who wrote it believes it does. The same holds for
+  `delegate_to_*` and kernel actions. A name the registry does not offer at
+  all stays a WARN: it may belong to an extension refused at startup
+  (ADR 0035);
 - an *unkeyed* side-effect tool is conservatively **not** gated — the same
-  conservative reading ADR 0031 takes, and the same fix: declare the key;
+  conservative reading ADR 0031 takes, and the same fix: declare the key.
+  Closing that gap is a separate task, **KR1.2b** (see "Known limits");
 - `delegate_to_*` is never gated here (it declares no key, and it has its own
   gate, ADR 0023);
 - kernel-owned actions (`finish`, `activate_skill`) are never gated.
@@ -162,10 +168,12 @@ regression test now lists the new status.
 ### 6. Timeout = deny
 
 `daemon::approval_sweep::sweep_timed_out_action_approvals` (every 30 s, only
-when some policy can ask and `ask_timeout_secs > 0`) calls
+when some policy can ask) calls
 `decide_action_approval(…, Deny, "system:timeout")` and resumes the run.
-`ask_timeout_secs = 0` disables it — then a pause waits for a human
-indefinitely; that is an explicit operator choice, not the default (300 s).
+`ask_timeout_secs` must be **> 0**: `0` is a config error at startup
+(`ApprovalConfig::validate`, run by `Config::load`), so every pause ends —
+by a human, or by the timeout deny. Default 300 s. (The kernel type still
+reads `0` as "no expiry" for library callers; the daemon never passes it.)
 
 ### 7. API and events, additive only
 
@@ -203,8 +211,9 @@ model's only influence is what it proposes, and that is what is gated.
 
 - **Unkeyed side-effect tools are not gated** (see §1). A WASM or MCP tool
   that changes state without declaring `idempotency_key` passes untouched.
-  The startup log lists configured names that are not mutating; it cannot
-  find tools that should have been.
+  Startup refuses a policy on a registered non-mutating action, but it
+  cannot find tools that *should* have declared a key. This is out of scope
+  here and goes as a separate task, **KR1.2b** (maintainer, 2026-10-05).
 - **Concurrent decisions** (a human and the sweeper in the same instant) can
   both journal a decision; the later one wins in the fold. Shared with the
   three older decision paths — none takes a per-run lock.
@@ -215,11 +224,16 @@ model's only influence is what it proposes, and that is what is gated.
   (true of the older decided events too); the web UI therefore renders the
   prompt from the run record, not only the stream.
 
-## Open (for the maintainer)
+## Decided (maintainer, 2026-10-05)
 
-- Whether `ask_timeout_secs = 0` (wait forever) should be allowed at all.
-- Whether an `[approval.actions]` entry naming a non-mutating action should
-  be a startup error rather than a WARN.
+- `ask_timeout_secs = 0` (wait forever) is **not allowed**: the value must be
+  > 0, else the daemon refuses to start (§6). Test:
+  `governance_config_test::ask_timeout_zero_is_refused_at_startup`.
+- An `[approval.actions]` entry naming a **non-mutating** action is a
+  **startup error**, like a typo'd policy value (§1). Test:
+  `governance_config_test::a_policy_on_a_non_mutating_action_is_refused_at_startup`.
+- Unkeyed side-effect tools bypassing the gate stay out of this ADR's PR and
+  go as **KR1.2b** (Known limits).
 
 ### For Glassbox — the exact contract (input to KR4.5)
 

@@ -1137,7 +1137,7 @@ async fn main() -> anyhow::Result<()> {
         .with_action_gate(action_gate.clone())
         .with_budget(cfg.budget.to_budget()?);
     let kernel = Arc::new(kernel_built);
-    log_governance(&kernel, &cfg).await;
+    log_governance(&kernel, &cfg).await?;
 
     // Metrics recorder (Phase 8, item C): translate the kernel's run-event
     // stream into OTLP metrics. Only when observability is enabled.
@@ -1406,11 +1406,11 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Startup log for the human gate and budgets (ADR 0038/0039): what is in
-/// force, and every `[approval.actions]` entry that cannot take effect —
-/// an action the registry does not offer, or one that is not mutating (no
-/// `idempotency_key`), which the gate never touches by design.
-async fn log_governance(kernel: &Kernel, cfg: &daemon::config::Config) {
+/// Startup check + log for the human gate and budgets (ADR 0038/0039):
+/// what is in force; a policy on a non-mutating action fails startup
+/// (`ApprovalConfig::check_against`); a name the registry does not offer is
+/// a WARN (it may belong to a skipped extension, ADR 0035).
+async fn log_governance(kernel: &Kernel, cfg: &daemon::config::Config) -> anyhow::Result<()> {
     let gate = &cfg.approval;
     if gate.default != kernel_core::ActionPolicy::Allow || !gate.actions.is_empty() {
         tracing::info!(
@@ -1419,24 +1419,12 @@ async fn log_governance(kernel: &Kernel, cfg: &daemon::config::Config) {
             gate.actions.len(),
             gate.ask_timeout_secs
         );
-        if let Ok(schema) = kernel.current_action_schema().await {
-            for name in gate.actions.keys() {
-                if name == kernel_core::plan::REVIEW_ACTION {
-                    continue;
-                }
-                match schema.spec(name) {
-                    None => tracing::warn!(
-                        action = %name,
-                        "approval: [approval.actions] names an action the registry does not offer"
-                    ),
-                    Some(spec) if !spec.supports_idempotency_key() => tracing::warn!(
-                        action = %name,
-                        "approval: action is not mutating (declares no idempotency_key) — the \
-                         gate does not apply to it (ADR 0038)"
-                    ),
-                    Some(_) => {}
-                }
-            }
+        let schema = kernel.current_action_schema().await?;
+        for name in gate.check_against(&schema)? {
+            tracing::warn!(
+                action = %name,
+                "approval: [approval.actions] names an action the registry does not offer"
+            );
         }
     }
     let b = &cfg.budget;
@@ -1453,4 +1441,5 @@ async fn log_governance(kernel: &Kernel, cfg: &daemon::config::Config) {
             "budget: limits active (ADR 0039)"
         );
     }
+    Ok(())
 }

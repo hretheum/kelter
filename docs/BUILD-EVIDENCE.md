@@ -3072,10 +3072,17 @@ before every model call against the adapter's worst case
 (`PolicyOracle::call_bound`: rendered prompt bytes + `max_tokens`) and before
 every action; a stop is `rejected` (source `budget`) + live `budget_exceeded`
 + `run.budget_stop`, then `failed`. Unpriced model → `usd_enforced: false`,
-dollar limits inactive, token/time limits active. (3) `run.usage` now counts
-every model call, refused and paused proposals included (it counted accepted
-ones only — a looping model was invisible to it). Defaults: no section → no
+dollar limits inactive, token/time limits active. Defaults: no section → no
 gate, no limit.
+
+> **⚠ Visible without any new config.** `run.usage` and `cost_usd` now count
+> **every** model call — including proposals that were **refused** (schema,
+> duplicate, gate, policy) or **paused** for a human. Before, only accepted
+> proposals were counted, so a looping model was invisible to accounting and
+> would have slipped past any budget. Runs with refusals or pauses now report
+> higher `usage`/`cost_usd` than the same run did before this change — that is
+> the real spend, not a regression. Every other change here is inert until
+> `[approval]` / `[budget]` is configured.
 
 **Checkpoints** (this tree):
 
@@ -3155,10 +3162,10 @@ usage 400.
 - `cargo test --workspace --no-fail-fast -- --include-ignored` with
   `KELTER_TEST_POSTGRES_URL` against a local PostgreSQL 16 +
   `postgresql-16-pgvector` (no Docker daemon in this container):
-  **418 passed, 0 failed, 0 ignored** (was 380; +38: 3 `action_gate` unit,
+  **420 passed, 0 failed, 0 ignored** (was 380; +40: 3 `action_gate` unit,
   7 `budget` unit, 9 `kernel-core/tests/human_gate_test.rs`, 11
   `kernel-core/tests/budget_test.rs`, 2 `daemon/tests/human_gate_restart_test.rs`,
-  3 `daemon/tests/governance_config_test.rs`, 3
+  5 `daemon/tests/governance_config_test.rs` (2 added with Eryk's decisions), 3
   `api/tests/gate_budget_api_test.rs`).
 - **No existing assertion changed.** Existing tests changed only to compile
   (`Run` literals gained 5 fields: `kernel-core/src/store.rs`,
@@ -3189,6 +3196,12 @@ provider's tokenizer. The web UI prompt was built and type-checked, not
 clicked through in a browser. `scripts/smoke-durability.sh` and the other
 smokes were not re-run (no code path they cover changed beyond `usage`
 accounting). A dedicated UI view over `GET /api/v1/approvals` is not built.
-Open for Eryk: terminal state on a budget stop (`failed` + `budget_stop`, built,
-vs a new status) and the daily counter (derived, built, vs a ledger table with
-a migration) — ADR 0039 "Open"; two smaller ones in ADR 0038 "Open".
+**Decided by Eryk (2026-10-05), applied in the same PR.** Budget stop stays
+`failed` + `budget_stop`; the daily $ counter stays derived from run records —
+it can be wrong under parallel runs of one principal, a ledger table comes
+with KR1.4 (ADR 0039 "Decided"). `ask_timeout_secs = 0` and a policy on a
+non-mutating action are now **startup errors** (`ApprovalConfig::validate` in
+`Config::load`, `ApprovalConfig::check_against` in `log_governance`; tests
+`governance_config_test::ask_timeout_zero_is_refused_at_startup`,
+`…::a_policy_on_a_non_mutating_action_is_refused_at_startup`). Unkeyed
+side-effect tools bypassing the gate → separate task KR1.2b (ADR 0038 "Decided").
