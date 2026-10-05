@@ -86,6 +86,7 @@ dependencies = [
  "async-trait",
  "axum",
  "kernel-core",
+ "memory",
  "mime_guess",
  "parking_lot",
  "rust-embed",

@@ -28,7 +28,7 @@ import {
   type SkillView,
 } from "@/lib/api";
 import { ingestEnvelope, ingestReplay, type AxisState, axisFor } from "@/lib/events";
-import type { JournalReplay } from "@/lib/api";
+import type { JournalReplay, RunEpisodes } from "@/lib/api";
 
 export type ConnState = "disconnected" | "connecting" | "connected" | "auth-failed";
 export type View = "runs" | "settings";
@@ -311,6 +311,11 @@ export async function setRunConfirmation(runId: string, confirm: boolean): Promi
   );
   upsertRun(res.run);
   return res.run;
+}
+
+/* The run's reflection episode, current + every version (ADR 0038). */
+export async function getRunEpisodes(runId: string): Promise<RunEpisodes> {
+  return api<RunEpisodes>(`/api/v1/runs/${runId}/episodes`);
 }
 
 /* Skill-activation decision (ADR 0021). The kernel emits its own

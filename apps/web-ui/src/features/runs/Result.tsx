@@ -9,10 +9,10 @@ import { announce } from "@/lib/announcer";
 import { copyValue } from "@/lib/clipboard";
 import { axisSteps } from "@/lib/events";
 import { formatCost, shortPolicy, STATUS_GLYPH } from "@/lib/format";
-import { outputView, verificationView } from "@/lib/result";
-import { setRunConfirmation } from "@/store/app";
+import { episodeView, outputView, verificationView } from "@/lib/result";
+import { getRunEpisodes, setRunConfirmation } from "@/store/app";
 import { useAppState, useAxis } from "@/store/hooks";
-import type { Run } from "@/lib/api";
+import type { Run, RunEpisodes } from "@/lib/api";
 import { ArtifactPanel } from "./ArtifactPanel";
 import { StepCard } from "./StepCard";
 
@@ -48,6 +48,20 @@ function VerificationLine({ run }: { run: Run }) {
   const v = verificationView(run);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // ADR 0038: the run's episode follows confirm/revoke; re-read it whenever
+  // the confirmation changes (here or from another client).
+  const [episodes, setEpisodes] = useState<RunEpisodes | null>(null);
+  const confirmedAt = run.confirmation?.at_ms ?? null;
+  useEffect(() => {
+    let live = true;
+    getRunEpisodes(run.id)
+      .then((e) => live && setEpisodes(e))
+      .catch(() => live && setEpisodes(null));
+    return () => {
+      live = false;
+    };
+  }, [run.id, run.status, confirmedAt]);
+  const memoryText = episodeView(episodes);
   if (!v.text || v.tone === "contract_failed") return null;
   const act = async (confirm: boolean) => {
     setBusy(true);
@@ -77,6 +91,7 @@ function VerificationLine({ run }: { run: Run }) {
         </Button>
       )}
       {err && <span className="text-danger">{err}</span>}
+      {memoryText && <span className="basis-full text-muted-foreground">{memoryText}</span>}
     </div>
   );
 }

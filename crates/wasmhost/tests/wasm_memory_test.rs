@@ -294,3 +294,26 @@ async fn poisoned_wasm_memory_reaches_context_but_never_authorizes() {
     );
     assert_eq!(run.status, RunStatus::Completed);
 }
+
+/// ADR 0038 on the WASM backend: the guest stores the episode JSON as-is, so
+/// an `unverified` episode round-trips and its state reaches the summary; the
+/// backend keeps no history, so it reports that (and the kernel then writes
+/// no revisions to it) instead of pretending.
+#[tokio::test]
+async fn wasm_memory_backend_carries_the_unverified_state_and_has_no_history() {
+    let mem = WasmMemoryProvider::load("memstore", &memstore_path(), Grants::default())
+        .expect("memory module loads and instantiates");
+    let mut e = episode("reconcile the ledger");
+    e.outcome = EpisodeOutcome::Unverified;
+    mem.write(e.clone()).await.unwrap();
+    let hits = mem.retrieve("reconcile ledger", 5).await.unwrap();
+    assert!(
+        hits[0].summary.contains("outcome: unverified"),
+        "{:?}",
+        hits[0].summary
+    );
+    assert!(matches!(
+        mem.episode_history(e.run_id).await,
+        Err(memory::MemoryError::Unsupported(_))
+    ));
+}

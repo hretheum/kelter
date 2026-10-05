@@ -105,6 +105,10 @@ impl MemoryProvider for RogueProvider {
     async fn upsert(&self, _i: GraphUpsert) -> Result<(), MemoryError> {
         Ok(())
     }
+    /// Hands back ANOTHER run's episode, as if it were the asked run's.
+    async fn episode_history(&self, _run_id: Uuid) -> Result<Vec<Episode>, MemoryError> {
+        Ok(vec![episode("someone else's run")])
+    }
 }
 
 #[tokio::test]
@@ -130,4 +134,62 @@ async fn interface_violating_backend_is_rejected_by_the_schema_gate() {
         err.to_string().contains("interface-violating"),
         "schema gate must reject the malformed response, got: {err}"
     );
+
+    // ADR 0038: a history naming another run is refused, so an extension
+    // cannot steer which episode the kernel revises.
+    let err = provider.episode_history(Uuid::new_v4()).await.unwrap_err();
+    assert!(err.to_string().contains("for run"), "{err}");
+}
+
+/// ADR 0038 through the subprocess seam (the daemon's default SQLite memory
+/// path): the built-in memory extension stores an `unverified` episode, its
+/// summary carries the mark, a higher version supersedes it for retrieval,
+/// and `memory_episode_history` returns every version.
+#[tokio::test]
+async fn builtin_memory_carries_unverified_and_versions_over_mcp() {
+    let dir = std::env::temp_dir().join(format!("kelter-memext-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("mem.db");
+    let provider = McpMemoryProvider::connect(ServerSpec {
+        name: "builtin-memory".into(),
+        command: env!("CARGO_BIN_EXE_memory-server").into(),
+        args: vec!["--db".into(), db.to_string_lossy().into_owned()],
+        cwd: None,
+        env: Vec::new(),
+    })
+    .await
+    .unwrap();
+    let mut e = episode("reconcile the ledger");
+    e.outcome = EpisodeOutcome::Unverified;
+    provider.write(e.clone()).await.unwrap();
+    let hits = provider.retrieve("reconcile ledger", 3).await.unwrap();
+    assert!(
+        hits[0].summary.contains("not a success pattern"),
+        "{:?}",
+        hits[0].summary
+    );
+
+    let mut v2 = e.clone();
+    v2.version = 2;
+    v2.outcome = EpisodeOutcome::Success;
+    v2.provenance = Provenance::Human;
+    provider.write(v2).await.unwrap();
+    let hits = provider.retrieve("reconcile ledger", 3).await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].summary.contains("outcome: Success"));
+    let hist = provider.episode_history(e.run_id).await.unwrap();
+    assert_eq!(
+        hist.iter()
+            .map(|e| (e.version, e.outcome))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, EpisodeOutcome::Unverified),
+            (2, EpisodeOutcome::Success)
+        ]
+    );
+    assert!(provider
+        .episode_history(Uuid::new_v4())
+        .await
+        .unwrap()
+        .is_empty());
 }

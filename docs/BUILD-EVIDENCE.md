@@ -3051,3 +3051,94 @@ whoever holds an API token; the model inside a run has no path.
 Re-run after the change: `cargo test --workspace --no-fail-fast --
 --include-ignored` **380 passed, 0 failed** (379 − 1 replaced + 2 new); clippy 1.99 / fmt clean; desktop unchanged
 (no type changed); `scripts/smoke-success-contract.sh` PASS.
+
+## 2026-10-05 — unverified reflection episodes (ADR 0038, ADR 0037 follow-up)
+
+**What.** A `completed` run without a met contract no longer writes its
+reflection episode as `Success`: `EpisodeOutcome` gained `Unverified`.
+Confirm/revoke (ADR 0037) write the next version of that episode (`success` /
+`unverified`, `provenance: human`), history kept. Retrieval keeps unverified
+episodes in context, marked "not a success pattern"; ranking unchanged.
+Pre-ADR-0038 episodes are left as they are. Design and inventory: ADR 0038.
+
+**`EpisodeOutcome` sites (at `f9d5a50` → after).**
+
+| Site | Role |
+|---|---|
+| `crates/memory/src/lib.rs:89` → `:93` | enum (+`Unverified`) |
+| `crates/memory/src/lib.rs:209` → `:263` `episode_summary` | read → model context (mark added; Success/Failure text unchanged) |
+| `crates/kernel-core/src/engine.rs:3645-3647` → `:3743-3751` `finalize_run` | write v1 |
+| `crates/kernel-core/src/engine.rs:1825` `revise_episodes` (new) | write v2+ (only from `decide_success_confirmation`) |
+| `crates/kernel-core/src/engine.rs:628` `RunEvent::EpisodeRevised` (new) | WS |
+| `crates/storage` / `crates/pgstore` / `crates/mcp` memory client+server | opaque JSON; + `episode_versions`, `episode_history` |
+| `examples/wasm-tools/memstore-wasm/src/lib.rs:67` | guest echoes the string — `outcome: unverified` |
+| `crates/memory/src/retrieval.rs`, `embeddings.rs`, pgvector SQL | ranking — never reads the outcome |
+| `crates/api/src/lib.rs:906` `GET /runs/{id}/episodes` (new) | API read |
+| `apps/web-ui/src/lib/result.ts` `episodeView` (new), `Result.tsx` | UI read |
+| `apps/desktop/src-tauri/tests/durable_store.rs:63` | test literal, unchanged |
+
+**Episode JSON in the three states** (from `scripts/smoke-unverified-episodes.sh`,
+real daemon, SQLite via the `memory-server` subprocess):
+
+```
+unverified  {"id":"5879cad6-…","run_id":"24c778e7-…","task":"Send an e-mail to Alice with the report.",
+             "trace":["append_ledger: ok"],"outcome":"unverified","provenance":"reflection","version":1}
+confirmed   {… same id …,"outcome":"success","provenance":"human","version":2}
+revoked     {… same id …,"outcome":"unverified","provenance":"human","version":3}
+contract    {"id":"6246ff4e-…","task":"Append the Q3 entry to the ledger.",
+             "outcome":"success","provenance":"reflection","version":1}   # confirm → 409, unchanged
+failure     unchanged from before (`incomplete`/`failed` → "failure", v1) — kernel test
+```
+
+**Found on the way: a Postgres deadlock in the first cut.** The first
+migration used `ALTER TABLE episodes ADD COLUMN IF NOT EXISTS`, which takes an
+ACCESS EXCLUSIVE lock on every connect. The parallel `pgstore` suite hit
+`deadlock detected` (server log: writer holds `episode_versions`, waits on
+`episodes`; migrator holds `episodes`, waits on the `episode_versions`
+index) — the exact two-kernel case ADR 0028 exists for. Fixed with a
+catalog-checked `DO` block; regression test
+`connecting_while_writing_episodes_does_not_deadlock_on_postgres` fails 3/3
+with the old `ALTER`, passes with the fix.
+
+**Verified (this tree; clippy/fmt on Rust 1.99.0, tests on 1.97.0 local).**
+
+- `cargo test --workspace --no-fail-fast -- --include-ignored` with
+  `KELTER_TEST_POSTGRES_URL` against a fresh database on a local PostgreSQL
+  16 + pgvector (Docker was not available here; CI uses the
+  `pgvector/pgvector:pg16` service): **397 passed, 0 failed, 0 ignored**
+  (was 380; +17: 3 `memory` unit, 2 `storage` unit, 3 `pgstore`
+  (transitions, pre-versioning row, deadlock regression), 6
+  `success_contract_test` (transitions + events, contract/failed unchanged,
+  plan mode, pre-0038 episode untouched, no model path, history-less
+  backend), 1 `api_test`, 1 `wasm_memory_test`, 1 `memory_ext_test`; plus
+  one assertion added to the existing rogue-backend MCP test — a history
+  naming another run is refused). Hermetic: 385 passed, 12 ignored.
+  No existing test changed behaviour or assertion.
+- A first full run on a REUSED local database failed
+  `write_retrieve_upsert_on_postgres`: ~8 earlier runs had inserted the same
+  task text, all tied at score 1.0, and `limit 5` cut the new row. A
+  pre-existing test-isolation property of a reused DB, not this change; on a
+  fresh database (as in CI) it passes.
+- Old-schema upgrade, Postgres, by hand: created a DB with `main`'s schema,
+  inserted a pre-change row, connected with this tree, ran the suite against
+  it: 10/10, the old row is `version 1`, still `success`.
+- `cargo +1.99.0 clippy --workspace --all-targets -- -D warnings`,
+  `cargo +1.99.0 fmt --all --check`: clean.
+- Desktop (`apps/desktop/src-tauri`; no struct gained a field,
+  `MemoryProvider` only a defaulted method): `cargo +1.99.0 fmt --all
+  --check`, `clippy --all-targets -- -D warnings` clean, `test
+  --all-targets` 2 passed.
+- `pnpm --dir apps/web-ui test`: 2 files, **22** tests (+3, `episodeView`);
+  `pnpm build` (tsc + vite) clean.
+- `scripts/smoke-unverified-episodes.sh`: PASS — U (no contract → v1
+  `unverified`, `reflection`), H (anonymous read 401; confirm → v2 `success`
+  `human`; revoke → v3 `unverified`; versions `[unverified, success,
+  unverified]`, one id; `episode revised` in the daemon log), C (contract met
+  → v1 `success` at once; confirm 409; episode unchanged).
+- `scripts/smoke-success-contract.sh`: still PASS.
+
+**Not verified here.** No K12 run. The downgrade `UPDATE` in ADR 0038 is
+written, not executed. WASM memory cannot lift an episode (no guest history
+op) — tested as `Unsupported`, documented as a limit. Glassbox's parser is
+unchanged. The retrieval rule ("in context, marked") is a proposal awaiting
+Eryk; excluding instead is a one-line filter per backend.

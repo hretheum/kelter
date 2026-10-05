@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { outputView, verificationView } from "./result";
-import type { Run } from "./api";
+import { episodeView, outputView, verificationView } from "./result";
+import type { Episode, Run, RunEpisodes } from "./api";
 
 describe("outputView", () => {
   it("renders the kernel finish shape as prose", () => {
@@ -114,5 +114,43 @@ describe("verificationView (ADR 0037)", () => {
     });
     expect(v.tone).toBe("contract_failed");
     expect(v.text).toContain("1 of 1");
+  });
+});
+
+describe("episodeView (ADR 0038)", () => {
+  const ep = (o: Partial<Episode>): Episode => ({
+    id: "e",
+    run_id: "r",
+    task: "t",
+    trace: [],
+    outcome: "unverified",
+    provenance: "reflection",
+    version: 1,
+    ...o,
+  });
+  const of = (cur: Episode[], supported = true): RunEpisodes => ({
+    run_id: "r",
+    history_supported: supported,
+    current: cur,
+    versions: cur,
+  });
+
+  it("never shows an unverified episode as a success", () => {
+    const t = episodeView(of([ep({})]))!;
+    expect(t).toContain("unverified");
+    expect(t).toContain("not as a success pattern");
+    expect(t).toContain("v1");
+  });
+
+  it("names a human-set success and its version", () => {
+    expect(episodeView(of([ep({ outcome: "success", provenance: "human", version: 2 })]))).toBe(
+      "Memory: success (episode v2, set by a human)."
+    );
+  });
+
+  it("says nothing without history or without an episode", () => {
+    expect(episodeView(null)).toBeNull();
+    expect(episodeView(of([], true))).toBeNull();
+    expect(episodeView(of([ep({})], false))).toBeNull();
   });
 });

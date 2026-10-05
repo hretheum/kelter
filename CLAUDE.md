@@ -41,17 +41,17 @@ workspace).
 **Where the detail lives.** Ongoing status/roadmap → `docs/ROADMAP.md`
 (Eryk-owned — leave unstaged). Per-phase evidence + decisions →
 `docs/BUILD-EVIDENCE.md`. Architecture → `docs/architecture.md` /
-`architecture-overview.md`. Decisions → `docs/adr/` (0001–0037). The 2026-07-21
+`architecture-overview.md`. Decisions → `docs/adr/` (0001–0038). The 2026-07-21
 adversarial audit + its fix passes → `docs/audit/AUDIT-2026-07-21.md`.
 
-**Testing.** `cargo test --workspace` is hermetic — 371 tests, plus 9
+**Testing.** `cargo test --workspace` is hermetic — 385 tests, plus 12
 `pgstore` tests that are `#[ignore]`d because they need a real Postgres. To run
 those too: start a `pgvector/pgvector:pg16` container, export
-`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (380 total — the
+`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (397 total — the
 figure CI reports). CI does this via a `services:` block. Bare `cargo test`
-reports them as `9 ignored`, never as a green pass. `cargo clippy --workspace
+reports them as `12 ignored`, never as a green pass. `cargo clippy --workspace
 --all-targets -D warnings` and `cargo fmt --check` are the bar. web-ui:
-`pnpm --dir apps/web-ui test` (vitest — 2 files, 19 tests) + `pnpm build`;
+`pnpm --dir apps/web-ui test` (vitest — 2 files, 22 tests) + `pnpm build`;
 both run in CI since 2026-08-03.
 
 **The excluded-workspace hazard — read this before touching shared types.**
@@ -120,6 +120,21 @@ confirmable, not learnable until confirmed; already-learned artifacts stay.
 new. "Human" = holder of an API token (named in the ADR). `scripts/smoke-success-contract.sh` drives it on the real
 daemon. If you add a learning path, gate it on `Run::learnable()`.
 
+**2026-10-05: unverified reflection episodes (ADR 0038).** `EpisodeOutcome`
+has a third state, `unverified`: a `completed` run without a met contract
+writes its episode as `unverified` (contract-verified → `success`, as
+before). Confirm/revoke (ADR 0037) also write the next **version** of that
+episode (`success` / `unverified`, `provenance: human`) — never overwrite,
+never delete; `MemoryProvider::write` with a higher `version` of the same
+`id` is a revision (contract in the trait doc). History via the optional
+`MemoryProvider::episode_history` (SQLite schema v4 `episode_versions`,
+Postgres same shape, MCP tool `memory_episode_history`; WASM and
+history-less extensions → `Unsupported`, no revision). Retrieval keeps
+unverified episodes in context, marked "not a success pattern" — the
+maintainer may still choose to exclude them. Pre-0038 episodes are left as
+they are. `GET /runs/{id}/episodes`, WS `episode_revised`.
+`scripts/smoke-unverified-episodes.sh` drives it.
+
 **Open items, in the order they'd bite.**
 1. **18 ADRs carry `human_validated: false`** — 0007–0023 plus 0032. Eryk's
    job, not an agent's; signing ADR 0031 honestly took a real verification
@@ -132,10 +147,10 @@ daemon. If you add a learning path, gate it on `Run::learnable()`.
    `/events`, no resume, `distill` errors). The ADR lists the options
    (documented `DELETE` rollback vs a catch-all variant); the choice is
    Eryk's.
-4. **ADR 0037 follow-ups** — reflection episodes still record an unverified
-   `completed` as `Success`; Eryk wants a separate PR (an `Unverified`
-   outcome that reflection/retrieval do not treat as success). The web UI
-   shows/confirms verification but cannot submit a contract yet.
+4. **ADR 0037/0038 follow-ups** — the web UI shows/confirms verification
+   but cannot submit a contract yet. ADR 0038 leaves open for Eryk whether
+   unverified episodes enter model context at all (implemented: in, marked),
+   and WASM memory cannot be lifted on confirmation (no guest history op).
 5. **Phase 23 loose ends** — no plan leg in `scripts/smoke-selflearn.sh`, no
    web-UI surface for learned plans, and the `adopt_learned_plan` branch in
    `execute_plan` is unreviewed (it sits inside ADR 0030 generation /
