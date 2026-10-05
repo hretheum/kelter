@@ -55,7 +55,12 @@ jobs:
         working-directory: apps/web-ui
       - run: pnpm build
         working-directory: apps/web-ui
-      - uses: dtolnay/rust-toolchain@1.97.1  # przypięte: ostatni zielony main (888f7d7); clippy 1.99 czerwieni main od 747b0fc
+      # Pinned, not @stable: a new stable's clippy turned main red on 747b0fc
+      # with zero code changes (double_must_use from async-trait 0.1.89,
+      # result_large_err). A toolchain bump is now an explicit PR that fixes
+      # whatever the new lints flag (BUILD-EVIDENCE 2026-10-05). Keep this and
+      # the desktop job's pin on the same version.
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -150,7 +155,7 @@ jobs:
           cache-dependency-path: apps/web-ui/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile && pnpm build
         working-directory: apps/web-ui
-      - uses: dtolnay/rust-toolchain@1.97.1  # przypięte: ostatni zielony main (888f7d7); clippy 1.99 czerwieni main od 747b0fc
+      - uses: dtolnay/rust-toolchain@1.99.0  # same pin as the check job — see the comment there
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
