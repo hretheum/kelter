@@ -2716,6 +2716,82 @@ hit the `( cd … && "$BIN" … ) &` subshell, not the daemon. Fixed with `exec`
 extensions — the API field and the ERROR line are the only signals; a monitor
 on `skipped_extensions != []` is the suggested alert.
 
+## 2026-10-05 — one canonical Quadlet unit; K12 differences as drop-ins (D19)
+
+**Problem.** `deploy/kelter.container` and the unit K12 actually runs had
+drifted apart. The K12 unit (accepted 2026-10-05: 29/29 acceptance scenarios,
+twice in a row) differed in: `StartLimitIntervalSec=0`, a registry image
+pinned by SHA, loopback-only publish, `UserNS=keep-id`, `Network=llm-net`, a
+`kelter-state` volume, `LogDriver=journald` (no `LogOpt=`),
+`HealthStartPeriod=20s`, `RestartSec=10` and no `EnvironmentFile=`. Every K12 install was a hand edit of the repo unit.
+
+**Decision D19.** One canonical unit in the repo, installed unchanged; what is
+deployment-specific lives in Quadlet drop-ins.
+
+- `deploy/kelter.container` now carries K12's accepted values as the defaults
+  (loopback publish, `kelter-state`, journald, `StartLimitIntervalSec=0`,
+  `RestartSec=10`, `HealthStartPeriod=20s`, `Memory=512M`); the reasoning of
+  the old comments (ADR 0017 log cap, audit 10-a hardening, ADR 0024's
+  in-process cap) is kept. `Image=` keeps a safe default
+  (`localhost/kelter:latest`, a local build, never pulled).
+- `deploy/k12/kelter.container.d/`: `10-image.conf`
+  (`ghcr.io/hretheum/kelter:sha-a143922`), `20-network.conf` (`llm-net`),
+  `30-userns.conf` (`keep-id:uid=999,gid=999`). Upgrading K12 = editing
+  `10-image.conf`. Install/upgrade steps: `deploy/k12/README.md`.
+- **Drop-in semantics decided the shape**, read from podman's source
+  (`cmd/quadlet/main.go: loadUnitDropins`, `pkg/systemd/parser`): drop-ins
+  merge in file-name order; single-value keys (`Image`, `UserNS`, `Memory`) use
+  the last value, list keys (`Network`, `EnvironmentFile`, `PublishPort`,
+  `Volume`) accumulate. So the canonical unit sets no `Network=` and no
+  `EnvironmentFile=` — a default there could never be taken back by a
+  drop-in. `scripts/validate-quadlet.sh` enforces this statically.
+- `scripts/check-quadlet.sh`: renders repo unit + drop-ins and the unit
+  installed on the host with the **host's** `quadlet -dryrun -user` (locally,
+  or `--ssh core@k12`, which ships the repo side as a tar stream), normalizes
+  (comments, `SourcePath=`, the raw `[X-Container]` echo dropped; the `podman
+  run` argv split into sorted flag/value pairs, so order is irrelevant) and
+  diffs. 0 = equivalent, 1 = drift, 2 = could not check.
+- CI job `quadlet`: Ubuntu's podman 4.9.3 is too old to judge this unit (its
+  generator rejects `Memory=` — and rejected the *old* repo unit already, on
+  `LogOpt=`), so the job builds `cmd/quadlet` from a pinned podman tag
+  (`v6.1.3`, cached) and runs `scripts/validate-quadlet.sh`.
+- `docs/observability.md`: journald is the recommended driver under rootless
+  podman — `k8s-file`'s `max-file` was not applied on K12, so the cap only
+  existed on paper — with an explicit `SystemMaxUse=` in a journald.conf
+  drop-in.
+
+**Verified (this session).** podman 4.9.3 from Ubuntu; `quadlet` built from
+podman `v6.1.3` and `v5.8.8` source (`CGO_ENABLED=0 go build -mod=vendor
+./cmd/quadlet`).
+
+- `scripts/validate-quadlet.sh` with 6.1.3 and with 5.8.8: PASS (static
+  checks, dry-run of the bare unit, dry-run of unit + K12 drop-ins, comparator
+  self-test: identical install → 0, extra drop-in → 1).
+- The K12 unit reconstructed from the acceptance values as one monolithic
+  file vs repo unit + `deploy/k12` drop-ins, `scripts/check-quadlet.sh
+  --host-dir`: **OK, 42 normalized lines equal**, on 6.1.3 and 5.8.8. The
+  generated `ExecStart` is in fact byte-identical, flag order included:
+
+  ```
+  /usr/bin/podman run --name kelter --replace --rm --log-driver journald --cgroups=split --memory 512M --network llm-net --sdnotify=conmon -d --security-opt=no-new-privileges --userns keep-id:uid=999,gid=999 -v %h/.config/kelter:/data/config:ro,Z -v kelter-work:/data/work:Z -v kelter-state:/data/state:Z --publish 127.0.0.1:7466:7466 --health-cmd "curl\x20-fsS\x20http://127.0.0.1:7466/healthz\x20||\x20exit\x201" --health-interval 30s --health-on-failure kill --health-retries 3 --health-start-period 20s --health-timeout 3s ghcr.io/hretheum/kelter:sha-a143922 --config /data/config/config.toml
+  ```
+- Drift detection: changing `HealthStartPeriod` on the "host" side → exit 1
+  with a one-line diff; removing `StartLimitIntervalSec=0` → exit 1
+  (`[Unit]` lines are compared too, not only `ExecStart`).
+- `--ssh` path exercised with a stand-in `ssh` that runs the remote command
+  locally: same results (0 / 1).
+- `shellcheck` clean on both scripts. No Rust change: `cargo fmt --all
+  --check` clean; clippy/tests left to CI (unchanged code).
+
+**Not verified here.** `scripts/check-quadlet.sh` against the real K12 — the
+host side above is a reconstruction from the acceptance values, not K12's
+file. First real run against K12 (2026-10-05, `scripts/check-quadlet.sh --ssh k12`,
+host podman 5.8.2): the only difference was `[Unit] Description=` — the
+`podman run` argv, volumes, health check and `[Service]` were identical. Running
+it from a Mac also exposed AppleDouble `._*` files in the tar stream (quadlet
+refused them); fixed with `COPYFILE_DISABLE=1` + `tar --no-xattrs`.
+`QUADLET_PODMAN_TAG` in `ci.yml` is pinned to v5.8.2 = K12.
+
 ## 2026-10-05 — refusals and resumes in the journal (ADR 0036, KR0.5)
 
 The run history (`GET /api/v1/runs/{id}/events`) held only what was decided

@@ -67,6 +67,42 @@ jobs:
         env:
           KELTER_TEST_POSTGRES_URL: postgres://kelter:kelter@localhost:5432/kelter_test
 
+  # The Quadlet unit + K12 drop-ins (decision D19), rendered by podman's own
+  # generator. Ubuntu's podman (4.9) is too old to judge a unit written for
+  # K12's podman (it rejects keys 5.x accepts), so the generator is built from
+  # a pinned podman tag — a ~4 MB static Go binary, no podman runtime needed.
+  # Keep QUADLET_PODMAN_TAG at (or near) `podman --version` on K12.
+  quadlet:
+    name: quadlet unit (dry-run)
+    runs-on: ubuntu-latest
+    env:
+      QUADLET_PODMAN_TAG: v5.8.2  # = podman --version on K12 (2026-10-05)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: quadlet-cache
+        with:
+          path: ~/.local/bin/quadlet
+          key: quadlet-${{ env.QUADLET_PODMAN_TAG }}
+      - uses: actions/setup-go@v5
+        if: steps.quadlet-cache.outputs.cache-hit != 'true'
+        with:
+          go-version: stable
+          cache: false
+      - name: Build podman's quadlet generator (${{ env.QUADLET_PODMAN_TAG }})
+        if: steps.quadlet-cache.outputs.cache-hit != 'true'
+        env:
+          GOTOOLCHAIN: auto
+          CGO_ENABLED: "0"
+        run: |
+          git clone -q --depth 1 --branch "$QUADLET_PODMAN_TAG" https://github.com/containers/podman "$RUNNER_TEMP/podman"
+          mkdir -p ~/.local/bin
+          (cd "$RUNNER_TEMP/podman" && go build -mod=vendor -o ~/.local/bin/quadlet ./cmd/quadlet)
+      - run: ~/.local/bin/quadlet -version
+      # Static D19 invariants + quadlet -dryrun of the bare canonical unit and
+      # of unit + K12 drop-ins, plus a self-test of the drift comparator.
+      - run: QUADLET_BIN="$HOME/.local/bin/quadlet" scripts/validate-quadlet.sh
+
   container:
     name: container image (amd64)
     runs-on: ubuntu-latest
