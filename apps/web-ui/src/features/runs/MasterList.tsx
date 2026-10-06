@@ -41,6 +41,7 @@ const STATUS_CLS: Record<string, string> = {
   awaiting_skill_decision: "text-warning",
   awaiting_delegation_decision: "text-warning",
   awaiting_delegation_input: "text-warning",
+  awaiting_action_approval: "text-warning",
   completed: "text-success",
   failed: "text-danger",
   incomplete: "text-warning",

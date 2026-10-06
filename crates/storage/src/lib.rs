@@ -221,7 +221,7 @@ impl RunStore for SqliteRunStore {
         let conn = self.db.conn.lock().await;
         let mut stmt = conn
             .prepare(
-                "SELECT id FROM runs WHERE status IN ('pending', 'running', 'awaiting_skill_decision', 'awaiting_delegation_decision', 'awaiting_delegation_input')
+                "SELECT id FROM runs WHERE status IN ('pending', 'running', 'awaiting_skill_decision', 'awaiting_delegation_decision', 'awaiting_delegation_input', 'awaiting_action_approval')
                  ORDER BY created_at ASC",
             )
             .map_err(backend_err)?;
@@ -603,6 +603,11 @@ mod tests {
             verification: None,
             contract_report: None,
             confirmation: None,
+            pending_action_approval: None,
+            principal: None,
+            budget: None,
+            budget_stop: None,
+            paused_secs: 0,
         }
     }
 
@@ -667,6 +672,7 @@ mod tests {
             RunStatus::AwaitingSkillDecision,
             RunStatus::AwaitingDelegationDecision,
             RunStatus::AwaitingDelegationInput,
+            RunStatus::AwaitingActionApproval,
         ];
         let mut expected: Vec<Uuid> = Vec::new();
         for status in non_terminal {

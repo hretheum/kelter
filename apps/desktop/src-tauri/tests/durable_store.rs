@@ -52,6 +52,11 @@ async fn desktop_run_and_memory_survive_a_restart() {
             verification: None,
             contract_report: None,
             confirmation: None,
+            pending_action_approval: None,
+            principal: None,
+            budget: None,
+            budget_stop: None,
+            paused_secs: 0,
         };
         store.put(run).await.unwrap();
         memory

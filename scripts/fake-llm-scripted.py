@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # Scripted OpenAI-compatible /v1/chat/completions: replies from a queue,
 # then `finish` forever. Logs every reply it served to calls.log (cwd).
-import json, os, sys
+# A queue entry may carry two stub-only keys, stripped before replying:
+#   "_usage": [prompt_tokens, completion_tokens]  — reported usage (default 10, 5)
+#   "_delay": seconds                             — sleep before answering
+import json, os, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 QUEUE = [
@@ -25,12 +28,14 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        reply = QUEUE.pop(0) if QUEUE else FINISH
+        reply = dict(QUEUE.pop(0) if QUEUE else FINISH)
+        prompt_tokens, completion_tokens = reply.pop("_usage", (10, 5))
+        time.sleep(reply.pop("_delay", 0))
         with open("calls.log", "a") as f:
             f.write(json.dumps(reply) + "\n")
         out = {"choices": [{"message": {"role": "assistant", "content": json.dumps(reply)},
                             "finish_reason": "stop"}],
-               "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+               "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens}}
         data = json.dumps(out).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

@@ -15,6 +15,7 @@
 import type {
   AgentView,
   JournalEntry,
+  PendingActionApprovalUi,
   PendingDelegationInputUi,
   PendingDelegationUi,
   PendingSkillActivationUi,
@@ -75,6 +76,10 @@ export interface AxisState {
    * whose remote asked for more input. Separate from pendingDelegation: the
    * dial already happened, this is the remote's follow-up. */
   pendingDelegationInput: PendingDelegationInputUi | null;
+  /* Set by action_approval_requested, cleared by the paired
+   * action_approval_decided (ADR 0038) — a mutating action waiting on a
+   * human; nothing has executed. */
+  pendingActionApproval: PendingActionApprovalUi | null;
 }
 
 function newAxis(runId: string): AxisState {
@@ -89,6 +94,7 @@ function newAxis(runId: string): AxisState {
     pendingSkillActivation: null,
     pendingDelegation: null,
     pendingDelegationInput: null,
+    pendingActionApproval: null,
   };
 }
 
@@ -191,6 +197,27 @@ export function applyEvent(axis: AxisState, ev: RunEvent): void {
         axis.pendingDelegation = null;
       }
       break;
+    case "action_approval_requested":
+      axis.pendingActionApproval = {
+        step: ev.step,
+        action: ev.action,
+        arguments: ev.arguments,
+        branch: ev.branch,
+        expires_at: ev.expires_at,
+      };
+      break;
+    case "action_approval_decided":
+      if (
+        axis.pendingActionApproval?.step === ev.step &&
+        axis.pendingActionApproval.action === ev.action
+      ) {
+        axis.pendingActionApproval = null;
+      }
+      break;
+    // ADR 0039: the stop's reason arrives on the paired `failed`; the axis
+    // keeps no separate state for it.
+    case "budget_exceeded":
+      break;
     case "agent_delegation_input_required":
       axis.pendingDelegationInput = {
         step: ev.step,
@@ -268,6 +295,25 @@ export function applyJournalEntry(axis: AxisState, entry: JournalEntry): void {
       if (entry.branch) s.branch = entry.branch;
       break;
     }
+    // ADR 0038: replayed in append order, so a decided request clears the
+    // pending one exactly as the live pair does.
+    case "action_approval_requested":
+      axis.pendingActionApproval = {
+        step: entry.step,
+        action: entry.action,
+        arguments: entry.arguments,
+        branch: entry.branch ?? null,
+        expires_at: null,
+      };
+      break;
+    case "action_approval_decided":
+      if (
+        axis.pendingActionApproval?.step === entry.step &&
+        axis.pendingActionApproval.action === entry.action
+      ) {
+        axis.pendingActionApproval = null;
+      }
+      break;
     // intent / note / trust_posture / plan_proposed / resumed: durable
     // bookkeeping the axis does not render (design/03 R-3).
     case "resumed":

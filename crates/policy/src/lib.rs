@@ -16,7 +16,9 @@ pub mod prompt;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use kernel_core::{ActionSchema, Latitude, PolicyContext, PolicyError, PolicyOracle, Proposal};
+use kernel_core::{
+    ActionSchema, CallBound, Latitude, PolicyContext, PolicyError, PolicyOracle, Proposal,
+};
 use serde::Deserialize;
 
 pub use local::{LocalAdapter, LocalNativeAdapter};
@@ -84,6 +86,32 @@ impl PolicyOracle for SwappableOracle {
 
     fn describe(&self) -> String {
         self.current().describe()
+    }
+
+    fn call_bound(&self, context: &PolicyContext, schema: &ActionSchema) -> CallBound {
+        self.current().call_bound(context, schema)
+    }
+}
+
+/// Upper bound for one chat-completions call (ADR 0039): the bytes of every
+/// message and of the `tools` payload as sent — at most one token per byte
+/// for the byte-level tokenizers these backends run — plus a small per-
+/// message allowance for role/template tokens, and the adapter's own
+/// `max_tokens` as the completion bound.
+pub(crate) fn chat_call_bound(
+    messages: &[&str],
+    tools: Option<&[serde_json::Value]>,
+    max_tokens: u32,
+) -> CallBound {
+    const PER_MESSAGE_TEMPLATE_TOKENS: u64 = 16;
+    let text: u64 = messages
+        .iter()
+        .map(|m| m.len() as u64 + PER_MESSAGE_TEMPLATE_TOKENS)
+        .sum();
+    let tools = tools.map_or(0, |t| serde_json::to_vec(t).map_or(0, |v| v.len() as u64));
+    CallBound {
+        prompt_tokens: text + tools,
+        completion_tokens: Some(u64::from(max_tokens)),
     }
 }
 
