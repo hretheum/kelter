@@ -17,6 +17,6 @@ uuid.workspace = true
 wasmtime = { version = "46", default-features = false, features = ["cranelift", "runtime"] }
 
 [dev-dependencies]
-# ADR 0038: the shared episode-context probe.
+# ADR 0040: the shared episode-context probe.
 kernel-core = { workspace = true, features = ["testkit"] }
 tokio = { workspace = true, features = ["full"] }

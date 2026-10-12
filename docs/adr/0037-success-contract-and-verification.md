@@ -228,7 +228,7 @@ as status message and no artifact (ADR 0033).
 - Reflection episodes (`memory`, ADR 0005) still record an unverified
   `completed` run as `Success`. Episodic retrieval is not distillation; gating
   it is a separate decision and is listed as an open item.
-  *(Addendum, 2026-10-05: closed by ADR 0038 — an unverified `completed`
+  *(Addendum, 2026-10-05: closed by ADR 0040 — an unverified `completed`
   run's episode is now `unverified`, and the confirmation endpoint below
   moves it, versioned.)*
 - `adopt_learned_plan` (ADR 0032) consumes learned plans as before — it simply

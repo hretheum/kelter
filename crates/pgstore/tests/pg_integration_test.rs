@@ -486,7 +486,7 @@ async fn forget_batch_removes_facts_and_plans_together_on_postgres() {
         .all(|p| p.provenance.batch_id != batch));
 }
 
-// ---- ADR 0038: versioned episode transitions on Postgres --------------------
+// ---- ADR 0040: versioned episode transitions on Postgres --------------------
 
 /// Confirm (v2 Success) and revoke (v3 Unverified) are new versions of one
 /// episode: retrieval sees only the current one, the history keeps all three,
@@ -547,7 +547,7 @@ async fn pre_versioning_episode_row_reads_and_survives_revision_on_postgres() {
         .await
         .unwrap();
     tokio::spawn(conn);
-    // Exactly the pre-ADR-0038 INSERT shape.
+    // Exactly the pre-ADR-0040 INSERT shape.
     client
         .execute(
             "INSERT INTO episodes (id, run_id, task, data) VALUES ($1, $2, $3, $4)",
@@ -581,7 +581,7 @@ async fn pre_versioning_episode_row_reads_and_survives_revision_on_postgres() {
     );
 }
 
-/// ADR 0038 regression: instances connecting (and so migrating) while others
+/// ADR 0040 regression: instances connecting (and so migrating) while others
 /// write episodes must not deadlock. The first version of the versioned
 /// schema ran `ALTER TABLE episodes ADD COLUMN IF NOT EXISTS` on every
 /// connect, which deadlocked a concurrent writer (seen in this suite's
@@ -608,7 +608,7 @@ async fn connecting_while_writing_episodes_does_not_deadlock_on_postgres() {
     }
 }
 
-/// ADR 0038 end to end on Postgres (BM25 path): the kernel over the shared
+/// ADR 0040 end to end on Postgres (BM25 path): the kernel over the shared
 /// Postgres memory — the model's context never holds the unverified episode,
 /// and holds it once confirmed.
 #[tokio::test]

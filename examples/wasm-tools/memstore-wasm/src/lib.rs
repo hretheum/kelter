@@ -11,7 +11,7 @@
 //!   {"op":"memory_upsert",   "item": {...}}             -> {"ok": true}
 //!   {"op":"memory_episode_history", "run_id": "..."}    -> {"episodes": [...]}
 //!
-//! Episodes are versioned (ADR 0038): a write of a stored `id` with a higher
+//! Episodes are versioned (ADR 0040): a write of a stored `id` with a higher
 //! `version` supersedes it for retrieval, every version is kept for
 //! `memory_episode_history`, and an episode whose current version is
 //! `"unverified"` is never retrieved (it must not reach model context).
@@ -38,7 +38,7 @@ struct Stored {
 
 /// The current version of each episode (what retrieval ranks).
 static EPISODES: Mutex<Vec<Stored>> = Mutex::new(Vec::new());
-/// Every version ever written, as given (ADR 0038 history).
+/// Every version ever written, as given (ADR 0040 history).
 static HISTORY: Mutex<Vec<Value>> = Mutex::new(Vec::new());
 static ENTITIES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 static INPUT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
@@ -110,7 +110,7 @@ fn dispatch(envelope: &Value) -> Value {
             let store = EPISODES.lock().unwrap();
             let mut scored: Vec<(f64, &Stored)> = store
                 .iter()
-                // ADR 0038: an unverified episode never reaches model context.
+                // ADR 0040: an unverified episode never reaches model context.
                 .filter(|s| s.outcome != "unverified")
                 .map(|s| (overlap(&query, &tokens(&s.task)), s))
                 .filter(|(score, _)| *score > 0.0)

@@ -25,7 +25,11 @@ security surface — bearer/principals/SSRF-pin/TLS (ADR 0018), and an optional
 memory + learned facts, governance preserved (ADR 0028), and a
 caller-supplied **success contract** the kernel checks before `completed`, with
 unverified successes kept out of learning until a human confirms them (ADR
-0037). React 19 + Tailwind web UI is embedded in the daemon.
+0037), an operator **allow/ask/deny gate on mutating actions** on the same
+durable human pause (ADR 0038), and **cost budgets** — $, tokens, wall time
+per run, $ per principal per day — enforced before a model call or action
+would cross them (ADR 0039). React 19 + Tailwind web UI is embedded in the
+daemon.
 
 **Crate map.** `kernel-core` (kernel, journal, learned store, plan) ·
 `policy` (model adapters: OpenRouter/local) · `mcp` (tool substrate + registry +
@@ -41,17 +45,17 @@ workspace).
 **Where the detail lives.** Ongoing status/roadmap → `docs/ROADMAP.md`
 (Eryk-owned — leave unstaged). Per-phase evidence + decisions →
 `docs/BUILD-EVIDENCE.md`. Architecture → `docs/architecture.md` /
-`architecture-overview.md`. Decisions → `docs/adr/` (0001–0038). The 2026-07-21
+`architecture-overview.md`. Decisions → `docs/adr/` (0001–0040). The 2026-07-21
 adversarial audit + its fix passes → `docs/audit/AUDIT-2026-07-21.md`.
 
-**Testing.** `cargo test --workspace` is hermetic — 390 tests, plus 14
+**Testing.** `cargo test --workspace` is hermetic — 430 tests, plus 14
 `pgstore` tests that are `#[ignore]`d because they need a real Postgres. To run
 those too: start a `pgvector/pgvector:pg16` container, export
-`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (404 total — the
+`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (444 total — the
 figure CI reports). CI does this via a `services:` block. Bare `cargo test`
 reports them as `14 ignored`, never as a green pass. `cargo clippy --workspace
 --all-targets -D warnings` and `cargo fmt --check` are the bar. web-ui:
-`pnpm --dir apps/web-ui test` (vitest — 2 files, 22 tests) + `pnpm build`;
+`pnpm --dir apps/web-ui test` (vitest — 2 files, 25 tests) + `pnpm build`;
 both run in CI since 2026-08-03.
 
 **The excluded-workspace hazard — read this before touching shared types.**
@@ -120,7 +124,26 @@ confirmable, not learnable until confirmed; already-learned artifacts stay.
 new. "Human" = holder of an API token (named in the ADR). `scripts/smoke-success-contract.sh` drives it on the real
 daemon. If you add a learning path, gate it on `Run::learnable()`.
 
-**2026-10-05: unverified reflection episodes (ADR 0038).** `EpisodeOutcome`
+**2026-10-05: human gate + budgets (ADR 0038 KR1.2, ADR 0039 KR1.3).**
+`[approval]` puts *mutating* actions (those declaring `idempotency_key` —
+ADR 0031's criterion; read-only tools and `delegate_to_*` are never gated)
+under `allow`/`ask`/`deny`; `review_verdict = "ask"` makes plan review nodes
+human. `ask` is the fourth use of the ADR 0021 pause (`awaiting_action_approval`,
+`POST /runs/{id}/action-approval`, `approval_sweep` = timeout deny, allow →
+the original proposal journaled as the `Decision`); `GET /api/v1/approvals`
+lists every run waiting on a human. `[budget]` + a lower-only `budget`
+override on `POST /runs`: checked before every model call against
+`PolicyOracle::call_bound` (rendered prompt bytes + `max_tokens` — a new
+trait method; **a wrapper oracle must delegate it**, as `SwappableOracle`
+and `SkillContextOracle` do) and before every action; a stop is
+`rejected/budget` + `budget_stop` + `failed`. Unpriced model → dollar limits
+inactive (`usd_enforced: false`). `run.usage` now counts every model call,
+refused ones included. `scripts/smoke-human-gate-budgets.sh` covers ask →
+restart → allow-once, deny, token and wall stops. If you add a model call,
+put a `budget_check` before it; if you add a side effect, declare
+`idempotency_key` or the gate cannot see it.
+
+**2026-10-05: unverified reflection episodes (ADR 0040).** `EpisodeOutcome`
 has a third state, `unverified`: a `completed` run without a met contract
 writes its episode as `unverified` (contract-verified → `success`, as
 before). Confirm/revoke (ADR 0037) also write the next **version** of that
@@ -133,7 +156,7 @@ a backend without it → `Unsupported`, no revision). **Unverified episodes
 never enter model context** (Eryk, 2026-10-05): every backend's `retrieve`
 filters them before ranking (`memory::in_model_context`); they stay in the
 history, the API and the UI. Memory tool names are refused from any tool
-server, so the model can never see/call them. Pre-0038 episodes are left as
+server, so the model can never see/call them. Pre-0040 episodes are left as
 they are. `GET /runs/{id}/episodes`, WS `episode_revised`.
 `scripts/smoke-unverified-episodes.sh` drives it (incl. the model's actual
 prompt). If you add a memory backend, honour the retrieve rule and test it
@@ -153,7 +176,13 @@ with `kernel_core::testkit::episode_context_probe` (feature `testkit`).
    Eryk's.
 4. **ADR 0037 follow-up** — the web UI shows/confirms verification but
    cannot submit a contract yet.
-5. **Phase 23 loose ends** — no plan leg in `scripts/smoke-selflearn.sh`, no
+5. **ADR 0038/0039 follow-ups** (decided 2026-10-05) — budget stop stays
+   `failed` + `budget_stop`; the daily $ counter stays derived from run
+   records and can be wrong under parallel runs of one principal until
+   **KR1.4** adds a ledger table; unkeyed side-effect tools still bypass the
+   gate — **KR1.2b**. Startup now refuses `ask_timeout_secs = 0` and a policy
+   on a non-mutating action.
+6. **Phase 23 loose ends** — no plan leg in `scripts/smoke-selflearn.sh`, no
    web-UI surface for learned plans, and the `adopt_learned_plan` branch in
    `execute_plan` is unreviewed (it sits inside ADR 0030 generation /
    exactly-once semantics, where a mistake is silent rather than loud).

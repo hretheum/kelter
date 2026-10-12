@@ -295,7 +295,7 @@ async fn poisoned_wasm_memory_reaches_context_but_never_authorizes() {
     assert_eq!(run.status, RunStatus::Completed);
 }
 
-/// ADR 0038 on the WASM backend (memstore guest): an `unverified` episode is
+/// ADR 0040 on the WASM backend (memstore guest): an `unverified` episode is
 /// stored and in the history, but never retrieved; a higher `success`
 /// version is retrieved, with one entry per episode.
 #[tokio::test]
@@ -344,7 +344,7 @@ async fn lying_module_history_is_refused_by_the_gate() {
     assert!(err.to_string().contains("interface-violating"), "{err}");
 }
 
-/// ADR 0038 end to end through the kernel over the WASM memory backend: the
+/// ADR 0040 end to end through the kernel over the WASM memory backend: the
 /// model's context never holds the unverified episode, and holds it once a
 /// human confirmed it.
 #[tokio::test]

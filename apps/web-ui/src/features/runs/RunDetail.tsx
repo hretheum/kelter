@@ -33,7 +33,8 @@ export function RunDetail() {
     run.status === "running" ||
     run.status === "awaiting_skill_decision" ||
     run.status === "awaiting_delegation_decision" ||
-    run.status === "awaiting_delegation_input";
+    run.status === "awaiting_delegation_input" ||
+    run.status === "awaiting_action_approval";
   return (
     <div
       ref={headerRef}

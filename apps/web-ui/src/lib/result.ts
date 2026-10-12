@@ -109,7 +109,7 @@ export function verificationView(run: Run): VerificationView {
   return none;
 }
 
-/* ADR 0038: how memory holds the run's reflection episode — the third state
+/* ADR 0040: how memory holds the run's reflection episode — the third state
  * (`unverified`) is never shown as a success. `null` when there is nothing to
  * say (no episode, or a backend that keeps no history). */
 export function episodeView(e: RunEpisodes | null): string | null {

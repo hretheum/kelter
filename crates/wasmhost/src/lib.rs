@@ -367,7 +367,7 @@ pub fn arc(source: WasmToolSource) -> Arc<dyn ActionSource> {
 //   {"op":"memory_upsert",   "item": {...}}             -> {"ok": true}
 //   {"op":"memory_episode_history", "run_id": "..."}    -> {"episodes": [...]}
 //
-// The last op is OPTIONAL (ADR 0038): a module that answers it with
+// The last op is OPTIONAL (ADR 0040): a module that answers it with
 // `{"ok": false, "error": "unknown op …"}` is still a valid memory backend
 // and reports `MemoryError::Unsupported` for history.
 //

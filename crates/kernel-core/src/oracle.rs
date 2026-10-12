@@ -114,4 +114,38 @@ pub trait PolicyOracle: Send + Sync {
 
     /// Human-readable adapter identity (e.g. "local:qwen2.5-0.5b").
     fn describe(&self) -> String;
+
+    /// Upper bound on what ONE `propose(context, schema)` call can cost, in
+    /// tokens (ADR 0039) — asked by the kernel BEFORE the call, so a budget
+    /// is enforced before it is crossed, never after. Adapters that render
+    /// their own prompt override this with the exact rendered text and their
+    /// real `max_tokens`; the default counts the serialized context and
+    /// schema and leaves the completion bound to the kernel's configured
+    /// fallback. Pure: no network, no side effects.
+    fn call_bound(&self, context: &PolicyContext, schema: &ActionSchema) -> CallBound {
+        CallBound {
+            prompt_tokens: serialized_len(context) + serialized_len(schema),
+            completion_tokens: None,
+        }
+    }
+}
+
+/// Worst-case token usage of one model call (ADR 0039).
+///
+/// `prompt_tokens` is a byte count of the text the adapter sends: every
+/// byte-level BPE or byte-fallback tokenizer (GPT, Llama, Qwen, Gemma
+/// families) emits at most one token per byte, so bytes bound tokens from
+/// above. What it cannot see — a provider's hidden chat-template or
+/// tool-use preamble — the kernel covers with `[budget]
+/// prompt_overhead_tokens`. `completion_tokens` is the adapter's own
+/// `max_tokens`, `None` when it does not know it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CallBound {
+    pub prompt_tokens: u64,
+    pub completion_tokens: Option<u64>,
+}
+
+/// Bytes of `value` serialized as compact JSON (0 if it cannot be).
+pub fn serialized_len<T: Serialize + ?Sized>(value: &T) -> u64 {
+    serde_json::to_vec(value).map_or(0, |v| v.len() as u64)
 }

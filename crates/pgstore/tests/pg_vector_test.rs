@@ -135,7 +135,7 @@ async fn mem_store_client(url: &str) -> deadpool_postgres::Object {
     pool.get().await.unwrap()
 }
 
-/// ADR 0038 on the pgvector path: an `unverified` episode is filtered in SQL
+/// ADR 0040 on the pgvector path: an `unverified` episode is filtered in SQL
 /// (before LIMIT) and never retrieved; its `success` version is.
 #[tokio::test]
 #[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]

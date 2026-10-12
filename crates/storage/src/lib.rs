@@ -79,7 +79,7 @@ const MIGRATIONS: &[&str] = &[
          created_at INTEGER NOT NULL
      );
      CREATE INDEX learned_plan_batch ON learned_plans(batch_id);",
-    // v4 — versioned episodes (ADR 0038): `episodes` keeps the CURRENT
+    // v4 — versioned episodes (ADR 0040): `episodes` keeps the CURRENT
     // version of each episode (what retrieval ranks, unchanged for every
     // pre-existing row — they become version 1); every version ever written
     // also lands in the append-only `episode_versions`. Rows from before v4
@@ -240,7 +240,7 @@ impl RunStore for SqliteRunStore {
         let conn = self.db.conn.lock().await;
         let mut stmt = conn
             .prepare(
-                "SELECT id FROM runs WHERE status IN ('pending', 'running', 'awaiting_skill_decision', 'awaiting_delegation_decision', 'awaiting_delegation_input')
+                "SELECT id FROM runs WHERE status IN ('pending', 'running', 'awaiting_skill_decision', 'awaiting_delegation_decision', 'awaiting_delegation_input', 'awaiting_action_approval')
                  ORDER BY created_at ASC",
             )
             .map_err(backend_err)?;
@@ -371,7 +371,7 @@ impl MemoryProvider for SqliteMemoryProvider {
         let run_id = episode.run_id.to_string();
         // One transaction: the version row (history) and the current row move
         // together. The current row only advances — a lower version never
-        // displaces a higher one (ADR 0038).
+        // displaces a higher one (ADR 0040).
         let tx = conn.transaction().map_err(mem_err)?;
         // A pre-v4 current row has no history row yet: preserve it before a
         // revision can overwrite it.
@@ -420,7 +420,7 @@ impl MemoryProvider for SqliteMemoryProvider {
             out
         };
 
-        // ADR 0038: an `unverified` episode never reaches model context, nor
+        // ADR 0040: an `unverified` episode never reaches model context, nor
         // takes part in ranking.
         let episodes: Vec<Episode> = episodes.into_iter().filter(in_model_context).collect();
         let docs: Vec<String> = episodes.iter().map(|e| e.task.clone()).collect();
@@ -674,6 +674,11 @@ mod tests {
             verification: None,
             contract_report: None,
             confirmation: None,
+            pending_action_approval: None,
+            principal: None,
+            budget: None,
+            budget_stop: None,
+            paused_secs: 0,
         }
     }
 
@@ -738,6 +743,7 @@ mod tests {
             RunStatus::AwaitingSkillDecision,
             RunStatus::AwaitingDelegationDecision,
             RunStatus::AwaitingDelegationInput,
+            RunStatus::AwaitingActionApproval,
         ];
         let mut expected: Vec<Uuid> = Vec::new();
         for status in non_terminal {
@@ -820,7 +826,7 @@ mod tests {
         }
     }
 
-    /// ADR 0038: confirm (v2 Success) and revoke (v3 Unverified) are new
+    /// ADR 0040: confirm (v2 Success) and revoke (v3 Unverified) are new
     /// versions of one episode; retrieval (= model context) never returns it
     /// while it is `unverified` and returns it once `success`; the history
     /// keeps all three, and a stale lower version never wins.
@@ -875,7 +881,7 @@ mod tests {
             .is_empty());
     }
 
-    /// A database written before schema v4 (ADR 0038): its episode row reads
+    /// A database written before schema v4 (ADR 0040): its episode row reads
     /// unchanged after the migration, counts as version 1 in the history, and
     /// is preserved there when a revision supersedes it.
     #[tokio::test]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ADR 0038 against the real daemon: the run's reflection episode follows
+# ADR 0040 against the real daemon: the run's reflection episode follows
 # verification (ADR 0037), through GET /api/v1/runs/{id}/episodes.
 #   U) a `completed` run WITHOUT a contract → its episode is `unverified`
 #      (v1, provenance reflection) — not a success.

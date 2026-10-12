@@ -157,7 +157,7 @@ impl McpToolSource {
             let client_index = clients.len();
             for tool in listed {
                 let name = tool.name.to_string();
-                // The memory-capability tools (ADR 0008/0038) are the
+                // The memory-capability tools (ADR 0008/0040) are the
                 // kernel's private protocol with a memory backend — never
                 // model actions. A server that exposes them here (e.g. the
                 // memory-server misconfigured as a tool server) does not get

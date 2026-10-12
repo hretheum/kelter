@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS learned_plans (
 );
 CREATE INDEX IF NOT EXISTS learned_plan_batch ON learned_plans(batch_id);
 
--- Versioned episodes (ADR 0038): `episodes` keeps the CURRENT version of each
+-- Versioned episodes (ADR 0040): `episodes` keeps the CURRENT version of each
 -- episode (what retrieval ranks; a pre-existing row is version 1), and every
 -- version ever written also lands in the append-only `episode_versions`. A row
 -- from before this existed is only in `episodes`; `episode_history` reads
@@ -271,7 +271,7 @@ impl MemoryProvider for PgMemoryProvider {
         let embedding = self.store.embed_one(&episode.task).await;
         let version = episode.version as i32;
         let mut client = self.store.client().await.map_err(mem_err)?;
-        // One transaction: history row + current row (ADR 0038). The current
+        // One transaction: history row + current row (ADR 0040). The current
         // row only advances; a lower version never displaces a higher one.
         let tx = client.transaction().await.map_err(mem_err)?;
         // A current row from before versioning has no history row yet.
@@ -342,7 +342,7 @@ impl MemoryProvider for PgMemoryProvider {
         if let Some(qvec) = self.store.embed_one(task).await {
             let rows = client
                 .query(
-                    // ADR 0038: an `unverified` episode never reaches model
+                    // ADR 0040: an `unverified` episode never reaches model
                     // context — filtered before LIMIT so it cannot take a slot.
                     "SELECT data, (1 - (embedding <=> $1))::float8 AS score
                      FROM episodes
@@ -374,7 +374,7 @@ impl MemoryProvider for PgMemoryProvider {
             .await
             .map_err(mem_err)?
             .into_iter()
-            .filter(in_model_context) // ADR 0038
+            .filter(in_model_context) // ADR 0040
             .collect();
         let docs: Vec<String> = episodes.iter().map(|e| e.task.clone()).collect();
         let ranked = retrieval::normalize(&retrieval::rank_bm25(task, &docs, limit));

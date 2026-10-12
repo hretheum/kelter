@@ -74,6 +74,9 @@ export type RunStatus =
   | "awaiting_skill_decision"
   | "awaiting_delegation_decision"
   | "awaiting_delegation_input"
+  /* ADR 0038: a mutating action (or a plan review node) waits for a human's
+   * allow/deny — nothing has executed yet. */
+  | "awaiting_action_approval"
   | "completed"
   | "failed"
   /* ADR 0033: finished without a single successful action — the kernel kept
@@ -107,11 +110,47 @@ export interface Run {
   verification?: Verification | null;
   contract_report?: ContractReport | null;
   confirmation?: RunConfirmation | null;
+  /* ADR 0038 (additive): the pending approval while awaiting_action_approval. */
+  pending_action_approval?: PendingActionApprovalUi | null;
+  /* ADR 0039 (additive): effective limits, and why a budget stopped the run. */
+  budget?: RunBudget | null;
+  budget_stop?: BudgetStop | null;
+  principal?: string | null;
+}
+
+/* ADR 0038: a human's answer to a paused mutating action. Two-way — the
+ * standing policy lives in the daemon config, never in a decision. */
+export type ActionApprovalDecision = "allow" | "deny";
+
+export interface PendingActionApprovalUi {
+  step: number;
+  action: string;
+  arguments: unknown;
+  branch: string | null;
+  requested_at?: number;
+  expires_at: number | null;
+}
+
+export interface RunBudget {
+  max_usd?: number;
+  max_tokens?: number;
+  max_wall_secs?: number;
+  usd_enforced: boolean;
+}
+
+export interface BudgetStop {
+  limit: "usd" | "tokens" | "wall_time" | "daily_usd";
+  max: number;
+  used: number;
+  requested: number;
+  checkpoint: "model_call" | "action";
+  step: number;
+  branch?: string;
 }
 
 export type Verification = "none" | "contract";
 
-/* ADR 0038: a reflection episode's state. `unverified` = completed with no
+/* ADR 0040: a reflection episode's state. `unverified` = completed with no
  * contract and no human confirmation yet. */
 export type EpisodeOutcome = "success" | "failure" | "unverified";
 
@@ -125,7 +164,7 @@ export interface Episode {
   version: number;
 }
 
-/* GET /api/v1/runs/{id}/episodes (ADR 0038). */
+/* GET /api/v1/runs/{id}/episodes (ADR 0040). */
 export interface RunEpisodes {
   run_id: string;
   history_supported: boolean;
@@ -218,7 +257,7 @@ export type RunEvent =
       branch: string | null;
     }
   | { type: "reflection_written"; episode_id: string }
-  /* ADR 0038: a confirm/revoke wrote a new version of the run's episode. */
+  /* ADR 0040: a confirm/revoke wrote a new version of the run's episode. */
   | { type: "episode_revised"; episode_id: string; version: number; outcome: EpisodeOutcome }
   | { type: "completed"; output: unknown; verification?: Verification }
   | { type: "failed"; error: string }
@@ -247,6 +286,16 @@ export type RunEvent =
       principal: string;
       branch: string | null;
     }
+  | ({ type: "action_approval_requested" } & PendingActionApprovalUi)
+  | {
+      type: "action_approval_decided";
+      step: number;
+      action: string;
+      decision: ActionApprovalDecision;
+      principal: string;
+      branch: string | null;
+    }
+  | ({ type: "budget_exceeded" } & Omit<BudgetStop, "branch"> & { branch: string | null })
   | ({ type: "agent_delegation_input_required" } & PendingDelegationInputUi)
   | {
       type: "agent_delegation_input_provided";
@@ -407,6 +456,23 @@ export type JournalEntry =
       arguments?: unknown;
       branch?: string;
       at_ms: number;
+    }
+  /* ADR 0038: a paused mutating action, and its resolution. */
+  | {
+      kind: "action_approval_requested";
+      step: number;
+      action: string;
+      arguments: unknown;
+      branch?: string;
+      requested_at: number;
+    }
+  | {
+      kind: "action_approval_decided";
+      step: number;
+      action: string;
+      decision: ActionApprovalDecision;
+      principal: string;
+      branch?: string;
     }
   | {
       kind: "resumed";

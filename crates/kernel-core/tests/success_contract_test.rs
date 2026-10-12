@@ -651,7 +651,7 @@ async fn the_model_has_no_path_to_confirmation_or_verification() {
     assert_eq!(h.kernel.distill(10).await.unwrap().facts_created, 0);
 }
 
-// ---- reflection episodes follow verification (ADR 0038) -------------------
+// ---- reflection episodes follow verification (ADR 0040) -------------------
 
 /// `(version, outcome, provenance)` of every stored version of `run`'s
 /// episode, oldest first.
@@ -769,7 +769,7 @@ async fn plan_mode_unverified_run_writes_an_unverified_episode() {
 }
 
 #[tokio::test]
-async fn pre_adr_0038_success_episode_is_left_as_it_is() {
+async fn pre_adr_0040_success_episode_is_left_as_it_is() {
     // A legacy run (pre ADR 0037) whose reflection episode was written as
     // `success` under the old rule: confirming and revoking the run governs
     // learning, but its episode neither changes nor gets a duplicate.

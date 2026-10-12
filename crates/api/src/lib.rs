@@ -415,7 +415,7 @@ pub fn router_full_with_skipped(
             post(confirm_run).delete(revoke_run_confirmation),
         )
         // The run's reflection episode — current state and every version
-        // (ADR 0038): `unverified` until confirmed, `success` once a human
+        // (ADR 0040): `unverified` until confirmed, `success` once a human
         // confirms, back on revoke. Read-only; bearer.
         .route("/api/v1/runs/{id}/episodes", get(get_run_episodes))
         // Run-produced files (ADR 0029): list + read the files a run's own
@@ -440,6 +440,16 @@ pub fn router_full_with_skipped(
             "/api/v1/runs/{id}/delegation-input",
             post(provide_delegation_input),
         )
+        // Human gate on mutating actions (ADR 0038): a human's allow/deny on
+        // a paused run's pending action approval. Bearer; journaled with the
+        // principal. No model path reaches it.
+        .route(
+            "/api/v1/runs/{id}/action-approval",
+            post(decide_action_approval),
+        )
+        // Every run currently waiting on a human (ADR 0038): the decision
+        // queue, across all four pause kinds. Bearer, read-only.
+        .route("/api/v1/approvals", get(list_pending_decisions))
         .route("/api/v1/tools", get(list_tools))
         .route("/api/v1/events", get(events_ws))
         // Model configuration (Phase 8.5): read/write the model config, test a
@@ -744,6 +754,11 @@ struct CreateRun {
     /// exists.
     #[serde(default)]
     success_contract: Option<serde_json::Value>,
+    /// Optional per-run budget (ADR 0039): `max_usd`, `max_tokens`,
+    /// `max_wall_secs`. May tighten `[budget]`, never loosen it — 422
+    /// otherwise.
+    #[serde(default)]
+    budget: Option<serde_json::Value>,
 }
 
 /// Hard ceiling on the per-run override — a client cannot buy an unbounded
@@ -784,9 +799,30 @@ async fn create_run(
             }
         },
     };
+    let budget = match req.budget {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => match serde_json::from_value::<kernel_core::BudgetLimits>(v) {
+            Ok(b) => Some(b),
+            Err(e) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!("invalid budget: {e}"),
+                )
+                    .into_response()
+            }
+        },
+    };
     match state
         .kernel
-        .create_run_with_contract(req.task, req.max_steps, contract)
+        .create_run_with_options(
+            req.task,
+            kernel_core::RunOptions {
+                max_steps: req.max_steps,
+                success_contract: contract,
+                budget,
+                principal: Some(principal.clone()),
+            },
+        )
         .await
     {
         Ok(run_id) => {
@@ -897,7 +933,7 @@ async fn decide_confirmation(
     }
 }
 
-/// GET /api/v1/runs/{id}/episodes (ADR 0038): the run's reflection episode
+/// GET /api/v1/runs/{id}/episodes (ADR 0040): the run's reflection episode
 /// as memory holds it — `current` (what retrieval sees: one per episode id)
 /// and `versions` (all of them, oldest first; a human decision appends one,
 /// nothing is deleted). `history_supported: false` (and empty lists) when the
@@ -1032,6 +1068,11 @@ async fn get_run_events(
             "verification": run.verification,
             "success_contract": run.success_contract,
             "confirmation": run.confirmation,
+            // ADR 0039, additive: the effective budget and, if one stopped
+            // the run, why. ADR 0038/0039: who created it.
+            "budget": run.budget,
+            "budget_stop": run.budget_stop,
+            "principal": run.principal,
             "journal": journal,
         }))
         .into_response(),
@@ -1341,6 +1382,135 @@ async fn provide_delegation_input(
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+/// POST /api/v1/runs/{id}/action-approval (ADR 0038): `{"action": "...",
+/// "decision": "allow" | "deny"}` on a run paused `awaiting_action_approval`.
+/// `action` must name the pending action (409 otherwise). Re-spawns the run
+/// exactly like the other decision routes. Bearer.
+#[derive(Deserialize)]
+struct ActionApprovalRequest {
+    action: String,
+    decision: String,
+}
+
+async fn decide_action_approval(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(req): Json<ActionApprovalRequest>,
+) -> Response {
+    let principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    let decision = match req.decision.as_str() {
+        "allow" => kernel_core::ActionApprovalDecision::Allow,
+        "deny" => kernel_core::ActionApprovalDecision::Deny,
+        other => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("unknown decision '{other}' (expected allow | deny)"),
+            )
+                .into_response()
+        }
+    };
+    match state
+        .kernel
+        .decide_action_approval(id, &req.action, decision, &principal)
+        .await
+    {
+        Ok(run) => {
+            let kernel = state.kernel.clone();
+            let handles = state.run_handles.clone();
+            let mut map = state.run_handles.lock().await;
+            let handle = tokio::spawn(async move {
+                if let Err(e) = kernel.execute_run(id).await {
+                    tracing::error!(%id, "run execution error: {e}");
+                }
+                handles.lock().await.remove(&id);
+            });
+            map.insert(id, handle.abort_handle());
+            drop(map);
+            (StatusCode::ACCEPTED, Json(run)).into_response()
+        }
+        Err(kernel_core::KernelError::InvalidState(msg)) => {
+            (StatusCode::CONFLICT, msg).into_response()
+        }
+        Err(kernel_core::KernelError::Store(kernel_core::StoreError::NotFound(_))) => {
+            (StatusCode::NOT_FOUND, "run not found").into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// GET /api/v1/approvals (ADR 0038): every run paused on a human, oldest
+/// request first — `kind` is `action_approval`, `skill_activation`,
+/// `delegation` or `delegation_input`, `pending` the run's own pending
+/// snapshot for that kind, `decide` the route that resolves it.
+async fn list_pending_decisions(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    let runs = match state.kernel.store().list().await {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let mut queue: Vec<(u64, serde_json::Value)> = Vec::new();
+    for run in runs {
+        use kernel_core::RunStatus as S;
+        let entry = match run.status {
+            S::AwaitingActionApproval => run.pending_action_approval.as_ref().map(|p| {
+                (
+                    "action_approval",
+                    "action-approval",
+                    p.requested_at,
+                    serde_json::json!(p),
+                )
+            }),
+            S::AwaitingSkillDecision => run.pending_skill_activation.as_ref().map(|p| {
+                (
+                    "skill_activation",
+                    "skill-activation",
+                    p.requested_at,
+                    serde_json::json!(p),
+                )
+            }),
+            S::AwaitingDelegationDecision => run.pending_delegation.as_ref().map(|p| {
+                (
+                    "delegation",
+                    "delegation",
+                    p.requested_at,
+                    serde_json::json!(p),
+                )
+            }),
+            S::AwaitingDelegationInput => run.pending_delegation_input.as_ref().map(|p| {
+                (
+                    "delegation_input",
+                    "delegation-input",
+                    p.requested_at,
+                    serde_json::json!(p),
+                )
+            }),
+            _ => None,
+        };
+        if let Some((kind, route, requested_at, pending)) = entry {
+            queue.push((
+                requested_at,
+                serde_json::json!({
+                    "run_id": run.id,
+                    "task": run.task,
+                    "status": run.status,
+                    "kind": kind,
+                    "pending": pending,
+                    "decide": format!("/api/v1/runs/{}/{route}", run.id),
+                }),
+            ));
+        }
+    }
+    queue.sort_by_key(|(at, _)| *at);
+    Json(queue.into_iter().map(|(_, v)| v).collect::<Vec<_>>()).into_response()
 }
 
 // ---- skills management (ADR 0021 addendum) --------------------------------

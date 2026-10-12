@@ -9,6 +9,7 @@ import {
   hasProvisionedToken,
   setConnection,
   wsUrl,
+  type ActionApprovalDecision,
   type AgentPolicyUpdate,
   type AgentPolicyView,
   type AgentRegisterRequest,
@@ -313,7 +314,7 @@ export async function setRunConfirmation(runId: string, confirm: boolean): Promi
   return res.run;
 }
 
-/* The run's reflection episode, current + every version (ADR 0038). */
+/* The run's reflection episode, current + every version (ADR 0040). */
 export async function getRunEpisodes(runId: string): Promise<RunEpisodes> {
   return api<RunEpisodes>(`/api/v1/runs/${runId}/episodes`);
 }
@@ -364,6 +365,24 @@ export async function decideDelegation(
     if (err.status === 404 || err.status === 405) set({ delegationAuthSupported: false });
     throw e;
   }
+}
+
+/* Action approval (ADR 0038): a human's allow/deny on a paused mutating
+ * action. `action` must match the pending one (409 otherwise — a stale view
+ * cannot approve something else). A daemon without the route never reports
+ * `awaiting_action_approval`, so no capability flag is needed: the prompt
+ * only renders for that status, and an error surfaces in the prompt. */
+export async function decideActionApproval(
+  runId: string,
+  action: string,
+  decision: ActionApprovalDecision
+): Promise<Run> {
+  const run = await api<Run>(`/api/v1/runs/${runId}/action-approval`, {
+    method: "POST",
+    body: JSON.stringify({ action, decision }),
+  });
+  upsertRun(run);
+  return run;
 }
 
 /* Interactive-delegation continuation (ADR 0026): the human's answer to a

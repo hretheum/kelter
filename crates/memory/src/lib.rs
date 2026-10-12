@@ -81,23 +81,23 @@ pub struct Episode {
     pub outcome: EpisodeOutcome,
     pub provenance: Provenance,
     /// Monotonic version (ADR 0016 reversibility). Reflection writes v1; a
-    /// human's confirmation or revocation (ADR 0038) writes the next version
+    /// human's confirmation or revocation (ADR 0040) writes the next version
     /// of the SAME `id` — see [`MemoryProvider::write`] for the contract.
     pub version: u32,
 }
 
 /// How an episode's run ended, as far as memory may treat it (ADR 0005,
-/// three states since ADR 0038).
+/// three states since ADR 0040).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EpisodeOutcome {
     /// A verified success: the run's success contract held (ADR 0037), or a
-    /// human confirmed it. Episodes written before ADR 0038 also carry this
+    /// human confirmed it. Episodes written before ADR 0040 also carry this
     /// value for any `completed` run and are left as they are.
     Success,
     Failure,
     /// The run ended `completed` but nothing verified it — no contract, no
-    /// human confirmation yet (ADR 0038). Kept in history and readable
+    /// human confirmation yet (ADR 0040). Kept in history and readable
     /// through the API, but NEVER retrieved into model context — see
     /// [`MemoryProvider::retrieve`] and [`in_model_context`].
     Unverified,
@@ -163,7 +163,7 @@ pub enum MemoryError {
     #[error("memory backend error: {0}")]
     Backend(String),
     /// The backend does not implement an optional operation (e.g. episode
-    /// history on a WASM or subprocess backend, ADR 0038).
+    /// history on a WASM or subprocess backend, ADR 0040).
     #[error("memory backend does not support {0}")]
     Unsupported(&'static str),
 }
@@ -173,7 +173,7 @@ pub enum MemoryError {
 /// kernel never depends on a concrete store.
 #[async_trait]
 pub trait MemoryProvider: Send + Sync {
-    /// Store an episode. Versioning contract (ADR 0038): a write whose `id`
+    /// Store an episode. Versioning contract (ADR 0040): a write whose `id`
     /// is already stored and whose `version` is HIGHER is a new revision —
     /// it becomes what `retrieve` sees, and the earlier versions are kept as
     /// history (never deleted by a revision). A write of an already-stored
@@ -181,7 +181,7 @@ pub trait MemoryProvider: Send + Sync {
     /// version never displaces a higher one.
     async fn write(&self, episode: Episode) -> Result<(), MemoryError>;
     /// Rank the CURRENT version of each episode against `task` — this is what
-    /// enters the model's context. Contract (ADR 0038, maintainer's
+    /// enters the model's context. Contract (ADR 0040, maintainer's
     /// decision): an episode whose current version is `unverified` is never
     /// returned (and does not take part in ranking); once a human confirms it
     /// (a `success` version) it is. Every backend applies
@@ -189,7 +189,7 @@ pub trait MemoryProvider: Send + Sync {
     async fn retrieve(&self, task: &str, limit: usize) -> Result<Vec<RankedContext>, MemoryError>;
     async fn upsert(&self, item: GraphUpsert) -> Result<(), MemoryError>;
     /// Every stored version of every episode of `run_id`, ordered by
-    /// `(id, version)` ascending (ADR 0038). Optional: a backend that cannot
+    /// `(id, version)` ascending (ADR 0040). Optional: a backend that cannot
     /// answer returns [`MemoryError::Unsupported`], and the kernel then never
     /// writes revisions to it (an unverified episode there stays unverified).
     async fn episode_history(&self, run_id: Uuid) -> Result<Vec<Episode>, MemoryError> {
@@ -199,7 +199,7 @@ pub trait MemoryProvider: Send + Sync {
 }
 
 /// May this episode reach the model's context? Everything but an
-/// `unverified` one (ADR 0038). The single predicate every backend's
+/// `unverified` one (ADR 0040). The single predicate every backend's
 /// `retrieve` filters with.
 pub fn in_model_context(e: &Episode) -> bool {
     e.outcome != EpisodeOutcome::Unverified
@@ -207,7 +207,7 @@ pub fn in_model_context(e: &Episode) -> bool {
 
 /// The current version of each episode in `history` (highest `version` per
 /// `id`), in the order the ids first appear. Shared by backends and the
-/// kernel so "current" means one thing everywhere (ADR 0038).
+/// kernel so "current" means one thing everywhere (ADR 0040).
 pub fn current_versions(history: &[Episode]) -> Vec<Episode> {
     let mut order: Vec<Uuid> = Vec::new();
     let mut latest: HashMap<Uuid, &Episode> = HashMap::new();
@@ -240,7 +240,7 @@ struct Store {
     /// The current version of each episode (what retrieval ranks).
     episodes: Vec<Episode>,
     /// Every version ever written, append-only except for an idempotent
-    /// re-write of the same `(id, version)` (ADR 0038).
+    /// re-write of the same `(id, version)` (ADR 0040).
     history: Vec<Episode>,
     entities: HashMap<String, serde_json::Value>,
     relations: Vec<(String, String, String)>,
@@ -412,11 +412,11 @@ mod tests {
         .unwrap();
     }
 
-    // ---- ADR 0038: three outcome states + versioned revisions ----
+    // ---- ADR 0040: three outcome states + versioned revisions ----
 
     #[test]
-    fn pre_adr_0038_record_still_reads_and_unverified_round_trips() {
-        // A record exactly as every pre-0038 backend stored it.
+    fn pre_adr_0040_record_still_reads_and_unverified_round_trips() {
+        // A record exactly as every pre-0040 backend stored it.
         let old = r#"{"id":"6f1c2a52-8d0e-4c43-9b3a-0c5d2f6e7a11","run_id":"0b7f8a8e-1d2c-4e3f-8a9b-1c2d3e4f5a6b","task":"t","trace":["finish: ok"],"outcome":"success","provenance":"reflection","version":1}"#;
         let e: Episode = serde_json::from_str(old).unwrap();
         assert_eq!(e.outcome, EpisodeOutcome::Success);

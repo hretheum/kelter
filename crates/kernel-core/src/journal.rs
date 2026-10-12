@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::action_gate::ActionApprovalDecision;
 use crate::contract::{ContractReport, Verification};
 use crate::delegation_gate::{AgentDelegationDecision, DelegationRequestMeta};
 use crate::engine::RunStatus;
@@ -153,6 +154,30 @@ pub enum JournalEntry {
         prompt: String,
         requested_at: u64,
     },
+    /// A fresh proposal of a MUTATING action under an `ask` policy (ADR
+    /// 0038): the run pauses here, durably, until a matching
+    /// `ActionApprovalDecided` appears. Carries the proposal verbatim so an
+    /// Allow replays it through the existing decision mechanism without
+    /// re-querying the model. In plan mode `branch` is the node id, and
+    /// `action` may be `review_verdict` for a human review node.
+    ActionApprovalRequested {
+        step: u32,
+        action: String,
+        arguments: serde_json::Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+        requested_at: u64,
+    },
+    /// A human (or the timeout sweeper, principal `"system:timeout"`)
+    /// resolved a pending `ActionApprovalRequested`.
+    ActionApprovalDecided {
+        step: u32,
+        action: String,
+        decision: ActionApprovalDecision,
+        principal: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+    },
     /// INFORMATIONAL (ADR 0036): the kernel refused something at `step` —
     /// a model proposal, an automated retry/fallback of an accepted
     /// delegation, or a plan node. Mirrors a live `RunEvent::Rejected`
@@ -251,9 +276,15 @@ pub enum RejectionSource {
     NodeRetry,
     /// A revised plan failed plan validation (ADR 0030).
     PlanValidation,
-    /// A recorded operator Deny for a plan-mode delegation ask (ADR 0025),
-    /// consumed on resume.
+    /// A recorded operator Deny for a plan-mode delegation ask (ADR 0025)
+    /// or a plan-mode action approval (ADR 0038), consumed on resume.
     OperatorDenied,
+    /// The operator's action policy is `deny` for this mutating action (ADR
+    /// 0038).
+    ActionPolicy,
+    /// A run budget would be crossed (ADR 0039): checked before a model call
+    /// or an action, never after.
+    Budget,
 }
 
 /// What a `Rejected` entry refers to (ADR 0036). See [`JournalEntry::Rejected`].
@@ -349,6 +380,8 @@ impl JournalEntry {
             | JournalEntry::AgentDelegationRequested { step, .. }
             | JournalEntry::AgentDelegationDecided { step, .. }
             | JournalEntry::AgentDelegationInputRequested { step, .. }
+            | JournalEntry::ActionApprovalRequested { step, .. }
+            | JournalEntry::ActionApprovalDecided { step, .. }
             | JournalEntry::Rejected { step, .. } => Some(*step),
             JournalEntry::TrustPosture { .. }
             | JournalEntry::Resumed { .. }
@@ -374,6 +407,20 @@ pub struct StepJournal {
     /// 0023). `None` when this step never triggered an `AskHuman` gate
     /// outcome from the `DelegationGate`.
     pub delegation: Option<PendingDelegationFold>,
+    /// A pending or decided action approval for this step (ADR 0038).
+    pub action_approval: Option<PendingApprovalFold>,
+}
+
+/// Folded view of one `ActionApprovalRequested` (+ optional matching
+/// `ActionApprovalDecided`) for a step.
+#[derive(Debug, Clone)]
+pub struct PendingApprovalFold {
+    pub action: String,
+    pub arguments: serde_json::Value,
+    pub branch: Option<String>,
+    pub requested_at: u64,
+    pub decision: Option<ActionApprovalDecision>,
+    pub principal: Option<String>,
 }
 
 /// Folded view of one `SkillActivationRequested` (+ optional matching
@@ -495,6 +542,36 @@ pub fn fold_step(journal: &[JournalEntry], step_index: u32) -> StepJournal {
                 if let Some(pending) = folded.delegation.as_mut() {
                     if &pending.agent == agent {
                         pending.decision = Some(*decision);
+                    }
+                }
+            }
+            JournalEntry::ActionApprovalRequested {
+                step,
+                action,
+                arguments,
+                branch,
+                requested_at,
+            } if *step == step_index => {
+                folded.action_approval = Some(PendingApprovalFold {
+                    action: action.clone(),
+                    arguments: arguments.clone(),
+                    branch: branch.clone(),
+                    requested_at: *requested_at,
+                    decision: None,
+                    principal: None,
+                });
+            }
+            JournalEntry::ActionApprovalDecided {
+                step,
+                action,
+                decision,
+                principal,
+                ..
+            } if *step == step_index => {
+                if let Some(pending) = folded.action_approval.as_mut() {
+                    if &pending.action == action {
+                        pending.decision = Some(*decision);
+                        pending.principal = Some(principal.clone());
                     }
                 }
             }

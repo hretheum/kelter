@@ -43,6 +43,170 @@ pub struct Config {
     pub skills: SkillsConfig,
     #[serde(default)]
     pub delegation: DelegationConfig,
+    #[serde(default)]
+    pub approval: ApprovalConfig,
+    #[serde(default)]
+    pub budget: BudgetSection,
+}
+
+/// The human gate on mutating actions (ADR 0038). Absent = every action
+/// `allow`, exactly as before. Policies are `"allow" | "ask" | "deny"`; an
+/// unknown value is a config ERROR (the daemon refuses to start) rather than
+/// a silent fallback — a typo in a safety gate must fail closed. Only
+/// actions that declare `idempotency_key` (the ADR 0031 "mutating"
+/// criterion) are gated; an entry naming a registered action that is not
+/// mutating is also a config ERROR ([`ApprovalConfig::check_against`]) — it
+/// could never take effect, and an operator who wrote it believes otherwise.
+/// `ask_timeout_secs` must be > 0 ([`ApprovalConfig::validate`]): a pause
+/// always ends, by a human or by the timeout deny. `review_verdict = "ask"` makes plan-mode
+/// review nodes a human verdict.
+///
+/// ```toml
+/// [approval]
+/// default = "allow"
+/// ask_timeout_secs = 300
+/// [approval.actions]
+/// write_file = "ask"
+/// run_command = "deny"
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ApprovalConfig {
+    pub default: kernel_core::ActionPolicy,
+    pub actions: std::collections::HashMap<String, kernel_core::ActionPolicy>,
+    /// How long a run may wait for a decision before the sweeper denies it
+    /// (principal `"system:timeout"`). Must be > 0.
+    pub ask_timeout_secs: u64,
+}
+
+impl Default for ApprovalConfig {
+    fn default() -> Self {
+        Self {
+            default: kernel_core::ActionPolicy::Allow,
+            actions: std::collections::HashMap::new(),
+            ask_timeout_secs: 300,
+        }
+    }
+}
+
+impl ApprovalConfig {
+    /// Checks that need no registry. `ask_timeout_secs = 0` would leave a
+    /// paused run waiting forever, so it is refused at startup.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.ask_timeout_secs == 0 {
+            anyhow::bail!(
+                "[approval] ask_timeout_secs must be > 0 (a paused action is denied when it \
+                 expires; waiting forever is not supported — ADR 0038)"
+            );
+        }
+        Ok(())
+    }
+
+    /// Checks against the live action space: every `[approval.actions]`
+    /// entry that names a registered action must name a *mutating* one
+    /// (declares `idempotency_key`, ADR 0031). A policy on a read-only tool,
+    /// a `delegate_to_*` action or a kernel action could never apply, so it
+    /// fails startup like a typo'd policy value. `review_verdict` is exempt.
+    /// A name the registry does not offer is returned for the caller to log:
+    /// it may belong to an extension that was skipped (ADR 0035).
+    pub fn check_against(&self, schema: &kernel_core::ActionSchema) -> anyhow::Result<Vec<String>> {
+        let mut unknown = Vec::new();
+        let mut not_mutating = Vec::new();
+        for name in self.actions.keys() {
+            if name == kernel_core::plan::REVIEW_ACTION {
+                continue;
+            }
+            match schema.spec(name) {
+                None => unknown.push(name.clone()),
+                Some(spec) if !spec.supports_idempotency_key() => not_mutating.push(name.clone()),
+                Some(_) => {}
+            }
+        }
+        if !not_mutating.is_empty() {
+            not_mutating.sort();
+            anyhow::bail!(
+                "[approval.actions] sets a policy on non-mutating action(s) {} — they declare no \
+                 idempotency_key, so the gate never applies to them (ADR 0038); remove the entries",
+                not_mutating.join(", ")
+            );
+        }
+        unknown.sort();
+        Ok(unknown)
+    }
+
+    pub fn to_gate(&self) -> kernel_core::ActionGateConfig {
+        kernel_core::ActionGateConfig {
+            default: self.default,
+            actions: self.actions.clone(),
+            ask_timeout_secs: self.ask_timeout_secs,
+        }
+    }
+}
+
+/// Cost budgets (ADR 0039). Absent = no limits. The per-run values are both
+/// the default and the ceiling for `POST /api/v1/runs` `budget` overrides
+/// (a caller may lower them, never raise them).
+///
+/// ```toml
+/// [budget]
+/// max_usd = 0.50
+/// max_tokens = 200000
+/// max_wall_secs = 1800
+/// daily_usd_per_principal = 5.0
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BudgetSection {
+    pub max_usd: Option<f64>,
+    pub max_tokens: Option<u64>,
+    pub max_wall_secs: Option<u64>,
+    pub daily_usd_per_principal: Option<f64>,
+    /// Tokens added to every model-call bound for what the adapter cannot
+    /// see (hidden provider templates / tool preambles).
+    pub prompt_overhead_tokens: u64,
+    /// Completion bound when an adapter does not report `max_tokens`.
+    pub fallback_completion_tokens: u64,
+}
+
+impl Default for BudgetSection {
+    fn default() -> Self {
+        Self {
+            max_usd: None,
+            max_tokens: None,
+            max_wall_secs: None,
+            daily_usd_per_principal: None,
+            prompt_overhead_tokens: kernel_core::BudgetConfig::DEFAULT_PROMPT_OVERHEAD_TOKENS,
+            fallback_completion_tokens:
+                kernel_core::BudgetConfig::DEFAULT_FALLBACK_COMPLETION_TOKENS,
+        }
+    }
+}
+
+impl BudgetSection {
+    pub fn to_budget(&self) -> anyhow::Result<kernel_core::BudgetConfig> {
+        for (name, v) in [
+            ("max_usd", self.max_usd),
+            ("daily_usd_per_principal", self.daily_usd_per_principal),
+        ] {
+            if let Some(v) = v {
+                anyhow::ensure!(v.is_finite() && v > 0.0, "[budget] {name} must be > 0");
+            }
+        }
+        anyhow::ensure!(
+            self.max_tokens != Some(0) && self.max_wall_secs != Some(0),
+            "[budget] max_tokens / max_wall_secs must be > 0"
+        );
+        Ok(kernel_core::BudgetConfig {
+            per_run: kernel_core::BudgetLimits {
+                max_usd: self.max_usd,
+                max_tokens: self.max_tokens,
+                max_wall_secs: self.max_wall_secs,
+            },
+            daily_usd_per_principal: self.daily_usd_per_principal,
+            prompt_overhead_tokens: self.prompt_overhead_tokens,
+            fallback_completion_tokens: self.fallback_completion_tokens,
+        })
+    }
 }
 
 /// Skills (ADR 0019): advisory procedural knowledge in the OpenSkills /
@@ -469,6 +633,9 @@ impl Config {
             .map_err(|e| anyhow::anyhow!("cannot read config '{path}': {e}"))?;
         let cfg: Config =
             toml::from_str(&raw).map_err(|e| anyhow::anyhow!("invalid config '{path}': {e}"))?;
+        cfg.approval
+            .validate()
+            .map_err(|e| anyhow::anyhow!("invalid config '{path}': {e}"))?;
         Ok(cfg)
     }
 }

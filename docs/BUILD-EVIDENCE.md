@@ -3052,14 +3052,171 @@ Re-run after the change: `cargo test --workspace --no-fail-fast --
 --include-ignored` **380 passed, 0 failed** (379 − 1 replaced + 2 new); clippy 1.99 / fmt clean; desktop unchanged
 (no type changed); `scripts/smoke-success-contract.sh` PASS.
 
-## 2026-10-05 — unverified reflection episodes (ADR 0038, ADR 0037 follow-up)
+## 2026-10-05 — human gate on mutating actions + cost budgets (ADR 0038 KR1.2, ADR 0039 KR1.3)
+
+**What changed.** (1) `[approval]`: `allow`/`ask`/`deny` per action for
+*mutating* actions only — those declaring `idempotency_key`, ADR 0031's
+criterion — with `review_verdict = "ask"` turning plan review nodes into a
+human verdict. `ask` uses the ADR 0021/0023/0025/0026 pause unchanged in
+shape: journaled `action_approval_requested`, status
+`awaiting_action_approval`, early return on resume, journaled
+`action_approval_decided` with the principal, `POST
+/runs/{id}/action-approval`, a timeout sweeper (`system:timeout` deny), and
+allow = the model's original proposal journaled as the step's `Decision` and
+dispatched by the existing replay branch. `deny` = `rejected` (source
+`action_policy`). Plan mode: drain-then-pause (ADR 0025). New `GET
+/api/v1/approvals` lists every run waiting on a human (all four kinds).
+(2) `[budget]` + `POST /runs` `budget` override (lower only): `max_usd`,
+`max_tokens`, `max_wall_secs` per run, `daily_usd_per_principal`. Checked
+before every model call against the adapter's worst case
+(`PolicyOracle::call_bound`: rendered prompt bytes + `max_tokens`) and before
+every action; a stop is `rejected` (source `budget`) + live `budget_exceeded`
++ `run.budget_stop`, then `failed`. Unpriced model → `usd_enforced: false`,
+dollar limits inactive, token/time limits active. Defaults: no section → no
+gate, no limit.
+
+> **⚠ Visible without any new config.** `run.usage` and `cost_usd` now count
+> **every** model call — including proposals that were **refused** (schema,
+> duplicate, gate, policy) or **paused** for a human. Before, only accepted
+> proposals were counted, so a looping model was invisible to accounting and
+> would have slipped past any budget. Runs with refusals or pauses now report
+> higher `usage`/`cost_usd` than the same run did before this change — that is
+> the real spend, not a regression. Every other change here is inert until
+> `[approval]` / `[budget]` is configured.
+
+**Checkpoints** (this tree):
+
+| what | file:line |
+|---|---|
+| gate policy (mutating only, a2a/review excluded) | `crates/kernel-core/src/action_gate.rs:70` |
+| step: gate on a fresh proposal, before `Decision` | `crates/kernel-core/src/engine.rs:3695` |
+| step: decided approval → `Decision` once / `last_error` | `crates/kernel-core/src/engine.rs:3153` |
+| resume: still awaiting → re-surface, no model, no effect | `crates/kernel-core/src/engine.rs:2844` |
+| pause write (both modes) | `crates/kernel-core/src/engine.rs:1983` |
+| decision (journal + principal + paused time) | `crates/kernel-core/src/engine.rs:1932` |
+| plan: tool/review gate, human verdict as receipt | `crates/kernel-core/src/engine.rs:5216` |
+| plan: drain-then-pause resolution | `crates/kernel-core/src/engine.rs:5549` |
+| `unfinished_runs` (SQLite literal; in-memory `matches!`) | `crates/storage/src/lib.rs:224`, `crates/kernel-core/src/store.rs:155` |
+| timeout sweeper | `crates/daemon/src/approval_sweep.rs:16` |
+| budget predicate (pure) | `crates/kernel-core/src/budget.rs:199` |
+| override = tighten only | `crates/kernel-core/src/budget.rs:42` |
+| call bound: trait default / adapters / skills wrapper | `crates/kernel-core/src/oracle.rs:125`, `crates/policy/src/openrouter.rs:219`, `crates/policy/src/local.rs:198`, `:352`, `crates/skills/src/oracle.rs:108` |
+| step: before each model call | `crates/kernel-core/src/engine.rs:3300` |
+| step: every call's usage counted | `crates/kernel-core/src/engine.rs:3362` |
+| step: before the action | `crates/kernel-core/src/engine.rs:3899` |
+| plan: before a (re-)plan proposal | `crates/kernel-core/src/engine.rs:4607` |
+| plan: before node admission, review bound reserved | `crates/kernel-core/src/engine.rs:5366` |
+| stop record (journal, WS, `budget_stop` before terminal) | `crates/kernel-core/src/engine.rs:2101` |
+| daily spend, derived from run records | `crates/kernel-core/src/engine.rs:2039` |
+| API: `budget` on create / decision route / queue | `crates/api/src/lib.rs:798`, `:1352`, `:1406` |
+| config (fail-closed parsing) | `crates/daemon/src/config.rs:71`, `:112` |
+
+**Example config** (the smoke's, `docs/evidence/2026-10-05-human-gate-budgets/config.toml`):
+
+```toml
+[approval]
+ask_timeout_secs = 600
+[approval.actions]
+append_ledger = "ask"
+write_report = "deny"
+
+[budget]
+prompt_overhead_tokens = 0     # limits come per run via POST /runs "budget"
+```
+
+**Run JSON** (real daemon, `scripts/smoke-human-gate-budgets.sh`; full files
+in `docs/evidence/2026-10-05-human-gate-budgets/`):
+
+```
+waiting    {"status":"awaiting_action_approval","steps":[],"principal":"default",
+            "pending_action_approval":{"step":0,"action":"append_ledger",
+              "arguments":{"entry":"approved-entry"},"branch":null,
+              "requested_at":1791228586,"expires_at":1791229186}}
+queue      [{"kind":"action_approval","status":"awaiting_action_approval",
+             "decide":"/api/v1/runs/8058fa30-…/action-approval","pending":{…}}]
+approved   {"status":"completed","steps":[{"action":"append_ledger","ok":true,…}],
+            "usage":{"prompt_tokens":20,"completion_tokens":10,"calls":2}}
+  journal  action_approval_requested → action_approval_decided {"decision":"allow",
+           "principal":"default"} → resumed {"cause":"pause_resolved","replayed_steps":[0]}
+           → decision → intent {"idempotency_key":"8058fa30-…:0"} → receipt → … → terminal
+denied     {"status":"incomplete"} + rejected {"source":"action_policy","subject":"proposal",
+            "action":"write_report","reason":"the operator's action policy denies
+            'write_report' — it changes state and is not permitted in this deployment; …"}
+tokens     {"status":"failed","usage":{"prompt_tokens":400,"completion_tokens":0,"calls":1},
+            "budget":{"max_tokens":4549,"usd_enforced":true},
+            "budget_stop":{"limit":"tokens","max":4549.0,"used":400.0,"requested":4758.0,
+              "checkpoint":"model_call","step":1},
+            "error":"token budget exceeded before a model call at step 1: used 400 tokens +
+              worst case 4758 tokens > max 4549 tokens — stopped before crossing it"}
+wall       {"status":"failed","budget_stop":{"limit":"wall_time","max":2.0,"used":3.0,
+              "requested":0.0,"checkpoint":"action","step":0}}
+```
+
+(`usd_enforced: true` there because every `local:*` model is priced at $0 by
+the built-in table.) The token leg also shows how pessimistic the bound is:
+the first call's worst case was 4249 tokens (prompt bytes + 512), its real
+usage 400.
+
+**Verified (this tree; clippy/fmt on Rust 1.99.0, tests on 1.97.0 local):**
+
+- `cargo test --workspace --no-fail-fast -- --include-ignored` with
+  `KELTER_TEST_POSTGRES_URL` against a local PostgreSQL 16 +
+  `postgresql-16-pgvector` (no Docker daemon in this container):
+  **420 passed, 0 failed, 0 ignored** (was 380; +40: 3 `action_gate` unit,
+  7 `budget` unit, 9 `kernel-core/tests/human_gate_test.rs`, 11
+  `kernel-core/tests/budget_test.rs`, 2 `daemon/tests/human_gate_restart_test.rs`,
+  5 `daemon/tests/governance_config_test.rs` (2 added with Eryk's decisions), 3
+  `api/tests/gate_budget_api_test.rs`).
+- **No existing assertion changed.** Existing tests changed only to compile
+  (`Run` literals gained 5 fields: `kernel-core/src/store.rs`,
+  `storage/src/lib.rs`, `a2a/src/server.rs`, desktop `durable_store.rs`) and
+  the audit H-1 SQLite test lists the new status in its non-terminal set.
+  The suite was green with the engine change before any new test existed
+  (406 passed at that point, without Postgres, after the first new files).
+- `cargo +1.99.0 clippy --workspace --all-targets -- -D warnings`,
+  `cargo +1.99.0 fmt --all --check`: clean.
+- Desktop (`Run` gained fields): `cargo +1.99.0 fmt --all --check`,
+  `cargo +1.99.0 clippy --all-targets -- -D warnings`, `cargo +1.99.0 test
+  --all-targets` (2 passed) — clean.
+- `pnpm --dir apps/web-ui test`: 2 files, **22** tests (+3, approval
+  reducer); `pnpm build` (tsc + vite) clean.
+- `scripts/smoke-human-gate-budgets.sh`: PASS — A (ask → pause → **daemon
+  restarted** → re-surfaced, model not called, ledger untouched → anonymous
+  decision 401 → allow → `completed`, ledger line exactly once, decision
+  journaled with principal `default`), D (deny → `rejected/action_policy`,
+  no report file), T (token budget: the refused call never reached the
+  model — `calls.log` grew by exactly one), W (wall budget: a 2.5 s model
+  call, the proposed action refused before dispatch — a `Decision`, no
+  `Intent`). The scripted stub gained optional per-reply `_usage`/`_delay`
+  keys; its default queue is unchanged.
+
+**Not verified here.** No run on K12 and no real model: the call bound is
+proven against the three adapters' own rendering, not measured against a
+provider's tokenizer. The web UI prompt was built and type-checked, not
+clicked through in a browser. `scripts/smoke-durability.sh` and the other
+smokes were not re-run (no code path they cover changed beyond `usage`
+accounting). A dedicated UI view over `GET /api/v1/approvals` is not built.
+**Decided by Eryk (2026-10-05), applied in the same PR.** Budget stop stays
+`failed` + `budget_stop`; the daily $ counter stays derived from run records —
+it can be wrong under parallel runs of one principal, a ledger table comes
+with KR1.4 (ADR 0039 "Decided"). `ask_timeout_secs = 0` and a policy on a
+non-mutating action are now **startup errors** (`ApprovalConfig::validate` in
+`Config::load`, `ApprovalConfig::check_against` in `log_governance`; tests
+`governance_config_test::ask_timeout_zero_is_refused_at_startup`,
+`…::a_policy_on_a_non_mutating_action_is_refused_at_startup`). Unkeyed
+side-effect tools bypassing the gate → separate task KR1.2b (ADR 0038 "Decided").
+
+## 2026-10-05 — unverified reflection episodes (ADR 0040, ADR 0037 follow-up)
+
+> Renumbered 2026-10-12 while merging `main`: written as ADR 0038 on its branch, but
+> 0038/0039 went to the human gate and budgets (PR #9) first. Same decision, new number.
 
 **What.** A `completed` run without a met contract no longer writes its
 reflection episode as `Success`: `EpisodeOutcome` gained `Unverified`.
 Confirm/revoke (ADR 0037) write the next version of that episode (`success` /
 `unverified`, `provenance: human`), history kept. Retrieval keeps unverified
 episodes in context, marked "not a success pattern"; ranking unchanged.
-Pre-ADR-0038 episodes are left as they are. Design and inventory: ADR 0038.
+Pre-ADR-0040 episodes are left as they are. Design and inventory: ADR 0040.
 
 **`EpisodeOutcome` sites (at `f9d5a50` → after).**
 
@@ -3109,7 +3266,7 @@ with the old `ALTER`, passes with the fix.
   (was 380; +17: 3 `memory` unit, 2 `storage` unit, 3 `pgstore`
   (transitions, pre-versioning row, deadlock regression), 6
   `success_contract_test` (transitions + events, contract/failed unchanged,
-  plan mode, pre-0038 episode untouched, no model path, history-less
+  plan mode, pre-0040 episode untouched, no model path, history-less
   backend), 1 `api_test`, 1 `wasm_memory_test`, 1 `memory_ext_test`; plus
   one assertion added to the existing rogue-backend MCP test — a history
   naming another run is refused). Hermetic: 385 passed, 12 ignored.
@@ -3137,7 +3294,7 @@ with the old `ALTER`, passes with the fix.
   → v1 `success` at once; confirm 409; episode unchanged).
 - `scripts/smoke-success-contract.sh`: still PASS.
 
-**Not verified here.** No K12 run. The downgrade `UPDATE` in ADR 0038 is
+**Not verified here.** No K12 run. The downgrade `UPDATE` in ADR 0040 is
 written, not executed. WASM memory cannot lift an episode (no guest history
 op) — tested as `Unsupported`, documented as a limit. Glassbox's parser is
 unchanged. The retrieval rule ("in context, marked") is a proposal awaiting

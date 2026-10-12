@@ -135,13 +135,13 @@ async fn interface_violating_backend_is_rejected_by_the_schema_gate() {
         "schema gate must reject the malformed response, got: {err}"
     );
 
-    // ADR 0038: a history naming another run is refused, so an extension
+    // ADR 0040: a history naming another run is refused, so an extension
     // cannot steer which episode the kernel revises.
     let err = provider.episode_history(Uuid::new_v4()).await.unwrap_err();
     assert!(err.to_string().contains("for run"), "{err}");
 }
 
-/// ADR 0038 through the subprocess seam (the daemon's default SQLite memory
+/// ADR 0040 through the subprocess seam (the daemon's default SQLite memory
 /// path): the built-in memory extension stores an `unverified` episode but
 /// never retrieves it, a higher `success` version is retrieved, and
 /// `memory_episode_history` returns every version.
@@ -193,7 +193,7 @@ async fn builtin_memory_carries_unverified_and_versions_over_mcp() {
         .is_empty());
 }
 
-/// ADR 0038: the memory tools — `memory_episode_history` included — are the
+/// ADR 0040: the memory tools — `memory_episode_history` included — are the
 /// kernel's private protocol with its memory backend, never model actions.
 /// Even the memory-server misconfigured as a TOOL server (next to a real one)
 /// contributes nothing to the action space, so the model can neither see
@@ -250,7 +250,7 @@ async fn memory_tools_never_enter_the_action_space() {
     assert_eq!(names, source.tool_names());
 }
 
-/// ADR 0038 end to end on the daemon's default memory path — the kernel over
+/// ADR 0040 end to end on the daemon's default memory path — the kernel over
 /// the built-in memory-server (SQLite) as a real child process: the model's
 /// context never holds the unverified episode, and holds it once confirmed.
 #[tokio::test]
@@ -287,7 +287,7 @@ async fn sqlite_memory_server_keeps_unverified_out_of_model_context() {
     );
 }
 
-/// ADR 0038, end to end through the kernel (in-memory backend): the model's
+/// ADR 0040, end to end through the kernel (in-memory backend): the model's
 /// context never holds the unverified episode, and holds it once confirmed.
 /// (Lives here rather than in kernel-core, which cannot enable its own
 /// `testkit` feature without a self dev-dependency.)

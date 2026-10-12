@@ -63,6 +63,9 @@ pub fn state_for(status: RunStatus) -> &'static str {
         // outbound delegation — from an inbound caller's view this run still
         // "needs additional input before it can continue".
         RunStatus::AwaitingDelegationInput => "TASK_STATE_INPUT_REQUIRED",
+        // ADR 0038: paused awaiting a human's approval of a mutating action —
+        // the run needs input from a human before it can continue.
+        RunStatus::AwaitingActionApproval => "TASK_STATE_INPUT_REQUIRED",
     }
 }
 
@@ -239,6 +242,11 @@ mod tests {
             verification: None,
             contract_report: None,
             confirmation: None,
+            pending_action_approval: None,
+            principal: None,
+            budget: None,
+            budget_stop: None,
+            paused_secs: 0,
         }
     }
 

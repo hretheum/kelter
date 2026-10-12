@@ -19,7 +19,7 @@ use memory::{Episode, GraphUpsert, MemoryError, MemoryProvider, RankedContext};
 
 pub const MEMORY_TOOLS: [&str; 3] = ["memory_write", "memory_retrieve", "memory_upsert"];
 
-/// Optional fourth memory tool (ADR 0038): every stored version of a run's
+/// Optional fourth memory tool (ADR 0040): every stored version of a run's
 /// episodes. An extension that does not serve it is still a valid memory
 /// backend — it just reports `Unsupported`, and the kernel writes no episode
 /// revisions to it.

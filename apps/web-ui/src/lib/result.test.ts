@@ -117,7 +117,7 @@ describe("verificationView (ADR 0037)", () => {
   });
 });
 
-describe("episodeView (ADR 0038)", () => {
+describe("episodeView (ADR 0040)", () => {
   const ep = (o: Partial<Episode>): Episode => ({
     id: "e",
     run_id: "r",

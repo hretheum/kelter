@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use kernel_core::{ActionSchema, PolicyContext, PolicyError, PolicyOracle, Proposal};
+use kernel_core::{ActionSchema, CallBound, PolicyContext, PolicyError, PolicyOracle, Proposal};
 
 use crate::SkillRegistry;
 
@@ -75,6 +75,24 @@ impl SkillContextOracle {
     }
 }
 
+impl SkillContextOracle {
+    /// The context the inner oracle actually sees: the caller's, with the
+    /// skill context appended to the guidance when there is any.
+    fn augmented<'a>(&self, context: &'a PolicyContext) -> std::borrow::Cow<'a, PolicyContext> {
+        match self.skill_context(&context.active_skills) {
+            None => std::borrow::Cow::Borrowed(context),
+            Some(skill_ctx) => {
+                let mut augmented = context.clone();
+                augmented.guidance = Some(match &context.guidance {
+                    Some(g) => format!("{g}\n\n{skill_ctx}"),
+                    None => skill_ctx,
+                });
+                std::borrow::Cow::Owned(augmented)
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl PolicyOracle for SkillContextOracle {
     async fn propose(
@@ -82,17 +100,13 @@ impl PolicyOracle for SkillContextOracle {
         context: &PolicyContext,
         schema: &ActionSchema, // ← passed through untouched, by design
     ) -> Result<Proposal, PolicyError> {
-        match self.skill_context(&context.active_skills) {
-            None => self.inner.propose(context, schema).await,
-            Some(skill_ctx) => {
-                let mut augmented = context.clone();
-                augmented.guidance = Some(match &context.guidance {
-                    Some(g) => format!("{g}\n\n{skill_ctx}"),
-                    None => skill_ctx,
-                });
-                self.inner.propose(&augmented, schema).await
-            }
-        }
+        self.inner.propose(&self.augmented(context), schema).await
+    }
+
+    /// The bound of the call this wrapper actually makes — with the skill
+    /// context it adds — so a budget sees the real prompt (ADR 0039).
+    fn call_bound(&self, context: &PolicyContext, schema: &ActionSchema) -> CallBound {
+        self.inner.call_bound(&self.augmented(context), schema)
     }
 
     fn describe(&self) -> String {

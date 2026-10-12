@@ -5,7 +5,7 @@ memory_retrieve / memory_upsert, plus the optional memory_episode_history).
 The kernel talks to it over MCP and schema-validates every response — no
 Rust, no recompilation.
 
-ADR 0038 contract: a write of a stored `id` with a higher `version` is a
+ADR 0040 contract: a write of a stored `id` with a higher `version` is a
 revision (every version kept), and an episode whose current version is
 "unverified" is never retrieved — it must not reach model context.
 """
@@ -52,7 +52,7 @@ def memory_retrieve(task: str, limit: int) -> dict:
     results = []
     for e in current(load()["episodes"]):
         if e.get("outcome") == "unverified":
-            continue  # never in model context (ADR 0038)
+            continue  # never in model context (ADR 0040)
         hits = len(words & set(e.get("task", "").lower().split()))
         if hits:
             results.append({

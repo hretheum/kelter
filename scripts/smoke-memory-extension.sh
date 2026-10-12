@@ -4,7 +4,7 @@
 #      registers via its manifest and the daemon routes the kernel's memory
 #      seam to it — no recompilation;
 #   2) a real model run writes a reflection episode THROUGH the extension,
-#      and — once a human confirms that run (ADR 0038: an unverified
+#      and — once a human confirms that run (ADR 0040: an unverified
 #      episode never reaches model context) — a second run retrieves that
 #      context back from it;
 #   3) governance: a manifest declaring an unimplemented capability makes
@@ -113,7 +113,7 @@ grep -q "memory-proof" "$MEMFILE" \
   || die "reflection episode did not reach the Python backend"
 log "  episode stored by the Python backend: $(python3 -c "import json;d=json.load(open('$MEMFILE'));print(len(d['episodes']),'episode(s)')")"
 
-# ADR 0038: the run has no success contract, so its episode is `unverified`
+# ADR 0040: the run has no success contract, so its episode is `unverified`
 # and kept out of model context until a human confirms the run.
 curl -fsS -X POST "$BASE/api/v1/runs/$LAST_RUN_ID/confirmation" \
   -H "Authorization: Bearer ${TOKEN}" >/dev/null || die "confirming run 1 failed"

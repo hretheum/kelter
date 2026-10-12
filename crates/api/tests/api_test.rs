@@ -1064,7 +1064,7 @@ async fn confirmation_endpoint_is_bearer_gated_journaled_and_reversible() {
     assert_eq!(res.status(), 404);
 }
 
-// ---- ADR 0038: the run's reflection episode follows verification ----------
+// ---- ADR 0040: the run's reflection episode follows verification ----------
 
 #[tokio::test]
 async fn episodes_endpoint_shows_unverified_then_confirmed_then_revoked() {

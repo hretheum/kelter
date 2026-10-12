@@ -7,7 +7,7 @@ provenance_metadata:
   session_context: "ADR 0037 follow-up (CLAUDE.md open item 4): reflection episodes still recorded an unverified `completed` run as `Success`, so episodic memory kept presenting hallucinated successes to the model as success patterns even though distillation no longer learned from them. This ADR adds a third episode state and makes the human confirmation move it, versioned."
 ---
 
-# ADR 0038: Unverified reflection episodes
+# ADR 0040: Unverified reflection episodes
 
 Status: accepted (retrieval rule in §4 decided by the maintainer, 2026-10-05) · Date: 2026-10-05 · Builds on: ADR 0005 (memory provider, reflection), ADR 0016 (versioned, provenance-tagged, reversible memory), ADR 0037 (success contract, `verification`, human confirmation) · Touches: ADR 0008 (memory extension protocol), ADR 0024 (WASM memory), ADR 0028 (shared Postgres memory)
 
@@ -67,7 +67,7 @@ Chosen over a separate `verified: bool` field because:
   still saying "success" — the exact failure this ADR exists to fix;
 - an enum cannot express the nonsense combination `Failure` + `verified`;
 - it is additive on the wire: old records (`"success"`/`"failure"`) parse
-  unchanged (test `pre_adr_0038_record_still_reads_and_unverified_round_trips`).
+  unchanged (test `pre_adr_0040_record_still_reads_and_unverified_round_trips`).
 
 ### 2. What reflection writes
 
@@ -193,14 +193,14 @@ actually received.
 Episodes written before this change stay exactly as they were: a `completed`
 run's episode is `success` with `provenance: reflection`, whether or not its
 run was verified. This mirrors ADR 0037's rule for already-learned artifacts
-("what was learned before stays"). Consequence, stated plainly: a pre-ADR-0038
+("what was learned before stays"). Consequence, stated plainly: a pre-ADR-0040
 episode of an unverified run keeps reading `outcome: Success` in context.
 
 Confirming or revoking such a run (it is confirmable per ADR 0037 §5) governs
 learning as before but does **not** touch its episode: confirm does nothing
 because it is not `unverified`; revoke does nothing because its `success` was
 written by reflection, not by a human. No duplicate, no downgrade (test
-`pre_adr_0038_success_episode_is_left_as_it_is`). A backfill that rewrites old
+`pre_adr_0040_success_episode_is_left_as_it_is`). A backfill that rewrites old
 episodes to `unverified` is possible later as a separate, explicit operation;
 it is not done here.
 

@@ -3,7 +3,7 @@
 //!
 //! [`episode_context_probe`] drives the REAL kernel against a given memory
 //! backend and reports what the model was shown, so every backend can prove
-//! the ADR 0038 rule end to end: an `unverified` episode never reaches the
+//! the ADR 0040 rule end to end: an `unverified` episode never reaches the
 //! model's context, and the same episode does once a human confirms it.
 
 use std::sync::{Arc, Mutex};

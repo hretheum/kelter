@@ -48,7 +48,7 @@ function VerificationLine({ run }: { run: Run }) {
   const v = verificationView(run);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // ADR 0038: the run's episode follows confirm/revoke; re-read it whenever
+  // ADR 0040: the run's episode follows confirm/revoke; re-read it whenever
   // the confirmation changes (here or from another client).
   const [episodes, setEpisodes] = useState<RunEpisodes | null>(null);
   const confirmedAt = run.confirmation?.at_ms ?? null;

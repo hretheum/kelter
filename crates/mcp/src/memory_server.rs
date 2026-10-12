@@ -1,6 +1,6 @@
 //! The memory-extension protocol, server side: `MemoryProvider` exposed as
 //! three reserved MCP tools, plus the optional `memory_episode_history`
-//! (ADR 0038). The built-in durable memory ships as exactly this server (dogfooding, ADR 0006/0008): the daemon spawns it through
+//! (ADR 0040). The built-in durable memory ships as exactly this server (dogfooding, ADR 0006/0008): the daemon spawns it through
 //! the same registry path as any third-party memory extension — no
 //! privileged in-process shortcut.
 
@@ -91,7 +91,7 @@ impl MemoryToolServer {
     }
 
     #[tool(
-        description = "Every stored version of a run's episodes, oldest first (optional memory-capability tool, ADR 0038)."
+        description = "Every stored version of a run's episodes, oldest first (optional memory-capability tool, ADR 0040)."
     )]
     async fn memory_episode_history(
         &self,
