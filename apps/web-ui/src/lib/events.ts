@@ -157,6 +157,9 @@ export function applyEvent(axis: AxisState, ev: RunEvent): void {
     case "reflection_written":
       axis.reflections += 1;
       break;
+    case "episode_revised":
+      // ADR 0040: memory state only; the run's axis is unchanged.
+      break;
     case "completed":
       axis.terminal = { kind: "completed", output: ev.output };
       break;

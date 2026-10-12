@@ -33,7 +33,8 @@ use async_trait::async_trait;
 use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use memory::embeddings::EmbeddingBackend;
 use memory::{
-    episode_summary, retrieval, Episode, GraphUpsert, MemoryError, MemoryProvider, RankedContext,
+    episode_summary, in_model_context, retrieval, Episode, GraphUpsert, MemoryError,
+    MemoryProvider, RankedContext,
 };
 use pgvector::Vector;
 use tokio_postgres::NoTls;
@@ -99,6 +100,39 @@ CREATE TABLE IF NOT EXISTS learned_plans (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS learned_plan_batch ON learned_plans(batch_id);
+
+-- Versioned episodes (ADR 0040): `episodes` keeps the CURRENT version of each
+-- episode (what retrieval ranks; a pre-existing row is version 1), and every
+-- version ever written also lands in the append-only `episode_versions`. A row
+-- from before this existed is only in `episodes`; `episode_history` reads
+-- both, and a write copies such a row into history before revising it.
+-- The column is added only when missing: `ALTER TABLE … ADD COLUMN IF NOT
+-- EXISTS` takes an ACCESS EXCLUSIVE lock on `episodes` even when the column is
+-- there, and an instance connecting while another writes an episode then
+-- deadlocks with that writer (measured: the writer holds `episode_versions`
+-- and waits on `episodes`, the migrator holds `episodes` and waits on the
+-- `episode_versions` index). Checked in the catalog, the steady-state migrate
+-- takes no lock on `episodes` at all.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'episodes' AND column_name = 'version'
+    ) THEN
+        ALTER TABLE episodes ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+    END IF;
+END
+$$;
+CREATE TABLE IF NOT EXISTS episode_versions (
+    id         UUID NOT NULL,
+    version    INTEGER NOT NULL,
+    run_id     UUID NOT NULL,
+    data       TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (id, version)
+);
+CREATE INDEX IF NOT EXISTS episode_versions_run ON episode_versions(run_id);
 ";
 
 /// A shared handle to one Postgres database: a connection pool plus the
@@ -235,23 +269,69 @@ impl MemoryProvider for PgMemoryProvider {
     async fn write(&self, episode: Episode) -> Result<(), MemoryError> {
         let data = serde_json::to_string(&episode).map_err(mem_err)?;
         let embedding = self.store.embed_one(&episode.task).await;
+        let version = episode.version as i32;
+        let mut client = self.store.client().await.map_err(mem_err)?;
+        // One transaction: history row + current row (ADR 0040). The current
+        // row only advances; a lower version never displaces a higher one.
+        let tx = client.transaction().await.map_err(mem_err)?;
+        // A current row from before versioning has no history row yet.
+        tx.execute(
+            "INSERT INTO episode_versions (id, version, run_id, data, created_at)
+             SELECT id, version, run_id, data, created_at FROM episodes WHERE id = $1
+             ON CONFLICT (id, version) DO NOTHING",
+            &[&episode.id],
+        )
+        .await
+        .map_err(mem_err)?;
+        tx.execute(
+            "INSERT INTO episode_versions (id, version, run_id, data)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (id, version) DO UPDATE SET data = $4",
+            &[&episode.id, &version, &episode.run_id, &data],
+        )
+        .await
+        .map_err(mem_err)?;
+        tx.execute(
+            "INSERT INTO episodes (id, run_id, task, data, embedding, version)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (id) DO UPDATE SET data = $4, embedding = $5, version = $6
+             WHERE episodes.version <= $6",
+            &[
+                &episode.id,
+                &episode.run_id,
+                &episode.task,
+                &data,
+                &embedding,
+                &version,
+            ],
+        )
+        .await
+        .map_err(mem_err)?;
+        tx.commit().await.map_err(mem_err)?;
+        Ok(())
+    }
+
+    async fn episode_history(&self, run_id: Uuid) -> Result<Vec<Episode>, MemoryError> {
         let client = self.store.client().await.map_err(mem_err)?;
-        client
-            .execute(
-                "INSERT INTO episodes (id, run_id, task, data, embedding)
-                 VALUES ($1, $2, $3, $4, $5)
-                 ON CONFLICT (id) DO UPDATE SET data = $4, embedding = $5",
-                &[
-                    &episode.id,
-                    &episode.run_id,
-                    &episode.task,
-                    &data,
-                    &embedding,
-                ],
+        let rows = client
+            .query(
+                "SELECT data FROM episode_versions WHERE run_id = $1
+                 UNION ALL
+                 SELECT data FROM episodes WHERE run_id = $1",
+                &[&run_id],
             )
             .await
             .map_err(mem_err)?;
-        Ok(())
+        let mut out: Vec<Episode> = Vec::new();
+        for row in rows {
+            let data: String = row.get("data");
+            let e: Episode = serde_json::from_str(&data).map_err(mem_err)?;
+            if !out.iter().any(|o| o.id == e.id && o.version == e.version) {
+                out.push(e);
+            }
+        }
+        out.sort_by_key(|e| (e.id, e.version));
+        Ok(out)
     }
 
     async fn retrieve(&self, task: &str, limit: usize) -> Result<Vec<RankedContext>, MemoryError> {
@@ -262,9 +342,12 @@ impl MemoryProvider for PgMemoryProvider {
         if let Some(qvec) = self.store.embed_one(task).await {
             let rows = client
                 .query(
+                    // ADR 0040: an `unverified` episode never reaches model
+                    // context — filtered before LIMIT so it cannot take a slot.
                     "SELECT data, (1 - (embedding <=> $1))::float8 AS score
                      FROM episodes
                      WHERE embedding IS NOT NULL
+                       AND (data::jsonb ->> 'outcome') IS DISTINCT FROM 'unverified'
                      ORDER BY embedding <=> $1
                      LIMIT $2",
                     &[&qvec, &(limit as i64)],
@@ -287,7 +370,12 @@ impl MemoryProvider for PgMemoryProvider {
 
         // BM25 path: load rows, rank fresh in Rust (identical contract to the
         // SQLite backend). No persistent index → reversible by construction.
-        let episodes = load_episodes(&client).await.map_err(mem_err)?;
+        let episodes: Vec<Episode> = load_episodes(&client)
+            .await
+            .map_err(mem_err)?
+            .into_iter()
+            .filter(in_model_context) // ADR 0040
+            .collect();
         let docs: Vec<String> = episodes.iter().map(|e| e.task.clone()).collect();
         let ranked = retrieval::normalize(&retrieval::rank_bm25(task, &docs, limit));
         Ok(ranked

@@ -14,7 +14,7 @@
 //!    no longer sees it.
 //!
 //! `#[ignore]`d by default, so the plain `cargo test` stays hermetic AND the
-//! skip is VISIBLE as `9 ignored` (across this file and `pg_vector_test.rs`)
+//! skip is VISIBLE as `14 ignored` (across this file and `pg_vector_test.rs`)
 //! rather than a green `ok` that touched nothing. To run them: start a
 //! `pgvector/pgvector:pg16` container, set
 //! `KELTER_TEST_POSTGRES_URL`, and pass `-- --include-ignored`. CI does exactly
@@ -484,4 +484,154 @@ async fn forget_batch_removes_facts_and_plans_together_on_postgres() {
         .unwrap()
         .iter()
         .all(|p| p.provenance.batch_id != batch));
+}
+
+// ---- ADR 0040: versioned episode transitions on Postgres --------------------
+
+/// Confirm (v2 Success) and revoke (v3 Unverified) are new versions of one
+/// episode: retrieval sees only the current one, the history keeps all three,
+/// and a stale lower version never displaces the current row.
+#[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
+async fn episode_transitions_are_versioned_on_postgres() {
+    let _ = require_pg!();
+    let mem = PgMemoryProvider::new(store().await);
+    let tag = Uuid::new_v4().simple().to_string();
+    let mut v1 = episode(&format!("reconcile ledger {tag}"));
+    v1.outcome = EpisodeOutcome::Unverified;
+    mem.write(v1.clone()).await.unwrap();
+
+    let mut v2 = v1.clone();
+    v2.version = 2;
+    v2.outcome = EpisodeOutcome::Success;
+    v2.provenance = Provenance::Human;
+    mem.write(v2.clone()).await.unwrap();
+    let mut v3 = v2.clone();
+    v3.version = 3;
+    v3.outcome = EpisodeOutcome::Unverified;
+    mem.write(v3).await.unwrap();
+    mem.write(v1.clone()).await.unwrap(); // stale re-write
+
+    let hits: Vec<_> = mem
+        .retrieve(&format!("reconcile ledger {tag}"), 50)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|h| h.episode_id == v1.id)
+        .collect();
+    assert!(hits.is_empty(), "unverified never retrieved: {hits:?}");
+
+    let hist = mem.episode_history(v1.run_id).await.unwrap();
+    assert_eq!(
+        hist.iter()
+            .map(|e| (e.version, e.outcome))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, EpisodeOutcome::Unverified),
+            (2, EpisodeOutcome::Success),
+            (3, EpisodeOutcome::Unverified),
+        ]
+    );
+}
+
+/// A row written before versioning (no `version` column value given, no
+/// history row) reads unchanged, counts as version 1, and is preserved in the
+/// history when a revision supersedes it.
+#[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
+async fn pre_versioning_episode_row_reads_and_survives_revision_on_postgres() {
+    let url = require_pg!();
+    let mem = PgMemoryProvider::new(store().await);
+    let old = episode(&format!("rotate logs {}", Uuid::new_v4().simple()));
+    let (client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(conn);
+    // Exactly the pre-ADR-0040 INSERT shape.
+    client
+        .execute(
+            "INSERT INTO episodes (id, run_id, task, data) VALUES ($1, $2, $3, $4)",
+            &[
+                &old.id,
+                &old.run_id,
+                &old.task,
+                &serde_json::to_string(&old).unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let hist = mem.episode_history(old.run_id).await.unwrap();
+    assert_eq!(hist.len(), 1);
+    assert_eq!(hist[0].outcome, EpisodeOutcome::Success);
+
+    let mut v2 = old.clone();
+    v2.version = 2;
+    v2.outcome = EpisodeOutcome::Unverified;
+    mem.write(v2).await.unwrap();
+    let hist = mem.episode_history(old.run_id).await.unwrap();
+    assert_eq!(
+        hist.iter()
+            .map(|e| (e.version, e.outcome))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, EpisodeOutcome::Success),
+            (2, EpisodeOutcome::Unverified)
+        ]
+    );
+}
+
+/// ADR 0040 regression: instances connecting (and so migrating) while others
+/// write episodes must not deadlock. The first version of the versioned
+/// schema ran `ALTER TABLE episodes ADD COLUMN IF NOT EXISTS` on every
+/// connect, which deadlocked a concurrent writer (seen in this suite's
+/// parallel run as `deadlock detected`).
+#[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
+async fn connecting_while_writing_episodes_does_not_deadlock_on_postgres() {
+    let _ = require_pg!();
+    let mut tasks = Vec::new();
+    for i in 0..8 {
+        tasks.push(tokio::spawn(async move {
+            for j in 0..5 {
+                let mem = PgMemoryProvider::new(store().await);
+                let mut e = episode(&format!("concurrent connect {i} {j}"));
+                mem.write(e.clone()).await.expect("write v1");
+                e.version = 2;
+                e.outcome = EpisodeOutcome::Unverified;
+                mem.write(e).await.expect("write v2");
+            }
+        }));
+    }
+    for t in tasks {
+        t.await.unwrap();
+    }
+}
+
+/// ADR 0040 end to end on Postgres (BM25 path): the kernel over the shared
+/// Postgres memory — the model's context never holds the unverified episode,
+/// and holds it once confirmed.
+#[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
+async fn postgres_keeps_unverified_out_of_model_context() {
+    let _ = require_pg!();
+    let tag = Uuid::new_v4().simple().to_string();
+    let task = format!("probe pg {tag} reconcile ledger");
+    let p = kernel_core::testkit::episode_context_probe(
+        std::sync::Arc::new(PgMemoryProvider::new(store().await)),
+        &task,
+    )
+    .await;
+    assert!(
+        p.before_confirmation.iter().all(|m| !m.contains(&tag)),
+        "{:?}",
+        p.before_confirmation
+    );
+    assert!(
+        p.after_confirmation
+            .iter()
+            .any(|m| m == &format!("task: {task} | outcome: Success | steps: 1")),
+        "{:?}",
+        p.after_confirmation
+    );
 }

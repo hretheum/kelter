@@ -12,6 +12,12 @@ jobs:
   check:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
+    # Full debuginfo for every test binary filled the runner's disk on
+    # 2026-10-12 (PR #8: `No space left on device`, ld bus error, twice).
+    # Line tables keep file:line in panics and backtraces at a fraction of
+    # the size. Test/dev builds only — the release image is unaffected.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     # The pgstore integration tests (ADR 0028) need a real Postgres+pgvector.
     # Without this they are #[ignore]d and the shared-memory backend is never
     # exercised in CI — which is exactly what happened between ADR 0028 and

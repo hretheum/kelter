@@ -1063,3 +1063,76 @@ async fn confirmation_endpoint_is_bearer_gated_journaled_and_reversible() {
         .unwrap();
     assert_eq!(res.status(), 404);
 }
+
+// ---- ADR 0040: the run's reflection episode follows verification ----------
+
+#[tokio::test]
+async fn episodes_endpoint_shows_unverified_then_confirmed_then_revoked() {
+    let (addr, token, _alice, _store) = spawn_with_principals().await;
+    let client = reqwest::Client::new();
+    let res = submit_json(&client, addr, &token, json!({"task": "echo hi"})).await;
+    let id = res.json::<serde_json::Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let run = wait_terminal(&client, addr, &token, &id).await;
+    assert_eq!(run["verification"], "none");
+
+    let eps_url = format!("http://{addr}/api/v1/runs/{id}/episodes");
+    let conf_url = format!("http://{addr}/api/v1/runs/{id}/confirmation");
+    assert_eq!(client.get(&eps_url).send().await.unwrap().status(), 401);
+    let get = |client: reqwest::Client, url: String, token: String| async move {
+        let res = client.get(&url).bearer_auth(&token).send().await.unwrap();
+        assert_eq!(res.status(), 200);
+        res.json::<serde_json::Value>().await.unwrap()
+    };
+
+    let body = get(client.clone(), eps_url.clone(), token.clone()).await;
+    assert_eq!(body["history_supported"], true);
+    assert_eq!(body["current"].as_array().unwrap().len(), 1);
+    assert_eq!(body["current"][0]["outcome"], "unverified");
+    assert_eq!(body["current"][0]["version"], 1);
+    assert_eq!(body["current"][0]["provenance"], "reflection");
+
+    let res = client
+        .post(&conf_url)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let body = get(client.clone(), eps_url.clone(), token.clone()).await;
+    assert_eq!(body["current"][0]["outcome"], "success");
+    assert_eq!(body["current"][0]["version"], 2);
+    assert_eq!(body["current"][0]["provenance"], "human");
+    assert_eq!(body["versions"].as_array().unwrap().len(), 2);
+
+    let res = client
+        .delete(&conf_url)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let body = get(client.clone(), eps_url.clone(), token.clone()).await;
+    assert_eq!(body["current"][0]["outcome"], "unverified");
+    assert_eq!(body["current"][0]["version"], 3);
+    let outcomes: Vec<_> = body["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["outcome"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(outcomes, vec!["unverified", "success", "unverified"]);
+
+    let res = client
+        .get(format!(
+            "http://{addr}/api/v1/runs/{}/episodes",
+            uuid::Uuid::new_v4()
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+}

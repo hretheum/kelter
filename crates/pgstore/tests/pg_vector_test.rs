@@ -134,3 +134,33 @@ async fn mem_store_client(url: &str) -> deadpool_postgres::Object {
         .unwrap();
     pool.get().await.unwrap()
 }
+
+/// ADR 0040 on the pgvector path: an `unverified` episode is filtered in SQL
+/// (before LIMIT) and never retrieved; its `success` version is.
+#[tokio::test]
+#[ignore = "needs a live Postgres+pgvector: set KELTER_TEST_POSTGRES_URL and run with --include-ignored (see AGENTS.md)"]
+async fn pgvector_path_never_retrieves_unverified() {
+    let Some(url) = pg_url() else {
+        eprintln!("KELTER_TEST_POSTGRES_URL unset — skipping pgvector test");
+        return;
+    };
+    let store = PgStore::connect(&url, Some(Arc::new(MockEmbedder)))
+        .await
+        .expect("connect");
+    let mem = PgMemoryProvider::new(store);
+    // No topic word → the embedder's neutral vector, so this test never ties
+    // with the alpha/beta/gamma rows the cosine test above ranks.
+    let mut e = episode(&format!("{} unverified probe", Uuid::new_v4()));
+    e.outcome = EpisodeOutcome::Unverified;
+    mem.write(e.clone()).await.unwrap();
+    let ids = |hits: Vec<memory::RankedContext>| -> Vec<Uuid> {
+        hits.into_iter().map(|h| h.episode_id).collect()
+    };
+    assert!(!ids(mem.retrieve("unverified probe", 10_000).await.unwrap()).contains(&e.id));
+
+    e.version = 2;
+    e.outcome = EpisodeOutcome::Success;
+    e.provenance = Provenance::Human;
+    mem.write(e.clone()).await.unwrap();
+    assert!(ids(mem.retrieve("unverified probe", 10_000).await.unwrap()).contains(&e.id));
+}

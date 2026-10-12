@@ -45,17 +45,17 @@ workspace).
 **Where the detail lives.** Ongoing status/roadmap → `docs/ROADMAP.md`
 (Eryk-owned — leave unstaged). Per-phase evidence + decisions →
 `docs/BUILD-EVIDENCE.md`. Architecture → `docs/architecture.md` /
-`architecture-overview.md`. Decisions → `docs/adr/` (0001–0039). The 2026-07-21
+`architecture-overview.md`. Decisions → `docs/adr/` (0001–0040). The 2026-07-21
 adversarial audit + its fix passes → `docs/audit/AUDIT-2026-07-21.md`.
 
-**Testing.** `cargo test --workspace` is hermetic — 411 tests, plus 9
+**Testing.** `cargo test --workspace` is hermetic — 430 tests, plus 14
 `pgstore` tests that are `#[ignore]`d because they need a real Postgres. To run
 those too: start a `pgvector/pgvector:pg16` container, export
-`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (420 total — the
+`KELTER_TEST_POSTGRES_URL`, and add `-- --include-ignored` (444 total — the
 figure CI reports). CI does this via a `services:` block. Bare `cargo test`
-reports them as `9 ignored`, never as a green pass. `cargo clippy --workspace
+reports them as `14 ignored`, never as a green pass. `cargo clippy --workspace
 --all-targets -D warnings` and `cargo fmt --check` are the bar. web-ui:
-`pnpm --dir apps/web-ui test` (vitest — 2 files, 22 tests) + `pnpm build`;
+`pnpm --dir apps/web-ui test` (vitest — 2 files, 25 tests) + `pnpm build`;
 both run in CI since 2026-08-03.
 
 **The excluded-workspace hazard — read this before touching shared types.**
@@ -143,6 +143,25 @@ restart → allow-once, deny, token and wall stops. If you add a model call,
 put a `budget_check` before it; if you add a side effect, declare
 `idempotency_key` or the gate cannot see it.
 
+**2026-10-05: unverified reflection episodes (ADR 0040).** `EpisodeOutcome`
+has a third state, `unverified`: a `completed` run without a met contract
+writes its episode as `unverified` (contract-verified → `success`, as
+before). Confirm/revoke (ADR 0037) also write the next **version** of that
+episode (`success` / `unverified`, `provenance: human`) — never overwrite,
+never delete; `MemoryProvider::write` with a higher `version` of the same
+`id` is a revision (contract in the trait doc). History via the optional
+`MemoryProvider::episode_history` (SQLite schema v4 `episode_versions`,
+Postgres same shape, MCP tool / WASM op `memory_episode_history` — optional;
+a backend without it → `Unsupported`, no revision). **Unverified episodes
+never enter model context** (Eryk, 2026-10-05): every backend's `retrieve`
+filters them before ranking (`memory::in_model_context`); they stay in the
+history, the API and the UI. Memory tool names are refused from any tool
+server, so the model can never see/call them. Pre-0040 episodes are left as
+they are. `GET /runs/{id}/episodes`, WS `episode_revised`.
+`scripts/smoke-unverified-episodes.sh` drives it (incl. the model's actual
+prompt). If you add a memory backend, honour the retrieve rule and test it
+with `kernel_core::testkit::episode_context_probe` (feature `testkit`).
+
 **Open items, in the order they'd bite.**
 1. **18 ADRs carry `human_validated: false`** — 0007–0023 plus 0032. Eryk's
    job, not an agent's; signing ADR 0031 honestly took a real verification
@@ -155,10 +174,8 @@ put a `budget_check` before it; if you add a side effect, declare
    `/events`, no resume, `distill` errors). The ADR lists the options
    (documented `DELETE` rollback vs a catch-all variant); the choice is
    Eryk's.
-4. **ADR 0037 follow-ups** — reflection episodes still record an unverified
-   `completed` as `Success`; Eryk wants a separate PR (an `Unverified`
-   outcome that reflection/retrieval do not treat as success). The web UI
-   shows/confirms verification but cannot submit a contract yet.
+4. **ADR 0037 follow-up** — the web UI shows/confirms verification but
+   cannot submit a contract yet.
 5. **ADR 0038/0039 follow-ups** (decided 2026-10-05) — budget stop stays
    `failed` + `budget_stop`; the daily $ counter stays derived from run
    records and can be wrong under parallel runs of one principal until

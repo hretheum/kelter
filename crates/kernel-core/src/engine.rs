@@ -26,7 +26,7 @@ use crate::oracle::{Latitude, PolicyContext, PolicyOracle};
 use crate::outcome;
 use crate::skill_gate::{ActivationAuthorization, SkillActivationDecision};
 use crate::store::RunStore;
-use memory::{Episode, EpisodeOutcome, MemoryProvider, Provenance};
+use memory::{Episode, EpisodeOutcome, MemoryError, MemoryProvider, Provenance};
 
 /// Name of the terminal action the kernel itself adds to every action space.
 pub const FINISH_ACTION: &str = "finish";
@@ -683,6 +683,14 @@ pub enum RunEvent {
     },
     ReflectionWritten {
         episode_id: Uuid,
+    },
+    /// A human's confirmation decision wrote a new version of this run's
+    /// reflection episode (ADR 0040, additive): `success` on confirm,
+    /// `unverified` on revoke. Emitted by `decide_success_confirmation`.
+    EpisodeRevised {
+        episode_id: Uuid,
+        version: u32,
+        outcome: EpisodeOutcome,
     },
     Completed {
         output: serde_json::Value,
@@ -1504,6 +1512,13 @@ impl Kernel {
         self.store.clone()
     }
 
+    /// Every stored version of `run_id`'s reflection episode(s), oldest
+    /// first (ADR 0040) — read-only. [`MemoryError::Unsupported`] when the
+    /// memory backend keeps no history.
+    pub async fn episode_history(&self, run_id: Uuid) -> Result<Vec<Episode>, MemoryError> {
+        self.memory.episode_history(run_id).await
+    }
+
     pub fn policy_description(&self) -> String {
         self.oracle.describe()
     }
@@ -2209,6 +2224,21 @@ impl Kernel {
         };
         self.store.put(run.clone()).await?;
 
+        // ADR 0040: the run's reflection episode follows the decision as a
+        // new version. Best-effort, like the reflection write itself — the
+        // decision is already journaled and is what governs learning.
+        for e in self.revise_episodes(run_id, decision, principal).await {
+            self.emit(
+                run_id,
+                0,
+                RunEvent::EpisodeRevised {
+                    episode_id: e.id,
+                    version: e.version,
+                    outcome: e.outcome,
+                },
+            );
+        }
+
         let mut forgotten = Vec::new();
         if decision == ConfirmationDecision::Revoke {
             if let Some(learned) = &self.learned {
@@ -2235,6 +2265,74 @@ impl Kernel {
         );
         tracing::info!(%run_id, ?decision, %principal, forgotten = forgotten.len(), "success confirmation decided");
         Ok((run, forgotten))
+    }
+
+    /// Write the next version of each of `run_id`'s reflection episodes that
+    /// the decision moves (ADR 0040), returning what was written:
+    ///
+    /// - **confirm**: a current `unverified` episode → `success`;
+    /// - **revoke**: a current `success` episode that a human lifted
+    ///   (`provenance: human`) → `unverified` again.
+    ///
+    /// Anything else is left alone — notably a `success` episode written by
+    /// reflection: a pre-ADR-0040 episode stays as it was (as ADR 0037 left
+    /// pre-0037 learning), and confirming its run neither duplicates nor
+    /// changes it. The new version keeps id, task and trace, and carries
+    /// `provenance: human`; earlier versions stay in the backend's history.
+    /// A backend without history ([`MemoryError::Unsupported`] — the WASM
+    /// and subprocess backends) gets no revision, logged.
+    ///
+    /// Only `decide_success_confirmation` calls this, so the only way to move
+    /// an episode is the authenticated human endpoint — never a model.
+    async fn revise_episodes(
+        &self,
+        run_id: Uuid,
+        decision: ConfirmationDecision,
+        principal: &str,
+    ) -> Vec<Episode> {
+        let history = match self.memory.episode_history(run_id).await {
+            Ok(h) => h,
+            Err(MemoryError::Unsupported(what)) => {
+                tracing::warn!(
+                    %run_id,
+                    "memory backend has no {what}: the run's episode is not revised (ADR 0040)"
+                );
+                return Vec::new();
+            }
+            Err(e) => {
+                tracing::warn!(%run_id, "episode history read failed, episode not revised: {e}");
+                return Vec::new();
+            }
+        };
+        let mut revised = Vec::new();
+        for current in memory::current_versions(&history) {
+            let next_outcome = match (decision, current.outcome, &current.provenance) {
+                (ConfirmationDecision::Confirm, EpisodeOutcome::Unverified, _) => {
+                    EpisodeOutcome::Success
+                }
+                (ConfirmationDecision::Revoke, EpisodeOutcome::Success, Provenance::Human) => {
+                    EpisodeOutcome::Unverified
+                }
+                _ => continue,
+            };
+            let next = Episode {
+                outcome: next_outcome,
+                provenance: Provenance::Human,
+                version: current.version + 1,
+                ..current
+            };
+            match self.memory.write(next.clone()).await {
+                Ok(()) => {
+                    tracing::info!(
+                        %run_id, episode_id = %next.id, version = next.version,
+                        outcome = ?next.outcome, %principal, "episode revised"
+                    );
+                    revised.push(next);
+                }
+                Err(e) => tracing::warn!(%run_id, "episode revision write failed: {e}"),
+            }
+        }
+        revised
     }
 
     fn emit(&self, run_id: Uuid, seq: u64, event: RunEvent) {
@@ -4280,10 +4378,15 @@ impl Kernel {
                     .iter()
                     .map(|s| format!("{}: {}", s.action, if s.ok { "ok" } else { "failed" }))
                     .collect(),
-                outcome: if run.status == RunStatus::Completed {
-                    EpisodeOutcome::Success
-                } else {
-                    EpisodeOutcome::Failure
+                // ADR 0040: only a contract-verified `completed` run is a
+                // success episode; any other `completed` run is `unverified`
+                // until a human confirms it (`decide_success_confirmation`).
+                outcome: match run.status {
+                    RunStatus::Completed if run.verification == Some(Verification::Contract) => {
+                        EpisodeOutcome::Success
+                    }
+                    RunStatus::Completed => EpisodeOutcome::Unverified,
+                    _ => EpisodeOutcome::Failure,
                 },
                 provenance: Provenance::Reflection,
                 version: 1,

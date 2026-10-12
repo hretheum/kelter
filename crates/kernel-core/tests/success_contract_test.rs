@@ -20,7 +20,7 @@ use kernel_core::{
     PolicyContext, PolicyError, PolicyOracle, Proposal, ProposedAction, Run, RunEvent, RunMode,
     RunStatus, RunStore, SuccessContract, ValidatedAction, Verification,
 };
-use memory::InMemoryProvider;
+use memory::{Episode, EpisodeOutcome, InMemoryProvider, MemoryProvider, Provenance};
 
 /// `write_file` and `send_email` both succeed; `send_email` returns a status
 /// the contract can check.
@@ -150,15 +150,17 @@ struct Harness {
     kernel: Kernel,
     store: Arc<dyn RunStore>,
     learned: Arc<InMemoryLearnedStore>,
+    memory: Arc<InMemoryProvider>,
 }
 
 fn harness(oracle: Arc<Scripted>, mode: RunMode) -> Harness {
     let store: Arc<dyn RunStore> = Arc::new(kernel_core::InMemoryRunStore::new());
     let learned = Arc::new(InMemoryLearnedStore::new());
+    let memory = Arc::new(InMemoryProvider::new());
     let kernel = Kernel::new(
         oracle,
         Arc::new(Tools),
-        Arc::new(InMemoryProvider::new()),
+        memory.clone(),
         store.clone(),
         KernelConfig {
             mode,
@@ -171,6 +173,7 @@ fn harness(oracle: Arc<Scripted>, mode: RunMode) -> Harness {
         kernel,
         store,
         learned,
+        memory,
     }
 }
 
@@ -646,6 +649,252 @@ async fn the_model_has_no_path_to_confirmation_or_verification() {
     assert!(run.confirmation.is_none());
     assert_ne!(run.verification, Some(Verification::Contract));
     assert_eq!(h.kernel.distill(10).await.unwrap().facts_created, 0);
+}
+
+// ---- reflection episodes follow verification (ADR 0040) -------------------
+
+/// `(version, outcome, provenance)` of every stored version of `run`'s
+/// episode, oldest first.
+async fn episode_versions(h: &Harness, run: uuid::Uuid) -> Vec<(u32, EpisodeOutcome, Provenance)> {
+    h.memory
+        .episode_history(run)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| (e.version, e.outcome, e.provenance))
+        .collect()
+}
+
+#[tokio::test]
+async fn unverified_run_writes_an_unverified_episode_and_confirmation_moves_it() {
+    use EpisodeOutcome::*;
+    let h = harness(Scripted::steps(write_then_finish()), RunMode::Step);
+    let mut events = h.kernel.subscribe();
+    let run = run_with(&h, "send an e-mail", None).await;
+    assert_eq!(run.verification, Some(Verification::None));
+    assert_eq!(
+        episode_versions(&h, run.id).await,
+        vec![(1, Unverified, Provenance::Reflection)]
+    );
+    // Kept, but never retrieved into model context while unverified.
+    assert!(h
+        .memory
+        .retrieve("send an e-mail", 3)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Confirm → v2 success (human); revoke → v3 unverified; confirm → v4.
+    h.kernel
+        .decide_success_confirmation(run.id, ConfirmationDecision::Confirm, "eryk")
+        .await
+        .unwrap();
+    assert_eq!(
+        episode_versions(&h, run.id).await.last().unwrap(),
+        &(2, Success, Provenance::Human)
+    );
+    let hits = h.memory.retrieve("send an e-mail", 3).await.unwrap();
+    assert_eq!(hits.len(), 1, "one episode, never one per version");
+    assert!(hits[0].summary.contains("outcome: Success"), "{hits:?}");
+
+    h.kernel
+        .decide_success_confirmation(run.id, ConfirmationDecision::Revoke, "eryk")
+        .await
+        .unwrap();
+    h.kernel
+        .decide_success_confirmation(run.id, ConfirmationDecision::Confirm, "eryk")
+        .await
+        .unwrap();
+    assert_eq!(
+        episode_versions(&h, run.id).await,
+        vec![
+            (1, Unverified, Provenance::Reflection),
+            (2, Success, Provenance::Human),
+            (3, Unverified, Provenance::Human),
+            (4, Success, Provenance::Human),
+        ],
+        "history is kept: every decision is a new version, nothing deleted"
+    );
+    // One id throughout.
+    let ids: std::collections::HashSet<_> = h
+        .memory
+        .episode_history(run.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(ids.len(), 1);
+
+    let mut revised = Vec::new();
+    while let Ok(env) = events.try_recv() {
+        if let RunEvent::EpisodeRevised {
+            version, outcome, ..
+        } = env.event
+        {
+            revised.push((version, outcome));
+        }
+    }
+    assert_eq!(revised, vec![(2, Success), (3, Unverified), (4, Success)]);
+}
+
+#[tokio::test]
+async fn contract_verified_and_failed_runs_keep_their_episodes() {
+    // Verified by contract → `success` at once; nothing to confirm.
+    let h = harness(Scripted::steps(send_then_finish()), RunMode::Step);
+    let run = run_with(&h, "send", Some(needs_send_email())).await;
+    assert_eq!(
+        episode_versions(&h, run.id).await,
+        vec![(1, EpisodeOutcome::Success, Provenance::Reflection)]
+    );
+    // Unmet contract → `incomplete` → `failure`, exactly as before.
+    let h = harness(Scripted::steps(write_then_finish()), RunMode::Step);
+    let run = run_with(&h, "send", Some(needs_send_email())).await;
+    assert_eq!(run.status, RunStatus::Incomplete);
+    assert_eq!(
+        episode_versions(&h, run.id).await,
+        vec![(1, EpisodeOutcome::Failure, Provenance::Reflection)]
+    );
+}
+
+#[tokio::test]
+async fn plan_mode_unverified_run_writes_an_unverified_episode() {
+    let h = harness(Scripted::plan(plan_of("write_file")), RunMode::Plan);
+    let run = run_with(&h, "write", None).await;
+    assert_eq!(run.status, RunStatus::Completed);
+    assert_eq!(
+        episode_versions(&h, run.id).await,
+        vec![(1, EpisodeOutcome::Unverified, Provenance::Reflection)]
+    );
+}
+
+#[tokio::test]
+async fn pre_adr_0040_success_episode_is_left_as_it_is() {
+    // A legacy run (pre ADR 0037) whose reflection episode was written as
+    // `success` under the old rule: confirming and revoking the run governs
+    // learning, but its episode neither changes nor gets a duplicate.
+    let h = harness(Scripted::steps(vec![]), RunMode::Step);
+    let id = uuid::Uuid::new_v4();
+    let legacy: Run = serde_json::from_value(json!({
+        "id": id, "task": "legacy task", "status": "completed",
+        "steps": [{"index": 0, "action": "write_file", "arguments": {}, "result": {}, "ok": true}],
+        "output": {"summary": "done"}, "error": null, "policy": "mock", "created_at": 1
+    }))
+    .unwrap();
+    h.store.put(legacy).await.unwrap();
+    h.memory
+        .write(Episode {
+            id: uuid::Uuid::new_v4(),
+            run_id: id,
+            task: "legacy task".into(),
+            trace: vec!["write_file: ok".into()],
+            outcome: EpisodeOutcome::Success,
+            provenance: Provenance::Reflection,
+            version: 1,
+        })
+        .await
+        .unwrap();
+    for d in [ConfirmationDecision::Confirm, ConfirmationDecision::Revoke] {
+        h.kernel
+            .decide_success_confirmation(id, d, "eryk")
+            .await
+            .unwrap();
+        assert_eq!(
+            episode_versions(&h, id).await,
+            vec![(1, EpisodeOutcome::Success, Provenance::Reflection)]
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_model_has_no_path_to_lifting_an_episode() {
+    // A model that claims success, tries confirmation-shaped actions and
+    // finishes "verified" still leaves exactly one unverified version: only
+    // `decide_success_confirmation` (the authenticated human endpoint)
+    // writes episode revisions, and it is not an action.
+    let h = harness(
+        Scripted::steps(vec![
+            propose("write_file", json!({"text": "x"})),
+            propose("episode_revise", json!({"outcome": "success"})),
+            propose("memory_write", json!({"outcome": "success"})),
+            propose(
+                "finish",
+                json!({"summary": "verified success, outcome: success"}),
+            ),
+        ]),
+        RunMode::Step,
+    );
+    let run = run_with(&h, "send", None).await;
+    assert_eq!(run.status, RunStatus::Completed);
+    assert_eq!(
+        episode_versions(&h, run.id).await,
+        vec![(1, EpisodeOutcome::Unverified, Provenance::Reflection)]
+    );
+    let names: Vec<String> = h
+        .kernel
+        .current_action_schema()
+        .await
+        .unwrap()
+        .actions
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+    assert!(names
+        .iter()
+        .all(|n| !n.contains("episode") && !n.contains("memory") && !n.contains("confirm")));
+}
+
+/// A backend with only the base protocol (`write`/`retrieve`/`upsert`) — the
+/// shape of the WASM and subprocess memory backends.
+struct NoHistory(InMemoryProvider);
+
+#[async_trait]
+impl MemoryProvider for NoHistory {
+    async fn write(&self, e: Episode) -> Result<(), memory::MemoryError> {
+        self.0.write(e).await
+    }
+    async fn retrieve(
+        &self,
+        task: &str,
+        limit: usize,
+    ) -> Result<Vec<memory::RankedContext>, memory::MemoryError> {
+        self.0.retrieve(task, limit).await
+    }
+    async fn upsert(&self, item: memory::GraphUpsert) -> Result<(), memory::MemoryError> {
+        self.0.upsert(item).await
+    }
+}
+
+#[tokio::test]
+async fn a_backend_without_history_still_confirms_but_revises_nothing() {
+    let mem = Arc::new(NoHistory(InMemoryProvider::new()));
+    let store: Arc<dyn RunStore> = Arc::new(kernel_core::InMemoryRunStore::new());
+    let kernel = Kernel::new(
+        Scripted::steps(write_then_finish()),
+        Arc::new(Tools),
+        mem.clone(),
+        store,
+        KernelConfig::default(),
+    );
+    let id = kernel
+        .create_run_with_contract("send".into(), None, None)
+        .await
+        .unwrap();
+    let run = kernel.execute_run(id).await.unwrap();
+    let (confirmed, _) = kernel
+        .decide_success_confirmation(run.id, ConfirmationDecision::Confirm, "eryk")
+        .await
+        .unwrap();
+    assert!(
+        confirmed.learnable(),
+        "learning is governed by the run, not the episode"
+    );
+    let eps = mem.0.episodes().await;
+    assert_eq!(eps.len(), 1);
+    assert_eq!(
+        (eps[0].version, eps[0].outcome),
+        (1, EpisodeOutcome::Unverified)
+    );
 }
 
 // ---- durability ------------------------------------------------------------

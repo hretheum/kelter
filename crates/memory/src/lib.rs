@@ -80,15 +80,27 @@ pub struct Episode {
     pub trace: Vec<String>,
     pub outcome: EpisodeOutcome,
     pub provenance: Provenance,
-    /// Monotonic version for reversibility; in-memory impl always stores v1.
+    /// Monotonic version (ADR 0016 reversibility). Reflection writes v1; a
+    /// human's confirmation or revocation (ADR 0040) writes the next version
+    /// of the SAME `id` — see [`MemoryProvider::write`] for the contract.
     pub version: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// How an episode's run ended, as far as memory may treat it (ADR 0005,
+/// three states since ADR 0040).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EpisodeOutcome {
+    /// A verified success: the run's success contract held (ADR 0037), or a
+    /// human confirmed it. Episodes written before ADR 0040 also carry this
+    /// value for any `completed` run and are left as they are.
     Success,
     Failure,
+    /// The run ended `completed` but nothing verified it — no contract, no
+    /// human confirmation yet (ADR 0040). Kept in history and readable
+    /// through the API, but NEVER retrieved into model context — see
+    /// [`MemoryProvider::retrieve`] and [`in_model_context`].
+    Unverified,
 }
 
 /// A retrieved piece of context, ranked by relevance to the current task.
@@ -150,6 +162,10 @@ pub enum GraphUpsert {
 pub enum MemoryError {
     #[error("memory backend error: {0}")]
     Backend(String),
+    /// The backend does not implement an optional operation (e.g. episode
+    /// history on a WASM or subprocess backend, ADR 0040).
+    #[error("memory backend does not support {0}")]
+    Unsupported(&'static str),
 }
 
 /// The stable provider protocol: `write(episode)`, `retrieve(task) ->
@@ -157,9 +173,57 @@ pub enum MemoryError {
 /// kernel never depends on a concrete store.
 #[async_trait]
 pub trait MemoryProvider: Send + Sync {
+    /// Store an episode. Versioning contract (ADR 0040): a write whose `id`
+    /// is already stored and whose `version` is HIGHER is a new revision —
+    /// it becomes what `retrieve` sees, and the earlier versions are kept as
+    /// history (never deleted by a revision). A write of an already-stored
+    /// `(id, version)` replaces that version (idempotent re-write). A lower
+    /// version never displaces a higher one.
     async fn write(&self, episode: Episode) -> Result<(), MemoryError>;
+    /// Rank the CURRENT version of each episode against `task` — this is what
+    /// enters the model's context. Contract (ADR 0040, maintainer's
+    /// decision): an episode whose current version is `unverified` is never
+    /// returned (and does not take part in ranking); once a human confirms it
+    /// (a `success` version) it is. Every backend applies
+    /// [`in_model_context`].
     async fn retrieve(&self, task: &str, limit: usize) -> Result<Vec<RankedContext>, MemoryError>;
     async fn upsert(&self, item: GraphUpsert) -> Result<(), MemoryError>;
+    /// Every stored version of every episode of `run_id`, ordered by
+    /// `(id, version)` ascending (ADR 0040). Optional: a backend that cannot
+    /// answer returns [`MemoryError::Unsupported`], and the kernel then never
+    /// writes revisions to it (an unverified episode there stays unverified).
+    async fn episode_history(&self, run_id: Uuid) -> Result<Vec<Episode>, MemoryError> {
+        let _ = run_id;
+        Err(MemoryError::Unsupported("episode history"))
+    }
+}
+
+/// May this episode reach the model's context? Everything but an
+/// `unverified` one (ADR 0040). The single predicate every backend's
+/// `retrieve` filters with.
+pub fn in_model_context(e: &Episode) -> bool {
+    e.outcome != EpisodeOutcome::Unverified
+}
+
+/// The current version of each episode in `history` (highest `version` per
+/// `id`), in the order the ids first appear. Shared by backends and the
+/// kernel so "current" means one thing everywhere (ADR 0040).
+pub fn current_versions(history: &[Episode]) -> Vec<Episode> {
+    let mut order: Vec<Uuid> = Vec::new();
+    let mut latest: HashMap<Uuid, &Episode> = HashMap::new();
+    for e in history {
+        match latest.get(&e.id) {
+            None => {
+                order.push(e.id);
+                latest.insert(e.id, e);
+            }
+            Some(prev) if e.version >= prev.version => {
+                latest.insert(e.id, e);
+            }
+            Some(_) => {}
+        }
+    }
+    order.into_iter().map(|id| latest[&id].clone()).collect()
 }
 
 /// Reference in-memory implementation. Retrieval ranks episodes by token
@@ -173,7 +237,11 @@ pub struct InMemoryProvider {
 
 #[derive(Default)]
 struct Store {
+    /// The current version of each episode (what retrieval ranks).
     episodes: Vec<Episode>,
+    /// Every version ever written, append-only except for an idempotent
+    /// re-write of the same `(id, version)` (ADR 0040).
+    history: Vec<Episode>,
     entities: HashMap<String, serde_json::Value>,
     relations: Vec<(String, String, String)>,
 }
@@ -196,6 +264,7 @@ impl InMemoryProvider {
         self.inner.read().await.episodes.len()
     }
 
+    /// The current version of each stored episode.
     pub async fn episodes(&self) -> Vec<Episode> {
         self.inner.read().await.episodes.clone()
     }
@@ -214,19 +283,37 @@ pub fn episode_summary(e: &Episode) -> String {
 #[async_trait]
 impl MemoryProvider for InMemoryProvider {
     async fn write(&self, episode: Episode) -> Result<(), MemoryError> {
-        self.inner.write().await.episodes.push(episode);
+        let mut store = self.inner.write().await;
+        match store
+            .history
+            .iter_mut()
+            .find(|e| e.id == episode.id && e.version == episode.version)
+        {
+            Some(same) => *same = episode.clone(),
+            None => store.history.push(episode.clone()),
+        }
+        match store.episodes.iter_mut().find(|e| e.id == episode.id) {
+            Some(cur) if episode.version >= cur.version => *cur = episode,
+            Some(_) => {}
+            None => store.episodes.push(episode),
+        }
         Ok(())
     }
 
     async fn retrieve(&self, task: &str, limit: usize) -> Result<Vec<RankedContext>, MemoryError> {
         let store = self.inner.read().await;
-        let docs: Vec<String> = store.episodes.iter().map(|e| e.task.clone()).collect();
+        let eligible: Vec<&Episode> = store
+            .episodes
+            .iter()
+            .filter(|e| in_model_context(e))
+            .collect();
+        let docs: Vec<String> = eligible.iter().map(|e| e.task.clone()).collect();
         let ranked = self.retrieval.rank(task, &docs, limit).await;
         Ok(ranked
             .into_iter()
             .map(|(i, score)| RankedContext {
-                episode_id: store.episodes[i].id,
-                summary: episode_summary(&store.episodes[i]),
+                episode_id: eligible[i].id,
+                summary: episode_summary(eligible[i]),
                 score,
             })
             .collect())
@@ -243,6 +330,18 @@ impl MemoryProvider for InMemoryProvider {
             }
         }
         Ok(())
+    }
+
+    async fn episode_history(&self, run_id: Uuid) -> Result<Vec<Episode>, MemoryError> {
+        let store = self.inner.read().await;
+        let mut out: Vec<Episode> = store
+            .history
+            .iter()
+            .filter(|e| e.run_id == run_id)
+            .cloned()
+            .collect();
+        out.sort_by_key(|e| (e.id, e.version));
+        Ok(out)
     }
 }
 
@@ -311,5 +410,83 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    // ---- ADR 0040: three outcome states + versioned revisions ----
+
+    #[test]
+    fn pre_adr_0040_record_still_reads_and_unverified_round_trips() {
+        // A record exactly as every pre-0040 backend stored it.
+        let old = r#"{"id":"6f1c2a52-8d0e-4c43-9b3a-0c5d2f6e7a11","run_id":"0b7f8a8e-1d2c-4e3f-8a9b-1c2d3e4f5a6b","task":"t","trace":["finish: ok"],"outcome":"success","provenance":"reflection","version":1}"#;
+        let e: Episode = serde_json::from_str(old).unwrap();
+        assert_eq!(e.outcome, EpisodeOutcome::Success);
+        assert_eq!(e.version, 1);
+
+        let mut u = e.clone();
+        u.outcome = EpisodeOutcome::Unverified;
+        let json = serde_json::to_value(&u).unwrap();
+        assert_eq!(json["outcome"], "unverified");
+        let back: Episode = serde_json::from_value(json).unwrap();
+        assert_eq!(back.outcome, EpisodeOutcome::Unverified);
+    }
+
+    #[tokio::test]
+    async fn unverified_never_reaches_retrieval_until_confirmed() {
+        let mem = InMemoryProvider::new();
+        let mut v1 = episode("send the quarterly report");
+        v1.outcome = EpisodeOutcome::Unverified;
+        mem.write(v1.clone()).await.unwrap();
+        assert!(mem
+            .retrieve("send quarterly report", 5)
+            .await
+            .unwrap()
+            .is_empty());
+        // Still in history (and so in the API).
+        assert_eq!(mem.episode_history(v1.run_id).await.unwrap().len(), 1);
+
+        let mut v2 = v1.clone();
+        v2.version = 2;
+        v2.outcome = EpisodeOutcome::Success;
+        v2.provenance = Provenance::Human;
+        mem.write(v2).await.unwrap();
+        let hits = mem.retrieve("send quarterly report", 5).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].summary,
+            "task: send the quarterly report | outcome: Success | steps: 1"
+        );
+    }
+
+    #[tokio::test]
+    async fn higher_version_supersedes_for_retrieval_and_history_is_kept() {
+        let mem = InMemoryProvider::new();
+        let mut v1 = episode("archive the invoices");
+        v1.outcome = EpisodeOutcome::Unverified;
+        mem.write(v1.clone()).await.unwrap();
+
+        let mut v2 = v1.clone();
+        v2.version = 2;
+        v2.outcome = EpisodeOutcome::Success;
+        v2.provenance = Provenance::Human;
+        mem.write(v2.clone()).await.unwrap();
+
+        // A stale lower version never displaces the current one.
+        mem.write(v1.clone()).await.unwrap();
+
+        let hits = mem.retrieve("archive invoices", 5).await.unwrap();
+        assert_eq!(hits.len(), 1, "one episode, not one per version");
+        assert!(hits[0].summary.contains("outcome: Success"));
+
+        let hist = mem.episode_history(v1.run_id).await.unwrap();
+        assert_eq!(
+            hist.iter()
+                .map(|e| (e.version, e.outcome))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, EpisodeOutcome::Unverified),
+                (2, EpisodeOutcome::Success)
+            ]
+        );
+        assert_eq!(current_versions(&hist)[0].version, 2);
     }
 }

@@ -19,7 +19,10 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use kernel_core::{JournalEntry, Run, RunStore, StoreError};
-use memory::{episode_summary, Episode, GraphUpsert, MemoryError, MemoryProvider, RankedContext};
+use memory::{
+    episode_summary, in_model_context, Episode, GraphUpsert, MemoryError, MemoryProvider,
+    RankedContext,
+};
 
 /// Forward-only migrations; index = schema version - 1.
 const MIGRATIONS: &[&str] = &[
@@ -76,6 +79,22 @@ const MIGRATIONS: &[&str] = &[
          created_at INTEGER NOT NULL
      );
      CREATE INDEX learned_plan_batch ON learned_plans(batch_id);",
+    // v4 — versioned episodes (ADR 0040): `episodes` keeps the CURRENT
+    // version of each episode (what retrieval ranks, unchanged for every
+    // pre-existing row — they become version 1); every version ever written
+    // also lands in the append-only `episode_versions`. Rows from before v4
+    // exist only in `episodes`, and `episode_history` reads both, so nothing
+    // needs backfilling.
+    "ALTER TABLE episodes ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+     CREATE TABLE episode_versions (
+         id TEXT NOT NULL,
+         version INTEGER NOT NULL,
+         run_id TEXT NOT NULL,
+         data TEXT NOT NULL,
+         created_at INTEGER NOT NULL,
+         PRIMARY KEY (id, version)
+     );
+     CREATE INDEX episode_versions_run ON episode_versions(run_id);",
 ];
 
 /// A shared handle to one SQLite database file.
@@ -290,6 +309,11 @@ impl RunStore for SqliteRunStore {
             episodes_pruned += tx
                 .execute("DELETE FROM episodes WHERE run_id = ?1", params![id])
                 .map_err(backend_err)?;
+            tx.execute(
+                "DELETE FROM episode_versions WHERE run_id = ?1",
+                params![id],
+            )
+            .map_err(backend_err)?;
             tx.execute("DELETE FROM runs WHERE id = ?1", params![id])
                 .map_err(backend_err)?;
         }
@@ -341,20 +365,38 @@ fn mem_err<E: std::fmt::Display>(e: E) -> MemoryError {
 #[async_trait]
 impl MemoryProvider for SqliteMemoryProvider {
     async fn write(&self, episode: Episode) -> Result<(), MemoryError> {
-        let conn = self.db.conn.lock().await;
+        let mut conn = self.db.conn.lock().await;
         let data = serde_json::to_string(&episode).map_err(mem_err)?;
-        conn.execute(
-            "INSERT INTO episodes (id, run_id, task, data, created_at)
-             VALUES (?1, ?2, ?3, ?4, strftime('%s','now'))
-             ON CONFLICT(id) DO UPDATE SET data = ?4",
-            params![
-                episode.id.to_string(),
-                episode.run_id.to_string(),
-                episode.task,
-                data
-            ],
+        let id = episode.id.to_string();
+        let run_id = episode.run_id.to_string();
+        // One transaction: the version row (history) and the current row move
+        // together. The current row only advances — a lower version never
+        // displaces a higher one (ADR 0040).
+        let tx = conn.transaction().map_err(mem_err)?;
+        // A pre-v4 current row has no history row yet: preserve it before a
+        // revision can overwrite it.
+        tx.execute(
+            "INSERT OR IGNORE INTO episode_versions (id, version, run_id, data, created_at)
+             SELECT id, version, run_id, data, created_at FROM episodes WHERE id = ?1",
+            params![id],
         )
         .map_err(mem_err)?;
+        tx.execute(
+            "INSERT INTO episode_versions (id, version, run_id, data, created_at)
+             VALUES (?1, ?2, ?3, ?4, strftime('%s','now'))
+             ON CONFLICT(id, version) DO UPDATE SET data = ?4",
+            params![id, episode.version, run_id, data],
+        )
+        .map_err(mem_err)?;
+        tx.execute(
+            "INSERT INTO episodes (id, run_id, task, data, created_at, version)
+             VALUES (?1, ?2, ?3, ?4, strftime('%s','now'), ?5)
+             ON CONFLICT(id) DO UPDATE SET data = ?4, version = ?5
+             WHERE ?5 >= episodes.version",
+            params![id, run_id, episode.task, data, episode.version],
+        )
+        .map_err(mem_err)?;
+        tx.commit().map_err(mem_err)?;
         Ok(())
     }
 
@@ -378,6 +420,9 @@ impl MemoryProvider for SqliteMemoryProvider {
             out
         };
 
+        // ADR 0040: an `unverified` episode never reaches model context, nor
+        // takes part in ranking.
+        let episodes: Vec<Episode> = episodes.into_iter().filter(in_model_context).collect();
         let docs: Vec<String> = episodes.iter().map(|e| e.task.clone()).collect();
         let ranked = self.retrieval.rank(task, &docs, limit).await;
         Ok(ranked
@@ -411,6 +456,32 @@ impl MemoryProvider for SqliteMemoryProvider {
             }
         }
         Ok(())
+    }
+
+    async fn episode_history(&self, run_id: Uuid) -> Result<Vec<Episode>, MemoryError> {
+        // `episode_versions` holds everything written since schema v4; a row
+        // from before v4 exists only in `episodes` (as its version 1), so
+        // read both and drop the duplicate current rows.
+        let conn = self.db.conn.lock().await;
+        let mut stmt = conn
+            .prepare(
+                "SELECT data FROM episode_versions WHERE run_id = ?1
+                 UNION ALL
+                 SELECT data FROM episodes WHERE run_id = ?1",
+            )
+            .map_err(mem_err)?;
+        let rows = stmt
+            .query_map(params![run_id.to_string()], |row| row.get::<_, String>(0))
+            .map_err(mem_err)?;
+        let mut out: Vec<Episode> = Vec::new();
+        for row in rows {
+            let e: Episode = serde_json::from_str(&row.map_err(mem_err)?).map_err(mem_err)?;
+            if !out.iter().any(|o| o.id == e.id && o.version == e.version) {
+                out.push(e);
+            }
+        }
+        out.sort_by_key(|e| (e.id, e.version));
+        Ok(out)
     }
 }
 
@@ -741,6 +812,123 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    fn ep(run_id: Uuid, task: &str, outcome: EpisodeOutcome) -> Episode {
+        Episode {
+            id: Uuid::new_v4(),
+            run_id,
+            task: task.into(),
+            trace: vec!["finish: ok".into()],
+            outcome,
+            provenance: Provenance::Reflection,
+            version: 1,
+        }
+    }
+
+    /// ADR 0040: confirm (v2 Success) and revoke (v3 Unverified) are new
+    /// versions of one episode; retrieval (= model context) never returns it
+    /// while it is `unverified` and returns it once `success`; the history
+    /// keeps all three, and a stale lower version never wins.
+    #[tokio::test]
+    async fn episode_transitions_are_versioned_and_history_is_kept() {
+        let mem = SqliteMemoryProvider::new(Db::open_in_memory().unwrap());
+        let run_id = Uuid::new_v4();
+        let v1 = ep(run_id, "reconcile the ledger", EpisodeOutcome::Unverified);
+        mem.write(v1.clone()).await.unwrap();
+        assert!(mem
+            .retrieve("reconcile ledger", 5)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let mut v2 = v1.clone();
+        v2.version = 2;
+        v2.outcome = EpisodeOutcome::Success;
+        v2.provenance = Provenance::Human;
+        mem.write(v2.clone()).await.unwrap();
+        let hits = mem.retrieve("reconcile ledger", 5).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].summary.contains("outcome: Success"));
+
+        let mut v3 = v2.clone();
+        v3.version = 3;
+        v3.outcome = EpisodeOutcome::Unverified;
+        mem.write(v3).await.unwrap();
+        mem.write(v1.clone()).await.unwrap(); // stale re-write
+        assert!(mem
+            .retrieve("reconcile ledger", 5)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let hist = mem.episode_history(run_id).await.unwrap();
+        assert_eq!(
+            hist.iter()
+                .map(|e| (e.version, e.outcome))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, EpisodeOutcome::Unverified),
+                (2, EpisodeOutcome::Success),
+                (3, EpisodeOutcome::Unverified),
+            ]
+        );
+        assert_eq!(mem.episode_count().await.unwrap(), 1);
+        assert!(mem
+            .episode_history(Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// A database written before schema v4 (ADR 0040): its episode row reads
+    /// unchanged after the migration, counts as version 1 in the history, and
+    /// is preserved there when a revision supersedes it.
+    #[tokio::test]
+    async fn pre_v4_episode_reads_after_migration_and_survives_revision() {
+        let dir = std::env::temp_dir().join(format!("kelter-db-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("kelter.db");
+        let run_id = Uuid::new_v4();
+        let old = ep(run_id, "rotate the logs", EpisodeOutcome::Success);
+        {
+            let conn = Connection::open(&path).unwrap();
+            for sql in &MIGRATIONS[..3] {
+                conn.execute_batch(sql).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 3).unwrap();
+            conn.execute(
+                "INSERT INTO episodes (id, run_id, task, data, created_at) VALUES (?1, ?2, ?3, ?4, 0)",
+                params![
+                    old.id.to_string(),
+                    run_id.to_string(),
+                    old.task,
+                    serde_json::to_string(&old).unwrap()
+                ],
+            )
+            .unwrap();
+        }
+        let mem = SqliteMemoryProvider::new(Db::open(&path).unwrap());
+        let hits = mem.retrieve("rotate logs", 5).await.unwrap();
+        assert!(hits[0].summary.contains("outcome: Success"));
+        let hist = mem.episode_history(run_id).await.unwrap();
+        assert_eq!(hist.len(), 1);
+        assert_eq!(hist[0].outcome, EpisodeOutcome::Success);
+
+        let mut v2 = old.clone();
+        v2.version = 2;
+        v2.outcome = EpisodeOutcome::Unverified;
+        mem.write(v2).await.unwrap();
+        let hist = mem.episode_history(run_id).await.unwrap();
+        assert_eq!(
+            hist.iter()
+                .map(|e| (e.version, e.outcome))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, EpisodeOutcome::Success),
+                (2, EpisodeOutcome::Unverified)
+            ]
+        );
     }
 
     #[test]

@@ -19,6 +19,12 @@ use memory::{Episode, GraphUpsert, MemoryError, MemoryProvider, RankedContext};
 
 pub const MEMORY_TOOLS: [&str; 3] = ["memory_write", "memory_retrieve", "memory_upsert"];
 
+/// Optional fourth memory tool (ADR 0040): every stored version of a run's
+/// episodes. An extension that does not serve it is still a valid memory
+/// backend — it just reports `Unsupported`, and the kernel writes no episode
+/// revisions to it.
+pub const MEMORY_HISTORY_TOOL: &str = "memory_episode_history";
+
 /// The kernel-side response gate — the canonical contract now lives in the
 /// interface crate (`memory::retrieve_response_schema`), shared with the
 /// WASM memory transport (ADR 0024) so both boundaries validate identically.
@@ -29,6 +35,8 @@ fn retrieve_schema() -> &'static jsonschema::Validator {
 pub struct McpMemoryProvider {
     client: RunningService<RoleClient, ()>,
     name: String,
+    /// Whether the extension serves [`MEMORY_HISTORY_TOOL`].
+    has_history: bool,
 }
 
 impl McpMemoryProvider {
@@ -77,7 +85,12 @@ impl McpMemoryProvider {
                 )));
             }
         }
-        Ok(Self { client, name })
+        let has_history = names.iter().any(|n| n == MEMORY_HISTORY_TOOL);
+        Ok(Self {
+            client,
+            name,
+            has_history,
+        })
     }
 
     async fn call(
@@ -160,5 +173,31 @@ impl MemoryProvider for McpMemoryProvider {
         self.call("memory_upsert", serde_json::json!({ "item": item }))
             .await?;
         Ok(())
+    }
+
+    async fn episode_history(&self, run_id: uuid::Uuid) -> Result<Vec<Episode>, MemoryError> {
+        if !self.has_history {
+            return Err(MemoryError::Unsupported("episode history"));
+        }
+        let response = self
+            .call(MEMORY_HISTORY_TOOL, serde_json::json!({ "run_id": run_id }))
+            .await?;
+        // The same untrusted-boundary stance as `retrieve`: the shape must
+        // parse as episodes, and every one must belong to the asked run — an
+        // extension cannot hand the kernel another run's episode to revise.
+        let episodes: Vec<Episode> =
+            serde_json::from_value(response["episodes"].clone()).map_err(|e| {
+                MemoryError::Backend(format!(
+                    "memory extension '{}' returned an interface-violating history response: {e}",
+                    self.name
+                ))
+            })?;
+        if let Some(stray) = episodes.iter().find(|e| e.run_id != run_id) {
+            return Err(MemoryError::Backend(format!(
+                "memory extension '{}' returned episode {} of run {} for run {run_id}",
+                self.name, stray.id, stray.run_id
+            )));
+        }
+        Ok(episodes)
     }
 }

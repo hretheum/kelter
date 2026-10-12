@@ -414,6 +414,10 @@ pub fn router_full_with_skipped(
             "/api/v1/runs/{id}/confirmation",
             post(confirm_run).delete(revoke_run_confirmation),
         )
+        // The run's reflection episode — current state and every version
+        // (ADR 0040): `unverified` until confirmed, `success` once a human
+        // confirms, back on revoke. Read-only; bearer.
+        .route("/api/v1/runs/{id}/episodes", get(get_run_episodes))
         // Run-produced files (ADR 0029): list + read the files a run's own
         // journal says it wrote — never a workspace directory listing, never
         // an arbitrary filesystem path. Bearer. 404 when no files service is
@@ -925,6 +929,47 @@ async fn decide_confirmation(
         Err(kernel_core::KernelError::Store(kernel_core::StoreError::NotFound(_))) => {
             (StatusCode::NOT_FOUND, "run not found").into_response()
         }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// GET /api/v1/runs/{id}/episodes (ADR 0040): the run's reflection episode
+/// as memory holds it — `current` (what retrieval sees: one per episode id)
+/// and `versions` (all of them, oldest first; a human decision appends one,
+/// nothing is deleted). `history_supported: false` (and empty lists) when the
+/// memory backend keeps no history (WASM / subprocess backends). 404 for an
+/// unknown run.
+async fn get_run_episodes(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let _principal = match auth_gate(&state, &headers, None) {
+        Ok(p) => p,
+        Err(rejection) => return rejection,
+    };
+    match state.kernel.store().get(id).await {
+        Ok(_) => {}
+        Err(kernel_core::StoreError::NotFound(_)) => {
+            return (StatusCode::NOT_FOUND, "run not found").into_response()
+        }
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+    match state.kernel.episode_history(id).await {
+        Ok(versions) => Json(serde_json::json!({
+            "run_id": id,
+            "history_supported": true,
+            "current": memory::current_versions(&versions),
+            "versions": versions,
+        }))
+        .into_response(),
+        Err(memory::MemoryError::Unsupported(_)) => Json(serde_json::json!({
+            "run_id": id,
+            "history_supported": false,
+            "current": [],
+            "versions": [],
+        }))
+        .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

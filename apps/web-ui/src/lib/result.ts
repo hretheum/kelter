@@ -1,4 +1,4 @@
-import type { Run } from "./api";
+import type { Run, RunEpisodes } from "./api";
 
 /* Turning a run's terminal output into readable prose (ADR 0029).
  *
@@ -107,4 +107,20 @@ export function verificationView(run: Run): VerificationView {
     };
   }
   return none;
+}
+
+/* ADR 0040: how memory holds the run's reflection episode — the third state
+ * (`unverified`) is never shown as a success. `null` when there is nothing to
+ * say (no episode, or a backend that keeps no history). */
+export function episodeView(e: RunEpisodes | null): string | null {
+  if (!e || !e.history_supported || e.current.length === 0) return null;
+  const cur = e.current[0];
+  const by = cur.provenance === "human" ? ", set by a human" : "";
+  const label =
+    cur.outcome === "unverified"
+      ? "unverified — kept out of model context until confirmed"
+      : cur.outcome === "success"
+        ? "success"
+        : "failure";
+  return `Memory: ${label} (episode v${cur.version}${by}).`;
 }

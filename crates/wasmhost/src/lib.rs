@@ -365,6 +365,11 @@ pub fn arc(source: WasmToolSource) -> Arc<dyn ActionSource> {
 //   {"op":"memory_write",    "episode": {...}}          -> {"ok": true}
 //   {"op":"memory_retrieve", "task": "...", "limit": N} -> {"results": [...]}
 //   {"op":"memory_upsert",   "item": {...}}             -> {"ok": true}
+//   {"op":"memory_episode_history", "run_id": "..."}    -> {"episodes": [...]}
+//
+// The last op is OPTIONAL (ADR 0040): a module that answers it with
+// `{"ok": false, "error": "unknown op …"}` is still a valid memory backend
+// and reports `MemoryError::Unsupported` for history.
 //
 // Two deliberate differences from the tool host:
 //
@@ -607,6 +612,36 @@ impl MemoryProvider for WasmMemoryProvider {
             )));
         }
         Ok(())
+    }
+
+    async fn episode_history(&self, run_id: uuid::Uuid) -> Result<Vec<Episode>, MemoryError> {
+        let resp = self
+            .call(serde_json::json!({ "op": "memory_episode_history", "run_id": run_id }))
+            .await?;
+        if resp["ok"] == serde_json::json!(false)
+            && resp["error"]
+                .as_str()
+                .is_some_and(|e| e.starts_with("unknown op"))
+        {
+            return Err(MemoryError::Unsupported("episode history"));
+        }
+        // Untrusted boundary, as for `retrieve`: the shape must parse as
+        // episodes, and every one must belong to the asked run — a module
+        // cannot steer the kernel into revising another run's episode.
+        let episodes: Vec<Episode> =
+            serde_json::from_value(resp["episodes"].clone()).map_err(|e| {
+                MemoryError::Backend(format!(
+                    "wasm memory '{}' returned an interface-violating history response: {e}",
+                    self.name
+                ))
+            })?;
+        if let Some(stray) = episodes.iter().find(|e| e.run_id != run_id) {
+            return Err(MemoryError::Backend(format!(
+                "wasm memory '{}' returned episode {} of run {} for run {run_id}",
+                self.name, stray.id, stray.run_id
+            )));
+        }
+        Ok(episodes)
     }
 }
 

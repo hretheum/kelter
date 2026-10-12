@@ -150,6 +150,28 @@ export interface BudgetStop {
 
 export type Verification = "none" | "contract";
 
+/* ADR 0040: a reflection episode's state. `unverified` = completed with no
+ * contract and no human confirmation yet. */
+export type EpisodeOutcome = "success" | "failure" | "unverified";
+
+export interface Episode {
+  id: string;
+  run_id: string;
+  task: string;
+  trace: string[];
+  outcome: EpisodeOutcome;
+  provenance: "reflection" | "human" | "import";
+  version: number;
+}
+
+/* GET /api/v1/runs/{id}/episodes (ADR 0040). */
+export interface RunEpisodes {
+  run_id: string;
+  history_supported: boolean;
+  current: Episode[];
+  versions: Episode[];
+}
+
 export interface ContractReport {
   satisfied: boolean;
   conditions: { condition: { kind: string; action: string }; met: boolean; detail: string }[];
@@ -235,6 +257,8 @@ export type RunEvent =
       branch: string | null;
     }
   | { type: "reflection_written"; episode_id: string }
+  /* ADR 0040: a confirm/revoke wrote a new version of the run's episode. */
+  | { type: "episode_revised"; episode_id: string; version: number; outcome: EpisodeOutcome }
   | { type: "completed"; output: unknown; verification?: Verification }
   | { type: "failed"; error: string }
   | {

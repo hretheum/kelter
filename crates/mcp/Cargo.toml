@@ -46,3 +46,7 @@ rmcp = { version = "2.2", features = [
     "transport-async-rw",
 ] }
 schemars = "1"
+
+[dev-dependencies]
+# ADR 0040: the shared episode-context probe.
+kernel-core = { workspace = true, features = ["testkit"] }
