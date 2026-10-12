@@ -3365,3 +3365,15 @@ Re-run after the change (clippy/fmt on Rust 1.99.0, tests on 1.97.0):
   hangs: it expects an unimplemented-capability manifest to abort startup,
   but since ADR 0035 such an extension is skipped and the daemon starts — a
   stale assertion that predates this change, left for a separate fix.
+
+**CI disk, after merging main (PR #9) into PR #8 (2026-10-12).** The merge
+commit `fc2dec9` failed `fmt + clippy + test` twice, identically: `No space
+left on device` / ld `Bus error` while linking kernel-core's test binaries,
+89 MB left on the runner. Each side alone was green (`8e0067c`, main
+`0d71e1a`); together the test binaries crossed the runner's disk. Not a code
+failure: `bde8a9b` sets `CARGO_PROFILE_DEV_DEBUG=line-tables-only` for the
+`check` job (file:line in panics and backtraces kept). Measured on this
+tree, `target/` after `cargo clippy --workspace --all-targets` + `cargo test
+--workspace --no-run` (Rust 1.99.0):
+**15 GB default → 7.5 GB line-tables-only**. Full suite under that profile with
+Postgres: 444 passed, 0 failed.
