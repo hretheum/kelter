@@ -16,6 +16,9 @@ Volume=%h/.config/clm:/etc/clm:ro,Z
 # Qwen3-8B weights (~16 GB) and the head; survives image rebuilds.
 Volume=%h/cc-runner/clm-cache:/cache:Z
 PodmanArgs=--init
+# The first thing to go under memory pressure: advice only, the run goes on
+# without it.
+PodmanArgs=--oom-score-adj=1000
 # vLLM's engine talks to its workers through /dev/shm; podman's default
 # 64 MB is too small ("Insufficient space in /dev/shm", seen on K12).
 ShmSize=2g

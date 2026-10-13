@@ -61,6 +61,24 @@ Prerequisites that live outside the unit (unchanged by this directory):
 - journald's cap: `SystemMaxUse=` set explicitly (see
   [`docs/observability.md`](../../docs/observability.md#bounding-log-size-deployment-adr-0017)).
 
+## Memory (2026-10-13)
+
+The host has no disk swap. Two settings keep a memory spike from taking out
+the wrong thing:
+
+- **zram swap**, 8 GiB zstd (`/etc/systemd/zram-generator.conf` on the host:
+  `[zram0] zram-size = min(ram / 4, 8192)`, `compression-algorithm = zstd`,
+  `swap-priority = 100`). A peak slows things down instead of triggering the
+  OOM killer at once. Not in `deploy/fcos/k12.bu`, which predates the
+  current host (user `core`, stock FCOS) — set by hand.
+- **OOM priorities** (`--oom-score-adj`; rootless containers default to 200,
+  higher dies first): Kelter `100` (`kelter.container.d/40-oom.conf`, this
+  repo); claude-code-runner `800` and clm `1000` (their units in
+  `deploy/claude-code/`); on the host, outside this repo, drop-ins
+  `50-oom.conf` give `100` to Home Assistant, mosquitto, matter-server,
+  Ghost + its DB, hretheum-app, hretheum-db and both cloudflared tunnels, and
+  `700` to hretheum-embeddings.
+
 ## Upgrading the image = one drop-in
 
 Bump the SHA in `kelter.container.d/10-image.conf`, commit it, then on K12:

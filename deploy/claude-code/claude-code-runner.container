@@ -28,6 +28,9 @@ Volume=%h/cc-runner/state:/state:Z
 Volume=%h/cc-runner/out:/out:Z
 # Reap whatever a session or a check leaves behind (node is not an init).
 PodmanArgs=--init
+# Expendable under memory pressure: the kernel kills this (a task is
+# reported interrupted, never re-run) before Kelter or the host's services.
+PodmanArgs=--oom-score-adj=800
 # cargo test of the Kelter workspace is the heaviest check.
 Memory=12G
 LogDriver=journald
