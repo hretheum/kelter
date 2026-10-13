@@ -78,6 +78,13 @@ the wrong thing:
   `50-oom.conf` give `100` to Home Assistant, mosquitto, matter-server,
   Ghost + its DB, hretheum-app, hretheum-db and both cloudflared tunnels, and
   `700` to hretheum-embeddings.
+- **Lowering needs the unit, not podman:** an unprivileged process can only
+  raise its `oom_score_adj`, and a user service starts at 200 — so a value
+  *below* 200 must be `[Service] OOMScoreAdjust=` (the user manager may set
+  it, it sits at 100); `--oom-score-adj=100` alone is silently ignored. The
+  first version did exactly that and the protected services came back at 200
+  after the 2026-10-13 reboot; raising (700/800/1000) works with podman
+  alone.
 
 ## Upgrading the image = one drop-in
 
