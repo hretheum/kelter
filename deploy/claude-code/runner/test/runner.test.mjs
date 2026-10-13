@@ -240,3 +240,78 @@ test("authorized is exact", () => {
   assert.equal(authorized("Bearer abcd", "abc"), false);
   assert.equal(authorized(undefined, "abc"), false);
 });
+
+// ---- KRW.2: path recommendation (CLM shadow) --------------------------------
+
+import { createServer } from "node:http";
+import { PATH_QUESTION, clmRequest, parseRecommend, recommendResult } from "../lib.mjs";
+
+function fakeClm(reply) {
+  const seen = [];
+  const server = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      seen.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(raw) });
+      const [code, body] = typeof reply === "function" ? reply() : reply;
+      res.writeHead(code, { "content-type": "application/json" });
+      res.end(typeof body === "string" ? body : JSON.stringify(body));
+    });
+  }).listen(0);
+  return { server, seen, url: () => `http://127.0.0.1:${server.address().port}` };
+}
+
+const clmAnswer = { answers: { sciezka: { choice: "sonnet", probabilities: { bez: 0.02, haiku: 0.1, sonnet: 0.81234, opus: 0.06766 }, confidence: 0.75 } } };
+
+test("recommend: the TypeSafe-shaped question, options mapped 1:1 to the skill's paths", () => {
+  const cfg = validateConfig({ repos: {}, clm: { url: "http://clm:8700" } });
+  const body = clmRequest(parseRecommend({ zlecenie: "popraw literówkę", repo: "kelter" }), cfg);
+  assert.equal(body.model, "clm-latest");
+  assert.deepEqual(body.state, { task: "popraw literówkę", repository: "kelter" });
+  assert.equal(body.questions.sciezka.type, "choice");
+  assert.deepEqual(Object.keys(PATH_QUESTION.criteria), ["bez", "haiku", "sonnet", "opus"]);
+  assert.throws(() => parseRecommend({}), BadRequest);
+  assert.throws(() => validateConfig({ repos: {}, clm: { url: "clm:8700" } }), /clm.url/);
+});
+
+test("recommend: a usable answer is recorded with rounded probabilities; anything else is ok:false", () => {
+  const r = recommendResult(clmAnswer, 42);
+  assert.deepEqual(r, { ok: true, rekomendacja: "sonnet", prawdopodobienstwa: { bez: 0.02, haiku: 0.1, sonnet: 0.812, opus: 0.068 }, pewnosc: 0.75, opoznienie_ms: 42, tryb: "cien" });
+  for (const bad of [null, {}, { answers: { sciezka: { choice: "gpt", probabilities: {} } } }, { answers: { sciezka: { choice: "opus" } } }]) {
+    assert.equal(recommendResult(bad, 1).ok, false);
+  }
+});
+
+test("recommend end to end: calls CLM with the key, logs the answer, never queues behind a task", async () => {
+  const clm = fakeClm([200, clmAnswer]);
+  try {
+    const { cfg } = fixture();
+    const runner = createRunner({ ...cfg, clm: { url: clm.url(), model: "clm-latest", timeout_s: 5 } }, { claudeBin: fake, clmKey: "k-123" });
+    const r = await runner.recommend({ zlecenie: "dodaj test", repo: "demo" });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.rekomendacja, "sonnet");
+    assert.equal(clm.seen[0].url, "/v1/systemone");
+    assert.equal(clm.seen[0].auth, "Bearer k-123");
+    const log = readFileSync(join(cfg.state_dir, "recommendations.jsonl"), "utf8").trim().split("\n");
+    assert.equal(log.length, 1);
+    assert.equal(JSON.parse(log[0]).rekomendacja, "sonnet");
+    assert.ok(!log[0].includes("dodaj test"), "the task text is not stored, only its hash");
+  } finally {
+    clm.server.close();
+  }
+});
+
+test("recommend degrades: no CLM configured, CLM down, CLM error — all ok:false, nothing thrown", async () => {
+  const { cfg } = fixture();
+  const none = createRunner({ ...cfg, clm: null }, { claudeBin: fake });
+  assert.match((await none.recommend({ zlecenie: "x" })).blad, /not configured/);
+  const down = createRunner({ ...cfg, clm: { url: "http://127.0.0.1:9", model: "clm-latest", timeout_s: 2 } }, { claudeBin: fake });
+  assert.match((await down.recommend({ zlecenie: "x" })).blad, /unreachable/);
+  const clm = fakeClm([502, { error: "embedder unreachable" }]);
+  try {
+    const err = createRunner({ ...cfg, clm: { url: clm.url(), model: "clm-latest", timeout_s: 5 } }, { claudeBin: fake });
+    assert.match((await err.recommend({ zlecenie: "x" })).blad, /CLM HTTP 502/);
+  } finally {
+    clm.server.close();
+  }
+});

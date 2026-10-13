@@ -40,7 +40,14 @@ export function validateConfig(cfg) {
     },
     repos: cfg.repos ?? {},
     checks: cfg.checks ?? {},
+    // KRW.2: the CLM service for path recommendations (shadow mode). Absent =
+    // /v1/recommend answers ok:false and the run goes on by the skill's rules.
+    // Where CLM runs (GPU, CPU, another host) is only this URL.
+    clm: cfg.clm ? { url: cfg.clm.url, model: cfg.clm.model ?? "clm-latest", timeout_s: cfg.clm.timeout_s ?? 60, api_key: cfg.clm.api_key ?? null } : null,
   };
+  if (out.clm && (typeof out.clm.url !== "string" || !/^https?:\/\//.test(out.clm.url))) {
+    throw new Error("config: clm.url must be an http(s) URL");
+  }
   for (const name of Object.keys(out.repos)) {
     if (!NAME.test(name)) throw new Error(`config: bad repo name '${name}'`);
   }
@@ -220,4 +227,51 @@ export function authorized(header, token) {
   const want = Buffer.from(`Bearer ${token}`);
   const got = Buffer.from(header ?? "");
   return got.length === want.length && timingSafeEqual(got, want);
+}
+
+// ---- KRW.2: path recommendation (CLM, shadow mode) --------------------------
+
+/* The one question CLM answers per task. Options are described in plain
+ * English prose — what the heads were trained on — and map 1:1 onto the
+ * skill's paths. Keys are what Kelter's journal records. */
+export const PATH_QUESTION = {
+  type: "choice",
+  instructions: "Which execution path should handle this task at the lowest cost that will still succeed?",
+  criteria: {
+    bez: "No coding agent is needed: the task is reading, summarizing, listing or writing notes, with no code change in a repository.",
+    haiku: "A small, mechanical code change: a typo, a configuration entry, a version bump, or one clearly described function.",
+    sonnet: "A typical coding task: fix a bug, add a test, or build a small feature across a few files.",
+    opus: "A large or risky coding task: core runtime logic, concurrency or exactly-once semantics, migrations, security, or a task a smaller model already failed.",
+  },
+};
+
+export function parseRecommend(body) {
+  object(body);
+  const task = str(body, "zlecenie", { max: 8000 });
+  const repo = body.repo === undefined ? null : str(body, "repo", { max: 64 });
+  return { task, repo };
+}
+
+export function clmRequest(req, cfg) {
+  const state = req.repo ? { task: req.task, repository: req.repo } : { task: req.task };
+  return { model: cfg.clm.model, state, questions: { sciezka: PATH_QUESTION } };
+}
+
+/* CLM's answer → what the kernel records. A malformed answer is a failure,
+ * never a guessed recommendation. */
+export function recommendResult(answer, latencyMs) {
+  const a = answer?.answers?.sciezka;
+  const probs = a?.probabilities;
+  if (!a || typeof a.choice !== "string" || !Object.hasOwn(PATH_QUESTION.criteria, a.choice) || !probs || typeof probs !== "object") {
+    return { ok: false, blad: "CLM returned no usable answer for 'sciezka'" };
+  }
+  const p = Object.fromEntries(Object.keys(PATH_QUESTION.criteria).map((k) => [k, typeof probs[k] === "number" ? Math.round(probs[k] * 1000) / 1000 : null]));
+  return {
+    ok: true,
+    rekomendacja: a.choice,
+    prawdopodobienstwa: p,
+    pewnosc: typeof a.confidence === "number" ? Math.round(a.confidence * 1000) / 1000 : null,
+    opoznienie_ms: latencyMs,
+    tryb: "cien",
+  };
 }

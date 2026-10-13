@@ -19,6 +19,7 @@ EVIDENCE_DIR="${1:-}"
 PORT=7596
 LLM_PORT=18096
 RUNNER_PORT=18790
+CLM_PORT=18700
 BASE="http://127.0.0.1:${PORT}"
 TOKEN="smoke-cc-$$"
 RUNNER_TOKEN="runner-token-$$-0123456789abcdef0123456789"
@@ -44,6 +45,7 @@ cat > "$RUN_DIR/runner/config.json" <<J
 { "repos_dir": "$RUN_DIR/runner/repos", "work_dir": "$RUN_DIR/runner/work",
   "state_dir": "$RUN_DIR/runner/state", "out_dir": "$RUN_DIR/runner/out",
   "worker": null, "repos": { "demo": {} },
+  "clm": { "url": "http://127.0.0.1:${CLM_PORT}", "timeout_s": 5 },
   "checks": { "plik-jest": { "repo": "demo", "cmd": ["test", "-f", "wynik.txt"] },
               "zawsze-zle": { "repo": "demo", "cmd": ["sh", "-c", "echo boom; exit 2"] } } }
 J
@@ -54,6 +56,15 @@ FAKE_LOG="$RUN_DIR/claude-calls.log" RUNNER_PASS_ENV=FAKE_LOG RUNNER_CONFIG_DIR=
   PORT="$RUNNER_PORT" RUNNER_CLAUDE_BIN="$REPO_ROOT/deploy/claude-code/runner/test/fake-claude.sh" \
   node "$REPO_ROOT/deploy/claude-code/runner/server.mjs" > "$RUN_DIR/runner.log" 2>&1 &
 RUNNER_PID=$!
+
+# A stand-in CLM (KRW.2): always recommends sonnet.
+node -e '
+require("http").createServer((q, r) => { let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => {
+  r.writeHead(200, { "content-type": "application/json" });
+  r.end(JSON.stringify({ answers: { sciezka: { choice: "sonnet", confidence: 0.7,
+    probabilities: { bez: 0.05, haiku: 0.1, sonnet: 0.8, opus: 0.05 } } } }));
+}); }).listen('"$CLM_PORT"', "127.0.0.1");' &
+CLM_PID=$!
 
 # The extension exactly as shipped, pointed at the local runner.
 EXT="$RUN_DIR/ext/claude-code"
@@ -77,14 +88,18 @@ cat > "$RUN_DIR/queue.json" <<Q
   {"action": "sprawdz", "arguments": {"sprawdzenie": "zawsze-zle", "galaz": "@BR@"}, "_subst": {"@BR@": "$BR"}},
   {"action": "finish", "arguments": {"summary": "twierdzę, że zrobione"}},
   {"action": "claude_code_opus", "arguments": {"repo": "demo", "zlecenie": "duże zadanie"}},
-  {"action": "finish", "arguments": {"summary": "opus skończył"}}
+  {"action": "finish", "arguments": {"summary": "opus skończył"}},
+  {"action": "recommend_path", "arguments": {"zlecenie": "dodaj test", "repo": "demo"}},
+  {"action": "finish", "arguments": {"summary": "CLM: sonnet; wybrałem sonnet"}},
+  {"action": "recommend_path", "arguments": {"zlecenie": "dodaj test"}},
+  {"action": "finish", "arguments": {"summary": "bez CLM"}}
 ]
 Q
 ( cd "$RUN_DIR" && FAKE_LLM_QUEUE="$RUN_DIR/queue.json" \
     exec python3 "$REPO_ROOT/scripts/fake-llm-scripted.py" "$LLM_PORT" > "$RUN_DIR/llm.log" 2>&1 ) &
 LLM_PID=$!
 DAEMON_PID=""
-cleanup() { kill "$DAEMON_PID" "$LLM_PID" "$RUNNER_PID" 2>/dev/null || true; }
+cleanup() { kill "$DAEMON_PID" "$LLM_PID" "$RUNNER_PID" "$CLM_PID" 2>/dev/null || true; }
 trap cleanup EXIT
 
 cat > "$RUN_DIR/config.toml" <<CFG
@@ -139,7 +154,7 @@ wait_status() {
 claude_calls() { wc -l < "$RUN_DIR/claude-calls.log" 2>/dev/null | tr -d ' ' || echo 0; }
 
 TOOLS=$(get /api/v1/tools)
-for t in claude_code_run claude_code_opus sprawdz; do
+for t in claude_code_run claude_code_opus sprawdz recommend_path; do
   grep -q "\"$t\"" <<<"$TOOLS" || { cat "$RUN_DIR/daemon.log"; die "tool $t not registered"; }
 done
 CONTRACT='"success_contract": {"require": [{"kind": "action_succeeded", "action": "sprawdz"}]}'
@@ -191,9 +206,32 @@ post "/api/v1/runs/$RUN_O/action-approval" '{"action": "claude_code_opus", "deci
 tail -1 "$RUN_DIR/claude-calls.log" | grep -q -- "--model opus" || die "O: not run on opus"
 log "O: PASS — paused, allowed, ran once on opus"
 
+log "=== R: recommend_path (CLM shadow) is recorded; CLM down does not break the run ==="
+RUN_R=$(post /api/v1/runs '{"task": "jaka ścieżka dla: dodaj test"}' | field '["run_id"]')
+[ "$(wait_status "$RUN_R" completed failed incomplete)" = "completed" ] || die "R: did not complete"
+get "/api/v1/runs/$RUN_R" > "$RUN_DIR/run-recommend.json"
+python3 - "$RUN_DIR/run-recommend.json" <<'PY' || die "R: recommendation not recorded"
+import json, sys
+r = json.load(open(sys.argv[1])); s = r["steps"][0]
+assert s["action"] == "recommend_path" and s["ok"], s
+assert s["result"]["rekomendacja"] == "sonnet" and s["result"]["tryb"] == "cien", s["result"]
+PY
+grep -q '"rekomendacja":"sonnet"' "$RUN_DIR/runner/state/recommendations.jsonl" || die "R: runner did not log it"
+kill "$CLM_PID" 2>/dev/null; wait "$CLM_PID" 2>/dev/null || true
+RUN_R2=$(post /api/v1/runs '{"task": "jaka ścieżka, CLM wyłączony"}' | field '["run_id"]')
+S2=$(wait_status "$RUN_R2" completed failed incomplete)
+get "/api/v1/runs/$RUN_R2" > "$RUN_DIR/run-recommend-down.json"
+[ "$S2" != "failed" ] || die "R: CLM down failed the run"
+python3 - "$RUN_DIR/run-recommend-down.json" <<'PY' || die "R: CLM-down step not a clean tool failure"
+import json, sys
+s = json.load(open(sys.argv[1]))["steps"][0]
+assert s["action"] == "recommend_path" and not s["ok"] and "unreachable" in json.dumps(s["result"]), s
+PY
+log "R: PASS — recommendation journaled (sonnet, shadow) and logged; CLM down → a failed step, run $S2, not failed"
+
 if [ -n "$EVIDENCE_DIR" ]; then
   mkdir -p "$EVIDENCE_DIR"
   cp "$RUN_DIR"/run-*.json "$RUN_DIR"/history-*.json "$RUN_DIR/approvals-queue.json" \
      "$RUN_DIR/claude-calls.log" "$RUN_DIR/config.toml" "$EVIDENCE_DIR/"
 fi
-log "PASS: sonnet verified by contract; failed check → incomplete; opus asks first"
+log "PASS: sonnet verified by contract; failed check → incomplete; opus asks first; CLM shadow recorded and optional"

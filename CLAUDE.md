@@ -175,6 +175,10 @@ claude_code_opus = "ask"`. The bridge is its own crate and the runner plain
 Node — CI runs both explicitly. `scripts/smoke-claude-code.sh` drives it end
 to end. If you add a tool to `bridge.json`, decide on purpose whether it
 carries `idempotency_key` — that alone decides whether the gate sees it.
+KRW.2 adds `recommend_path` (CLM, shadow mode — advice, not keyed) and
+`deploy/claude-code/clm/`: one image on a GPU or CPU vLLM base, profile
+drop-ins A/B/C (README "CLM profiles"); K12 runs C because its 24 GB card
+holds the local orchestrator.
 
 **Open items, in the order they'd bite.**
 1. **18 ADRs carry `human_validated: false`** — 0007–0023 plus 0032. Eryk's

@@ -4,6 +4,7 @@
 //
 //   POST /v1/run    {idempotency_key, repo, model, zlecenie, effort?, limit_czasu_s?, baza?}
 //   POST /v1/check  {sprawdzenie, galaz}
+//   POST /v1/recommend {zlecenie, repo?}   — KRW.2, CLM path recommendation (shadow)
 //   GET  /healthz
 //
 // Exactly-once per idempotency key: a repeated key returns the stored result
@@ -18,12 +19,13 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  chownSync, closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync,
+  appendFileSync, chownSync, closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import {
-  BadRequest, authorized, branchFor, claudeArgs, loadConfig, parseCheck, parseRun, runResult, taskId, taskPaths, workerEnv,
+  BadRequest, authorized, branchFor, claudeArgs, clmRequest, loadConfig, parseCheck, parseRecommend, parseRun, recommendResult, runResult,
+  taskId, taskPaths, workerEnv,
 } from "./lib.mjs";
 
 const OUTPUT_CAP = 4 * 1024 * 1024;
@@ -79,7 +81,7 @@ export function killUid(uid) {
   }
 }
 
-export function createRunner(cfg, { claudeBin = "claude", oauthToken = "", passEnv = {} } = {}) {
+export function createRunner(cfg, { claudeBin = "claude", oauthToken = "", passEnv = {}, clmKey = null } = {}) {
   const runsDir = join(cfg.state_dir, "runs");
   mkdirSync(runsDir, { recursive: true });
   mkdirSync(cfg.work_dir, { recursive: true });
@@ -260,7 +262,36 @@ export function createRunner(cfg, { claudeBin = "claude", oauthToken = "", passE
     });
   }
 
-  return { run, check };
+  /// KRW.2: ask CLM which path fits the task. Shadow mode: the answer is
+  /// recorded (here and in Kelter's journal), never acted on by the runner.
+  /// Not queued behind tasks — it runs no worker code.
+  async function recommend(body) {
+    const req = parseRecommend(body);
+    if (!cfg.clm) return { ok: false, blad: "CLM not configured on this runner (clm.url)" };
+    const started = Date.now();
+    let result;
+    try {
+      const res = await fetch(`${cfg.clm.url.replace(/\/$/, "")}/v1/systemone`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(clmKey ? { authorization: `Bearer ${clmKey}` } : {}) },
+        body: JSON.stringify(clmRequest(req, cfg)),
+        signal: AbortSignal.timeout(cfg.clm.timeout_s * 1000),
+      });
+      const text = await res.text();
+      result = res.ok
+        ? recommendResult(JSON.parse(text), Date.now() - started)
+        : { ok: false, blad: `CLM HTTP ${res.status}: ${text.slice(0, 300)}` };
+    } catch (e) {
+      result = { ok: false, blad: `CLM unreachable: ${e.message ?? e}` };
+    }
+    try {
+      appendFileSync(join(cfg.state_dir, "recommendations.jsonl"),
+        `${JSON.stringify({ at: new Date().toISOString(), repo: req.repo, task_sha256: createHash("sha256").update(req.task).digest("hex").slice(0, 16), ...result })}\n`);
+    } catch { /* the journal in Kelter is the record that matters */ }
+    return result;
+  }
+
+  return { run, check, recommend };
 }
 
 export function createHttpServer(runner, token) {
@@ -271,7 +302,7 @@ export function createHttpServer(runner, token) {
     };
     if (req.method === "GET" && req.url === "/healthz") return send(200, { ok: true });
     if (!authorized(req.headers.authorization, token)) return send(401, { error: "unauthorized" });
-    const handler = req.method === "POST" && { "/v1/run": runner.run, "/v1/check": runner.check }[req.url];
+    const handler = req.method === "POST" && { "/v1/run": runner.run, "/v1/check": runner.check, "/v1/recommend": runner.recommend }[req.url];
     if (!handler) return send(404, { error: "not found" });
     let raw = "";
     req.setEncoding("utf8");
@@ -304,6 +335,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     claudeBin: process.env.RUNNER_CLAUDE_BIN ?? "claude",
     oauthToken: read(join(conf, "claude-oauth-token")),
     passEnv,
+    clmKey: cfg.clm?.api_key ? read(join(conf, cfg.clm.api_key)) : null,
   });
   const port = Number(process.env.PORT ?? 8790);
   createHttpServer(runner, token).listen(port, "0.0.0.0", () => {

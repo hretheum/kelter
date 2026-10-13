@@ -68,5 +68,11 @@
     "haiku": "claude-haiku-5-5",
     "sonnet": "claude-sonnet-5-5",
     "opus": "claude-opus-5-5"
+  },
+  "clm": {
+    "url": "http://clm:8700",
+    "model": "clm-latest",
+    "timeout_s": 60,
+    "api_key": "clm-api-key"
   }
 }
