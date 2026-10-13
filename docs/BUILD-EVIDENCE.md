@@ -3469,3 +3469,40 @@ Verification (local):
   Environment, not code.
 - Not yet: deployment on K12 and a run with the real CLI (K12 unreachable
   from this network on 2026-10-13).
+
+## 2026-10-13 — KRW.1 deployed on K12, first real runs
+
+Deployed per `deploy/claude-code/README.md` from `7756249` (files synced to
+`~/kelter-deploy`, no checkout on K12). Bridge built with
+`build-bridge.sh` (static-pie x86-64 ELF); runner image built on K12:
+Claude Code 2.1.296, toolchain not group/other-writable, pnpm offline from
+`/opt/corepack`, `worker` = uid 1001. Kelter config backed up
+(`config.toml.bak-20261013-krw1`) and extended with `[trust]`, `[approval]`
+(`claude_code_opus = "ask"`, timeout 86400 s), `[skills]` (dir on the state
+volume, `sciezka-kosztowa` active) and `[budget] max_wall_secs = 14400`.
+Start log: extension `claude-code` registered (`SubprocessUnsandboxed`,
+operator-trusted), `skills: 1 installed (1 active)`, `approval:
+default=Allow entries=1`, budget active; `GET /tools` lists
+`claude_code_run`, `claude_code_opus`, `sprawdz`, nothing skipped. Base
+repos (kelter `7756249`, aids `dbb9969`, glassbox `f672fa5`) pushed from
+the Mac into `--shared=0644` bare repos (packs 0444).
+
+First run (orchestrator: local `gemma-3-27b`), task "use claude_code_opus
+on glassbox to add an empty TEST.md":
+- the run paused `awaiting_action_approval` on `claude_code_opus`; the
+  runner had **0** tasks — nothing ran before a decision;
+- denied → journal `action_approval_requested` / `action_approval_decided
+  deny`; the model then chose `claude_code_run` (Sonnet) on its own — a
+  refused Opus falls back to the cheaper path, it does not end the work;
+- the Sonnet task: 6 s, 2 turns, notional $0.031, `modelUsage` only
+  `claude-sonnet-5-5`, commit `2c62276` on `kelter/6b231618c7b3`, bundle in
+  `~/cc-runner/out` (owned by the host user); task files owned by the
+  worker's subuid (590824) — the uid switch works;
+- `sprawdz glassbox-testy` (`npm ci && npm test`, vitest) passed in 3 s;
+  run `completed`, `verification: none` (no contract given in this test);
+- `pobierz.sh` on the Mac (into a scratch clone): sha256 matched, bundle
+  verified, branch fetched with the one commit.
+
+Not yet exercised on K12: a contract-verified run, a cold `kelter-testy`
+(first full workspace build in a task), the Opus allow path with the real
+CLI.
