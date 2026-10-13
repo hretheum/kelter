@@ -94,6 +94,68 @@ Not covered: individual commands inside a session (the container is the
 sandbox: no push credentials, no host access beyond its volumes). Per-command
 control is KR5.6.
 
+## CLM in shadow mode (KRW.2) — three profiles
+
+`recommend_path` asks CLM (a contrastive "System One" model,
+[Contrastive-LM/CLM](https://github.com/Contrastive-LM/CLM)) which path fits
+a task — `bez` (no Claude Code), `haiku`, `sonnet`, `opus` — with
+probabilities. Shadow mode: the skill tells the model to call it once and
+**not** act on it; the answer lands in Kelter's journal (and the runner's
+`recommendations.jsonl`, task text hashed) for a later comparison with what
+the rules chose and how it went. CLM down or not configured → a failed step,
+the run goes on. The tool is advice, not an action: no `idempotency_key`,
+never gated.
+
+Kelter's code and the extension are the same in every profile; a profile is
+only *where CLM runs* (`clm.url` in the runner config) and *which model
+orchestrates* (`[policy] engine` in Kelter's config):
+
+| profile | CLM encoder | Kelter's orchestrator | when |
+|---|---|---|---|
+| **A** | GPU, the whole card (`profiles/gpu.conf`) | non-local: OpenRouter, Anthropic, another gateway (KR5.1a) | CLM should be fast; you accept paying for orchestration |
+| **B** | GPU, a share (`profiles/gpu.conf`, lower `CLM_GPU_UTIL`) | local, same GPU | a card that fits both (≈ 40 GB+, or CLM fp8 + a shorter orchestrator context) |
+| **C** | CPU (`profiles/cpu.conf`, needs AVX-512 to be quick) | local, on the GPU | the GPU belongs to the orchestrator; seconds per answer is fine in shadow mode |
+
+K12 (RTX 3090 24 GB): `gemma-3-27b` Q4_K_M with a 32k context takes ≈ 20 GB
+during a run and CLM's encoder (Qwen3-8B bf16) ≈ 16 GB — **B does not fit**.
+K12 runs **C** (Ryzen 7 H 255, AVX-512, 56 GB RAM); **A** is one drop-in and
+one `[policy]` line away (and frees the GPU only if nothing else keeps the
+local model loaded).
+
+**Measured on K12, profile C (2026-10-13).** Works: health OK, ~0.5 s per
+answer once warm (7.7 s for the first). Costs **~28 GB of RAM** — half the
+host; it was stopped and taken out of autostart the same day to protect the
+other services. **Zero-shot quality is not useful yet:** on six hand-labelled
+tasks CLM answered `sonnet` for almost everything, often with probability
+0.95–1.0 (1/6 correct under three different phrasings of the options; a
+Polish brief even drew `opus`). The shadow mode therefore needs fine-tuned
+heads (roadmap KRW.2b) before its recommendations mean anything; the
+plumbing here does not change for that — a fine-tuned head is a different
+`--ckpt`.
+
+Install (any profile):
+
+```sh
+# image for the profile (GPU or CPU base)
+podman build --build-arg BASE=docker.io/vllm/vllm-openai-cpu:v0.30.0 -t localhost/clm:cpu deploy/claude-code/clm
+#   GPU: --build-arg BASE=docker.io/vllm/vllm-openai:v0.30.0 -t localhost/clm:gpu
+mkdir -p ~/.config/clm ~/cc-runner/clm-cache && chmod 700 ~/.config/clm
+openssl rand -hex 32 > ~/.config/clm/api-key && chmod 600 ~/.config/clm/api-key
+install -m 600 ~/.config/clm/api-key ~/.config/claude-code-runner/clm-api-key
+cp deploy/claude-code/clm/clm.container ~/.config/containers/systemd/
+mkdir -p ~/.config/containers/systemd/clm.container.d
+cp deploy/claude-code/clm/profiles/cpu.conf ~/.config/containers/systemd/clm.container.d/10-profile.conf   # or gpu.conf
+systemctl --user daemon-reload && systemctl --user start clm   # first start downloads ~16 GB
+```
+
+Then in `~/.config/claude-code-runner/config.json`:
+`"clm": {"url": "http://clm:8700", "api_key": "clm-api-key"}`, restart the
+runner, and copy the updated `bridge.json` into the extension directory.
+
+Profile A also needs Kelter's orchestrator off the GPU, e.g.
+`[policy] engine = "openrouter:<model>"` with the key in the environment
+(Anthropic's own endpoint: KR5.1a).
+
 ## Install on K12
 
 As the user that runs the `kelter` unit, from a checkout of this repo.

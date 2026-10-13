@@ -1,0 +1,34 @@
+# CLM service for Kelter's path recommendation (KRW.2) — rootless Quadlet.
+# Install: ~/.config/containers/systemd/clm.container, plus ONE profile drop-in
+# from profiles/ into ~/.config/containers/systemd/clm.container.d/
+# (see deploy/claude-code/README.md, "CLM profiles").
+[Unit]
+Description=CLM path recommender for Kelter (deploy/claude-code/clm)
+After=network-online.target
+
+[Container]
+# Overridden by the profile drop-in (localhost/clm:gpu or localhost/clm:cpu).
+Image=localhost/clm:cpu
+ContainerName=clm
+# The runner dials http://clm:8700; nothing outside llm-net reaches CLM.
+Network=llm-net
+Volume=%h/.config/clm:/etc/clm:ro,Z
+# Qwen3-8B weights (~16 GB) and the head; survives image rebuilds.
+Volume=%h/cc-runner/clm-cache:/cache:Z
+PodmanArgs=--init
+# vLLM's engine talks to its workers through /dev/shm; podman's default
+# 64 MB is too small ("Insufficient space in /dev/shm", seen on K12).
+ShmSize=2g
+LogDriver=journald
+HealthCmd=python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8700/health', timeout=3)"
+HealthInterval=30s
+# First start downloads the weights.
+HealthStartPeriod=3600s
+
+[Service]
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=3700
+
+[Install]
+WantedBy=default.target

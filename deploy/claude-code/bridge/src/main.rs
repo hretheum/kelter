@@ -270,7 +270,15 @@ mod tests {
         let c = cfg();
         assert_eq!(c.token, "sekret");
         let names: Vec<_> = c.tools.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, ["claude_code_run", "claude_code_opus", "sprawdz"]);
+        assert_eq!(
+            names,
+            [
+                "claude_code_run",
+                "claude_code_opus",
+                "sprawdz",
+                "recommend_path"
+            ]
+        );
     }
 
     #[test]
@@ -290,6 +298,8 @@ mod tests {
         assert!(has_key("claude_code_run"));
         assert!(has_key("claude_code_opus"));
         assert!(!has_key("sprawdz"));
+        // KRW.2: advice, not an action — never gated, never keyed.
+        assert!(!has_key("recommend_path"));
     }
 
     #[test]
@@ -377,7 +387,7 @@ mod tests {
             &never,
         )
         .unwrap();
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 3);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 4);
         let unknown = handle(
             &c,
             &json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" }),

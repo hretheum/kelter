@@ -1,0 +1,19 @@
+# CLM (Contrastive Language Model) for Kelter's path recommendation, KRW.2.
+# One image, two bases — the profile decides where the encoder runs:
+#   GPU: podman build --build-arg BASE=docker.io/vllm/vllm-openai:v0.30.0     -t localhost/clm:gpu deploy/claude-code/clm
+#   CPU: podman build --build-arg BASE=docker.io/vllm/vllm-openai-cpu:v0.30.0 -t localhost/clm:cpu deploy/claude-code/clm
+# Inside: a Qwen3-8B pooling encoder (vLLM) on 127.0.0.1:8090 and clm-serve
+# (the System One API) on :8700. Weights download on first start into /cache.
+ARG BASE=docker.io/vllm/vllm-openai:v0.30.0
+FROM ${BASE}
+
+# --no-deps: the base already carries torch (CUDA or CPU build), vLLM,
+# fastapi, uvicorn and huggingface_hub; letting pip resolve would pull a CUDA
+# torch into the CPU image.
+ARG CLM_VERSION=0.1.0
+RUN pip install --no-cache-dir --no-deps "contrastive-lm==${CLM_VERSION}"
+
+COPY start.sh /opt/clm/start.sh
+ENV HF_HOME=/cache/hf
+EXPOSE 8700
+ENTRYPOINT ["/opt/clm/start.sh"]

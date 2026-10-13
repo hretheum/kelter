@@ -3506,3 +3506,54 @@ on glassbox to add an empty TEST.md":
 Not yet exercised on K12: a contract-verified run, a cold `kelter-testy`
 (first full workspace build in a task), the Opus allow path with the real
 CLI.
+
+## 2026-10-13 — CLM in shadow mode, three deployment profiles (roadmap KRW.2)
+
+Eryk's requirement: all three variants must work, chosen by configuration —
+(A) the GPU is CLM's alone and Kelter orchestrates through a non-local model
+(OpenRouter, Anthropic, another gateway); (B) a GPU that fits both; (C) CLM
+on the CPU. Kelter's code and the extension are identical across them; a
+profile is the CLM image base (`vllm/vllm-openai` vs `vllm/vllm-openai-cpu`,
+both v0.30.0, pushed 2026-09-22), one Quadlet drop-in, and `[policy] engine`.
+
+- **Why not B on K12:** measured 2026-10-13 — `gemma-3-27b` Q4_K_M with a 32k
+  context (llama-swap) is ≈ 20 GB during a run; CLM's encoder (Qwen3-8B bf16)
+  ≈ 16 GB; the card is 24 GB. K12 gets **C** (Ryzen 7 H 255, AVX-512, 56 GB).
+- **Wire format** read from the CLM source (`src/clm/schema.py`): TypeSafe's
+  `POST /v1/systemone`, a question is `{"type": "choice", "instructions",
+  "criteria": {option: description}}`; the encoder is any OpenAI-style
+  `/v1/embeddings` with Qwen3-8B last-token pooling — the head matches only
+  embeddings produced that way, hence vLLM in both profiles (not a quantized
+  llama.cpp encoder). `contrastive-lm==0.1.0` installed `--no-deps` so the CPU
+  image does not pull a CUDA torch.
+- **Shape:** tool `recommend_path` (no `idempotency_key` — advice, never
+  gated) → runner `POST /v1/recommend` (not queued behind tasks, it runs no
+  worker code) → CLM. The answer is journaled by Kelter and logged by the
+  runner with the task text hashed. The skill asks the model to call it once
+  and decide by the rules anyway; CLM down/unconfigured → `ok:false`, the run
+  goes on.
+
+Verification (local): runner 20 tests (+4: question shape and 1:1 option
+mapping, answer shaping and refusal of malformed answers, end to end with a
+fake CLM incl. bearer and the hashed log, degradation: unconfigured / down /
+HTTP 502); bridge 7 tests (4 tools, `recommend_path` not mutating);
+`scripts/smoke-claude-code.sh` PASS incl. **R** — the recommendation journaled
+(`rekomendacja: sonnet`, `tryb: cien`) and logged; with CLM killed, the step
+fails cleanly and the run ends `incomplete`, not `failed`.
+
+**On K12, profile C, the same day.** The CPU image built (vLLM 0.30.0,
+`contrastive-lm` importable, `clm-serve` present). Two fixes only the real
+host showed: `clm-serve --host 0.0.0.0` (it must be reachable over
+`llm-net`), and `ShmSize=2g` (vLLM's engine died with "Insufficient space in
+/dev/shm: 160 MiB required, 62 MiB free"). Then healthy (`embedder: true`,
+device cpu), weights 16 GB in `~/cc-runner/clm-cache`. Measured:
+- latency 7.7 s cold, then 0.42–0.55 s per answer on the CPU;
+- **memory ~28 GB resident** (of 56 GB) — the host dropped to ~2 GB free.
+  CLM was stopped immediately and moved out of autostart
+  (`~/kelter-deploy/disabled/`); no OOM kills, nothing else affected
+  (`exocortex-e2e` had failed at 01:15, before this work);
+- **zero-shot quality: not usable.** Six hand-labelled tasks (bez / haiku ×3
+  / sonnet / opus): CLM chose `sonnet` for nearly all, often at 0.95–1.0;
+  1/6 correct under each of three option phrasings; a Polish brief drew
+  `opus` (0.47). Shadow-mode data from these heads would be near-constant.
+  Next: fine-tuned heads (KRW.2b) before turning the shadow on.

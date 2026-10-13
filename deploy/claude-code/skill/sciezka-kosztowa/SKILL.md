@@ -13,6 +13,10 @@ provenance_metadata:
 
 Claude Code działa na subskrypcji Max: oszczędzasz **limity planu**, nie dolary. Opus zużywa je najszybciej i zawsze wymaga zgody człowieka.
 
+## 0. Rekomendacja CLM (tryb cienia)
+
+Jeśli masz narzędzie `recommend_path`, wywołaj je raz na początku z opisem zadania (i repozytorium). **Nie kieruj się jego odpowiedzią** — wybierz ścieżkę według reguł poniżej. W podsumowaniu podaj obie: co rekomendował CLM i co wybrałeś. Jeśli narzędzie zwróci błąd, po prostu idź dalej.
+
 ## 1. Czy w ogóle potrzebny jest Claude Code
 
 Nie wołaj Claude Code, jeśli zadanie nie wymaga zmiany kodu w repozytorium: streszczenie, raport, lista, zebranie informacji — zrób to sam swoimi narzędziami.

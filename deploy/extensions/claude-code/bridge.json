@@ -10,33 +10,99 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "repo": { "type": "string", "description": "Nazwa repozytorium skonfigurowanego w runnerze, np. kelter, aids, glassbox." },
-          "zlecenie": { "type": "string", "description": "Pełny brief dla Claude Code." },
-          "model": { "type": "string", "enum": ["haiku", "sonnet"], "description": "haiku: drobne, mechaniczne zmiany; sonnet: typowe zadania." },
-          "effort": { "type": "string", "enum": ["low", "medium", "high"], "description": "Domyślnie medium." },
-          "limit_czasu_s": { "type": "integer", "minimum": 60, "maximum": 7200, "description": "Limit czasu zadania w sekundach (domyślnie 1800)." },
-          "baza": { "type": "string", "description": "Gałąź bazowa (domyślnie z konfiguracji repozytorium, zwykle main)." },
-          "idempotency_key": { "type": "string", "description": "Ustawia jądro Keltera; nie podawaj." }
+          "repo": {
+            "type": "string",
+            "description": "Nazwa repozytorium skonfigurowanego w runnerze, np. kelter, aids, glassbox."
+          },
+          "zlecenie": {
+            "type": "string",
+            "description": "Pełny brief dla Claude Code."
+          },
+          "model": {
+            "type": "string",
+            "enum": [
+              "haiku",
+              "sonnet"
+            ],
+            "description": "haiku: drobne, mechaniczne zmiany; sonnet: typowe zadania."
+          },
+          "effort": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "description": "Domyślnie medium."
+          },
+          "limit_czasu_s": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 7200,
+            "description": "Limit czasu zadania w sekundach (domyślnie 1800)."
+          },
+          "baza": {
+            "type": "string",
+            "description": "Gałąź bazowa (domyślnie z konfiguracji repozytorium, zwykle main)."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Ustawia jądro Keltera; nie podawaj."
+          }
         },
-        "required": ["repo", "zlecenie", "model"]
+        "required": [
+          "repo",
+          "zlecenie",
+          "model"
+        ]
       }
     },
     {
       "name": "claude_code_opus",
       "path": "/v1/run",
-      "fixed": { "model": "opus" },
+      "fixed": {
+        "model": "opus"
+      },
       "description": "Jak claude_code_run, ale na modelu Opus — tylko dla zadań dużych, ryzykownych albo po nieudanej próbie na Sonnecie. Zawsze wymaga zgody człowieka przed uruchomieniem.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "repo": { "type": "string", "description": "Nazwa repozytorium skonfigurowanego w runnerze." },
-          "zlecenie": { "type": "string", "description": "Pełny brief dla Claude Code; po nieudanej próbie dopisz, co poszło nie tak." },
-          "effort": { "type": "string", "enum": ["low", "medium", "high"], "description": "Domyślnie medium." },
-          "limit_czasu_s": { "type": "integer", "minimum": 60, "maximum": 7200, "description": "Limit czasu zadania w sekundach (domyślnie 1800)." },
-          "baza": { "type": "string", "description": "Gałąź bazowa (domyślnie main)." },
-          "idempotency_key": { "type": "string", "description": "Ustawia jądro Keltera; nie podawaj." }
+          "repo": {
+            "type": "string",
+            "description": "Nazwa repozytorium skonfigurowanego w runnerze."
+          },
+          "zlecenie": {
+            "type": "string",
+            "description": "Pełny brief dla Claude Code; po nieudanej próbie dopisz, co poszło nie tak."
+          },
+          "effort": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "description": "Domyślnie medium."
+          },
+          "limit_czasu_s": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 7200,
+            "description": "Limit czasu zadania w sekundach (domyślnie 1800)."
+          },
+          "baza": {
+            "type": "string",
+            "description": "Gałąź bazowa (domyślnie main)."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Ustawia jądro Keltera; nie podawaj."
+          }
         },
-        "required": ["repo", "zlecenie"]
+        "required": [
+          "repo",
+          "zlecenie"
+        ]
       }
     },
     {
@@ -46,10 +112,40 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "sprawdzenie": { "type": "string", "description": "Nazwa sprawdzenia z konfiguracji runnera, np. kelter-testy, kelter-clippy, aids-testy, glassbox-testy." },
-          "galaz": { "type": "string", "description": "Gałąź zwrócona przez zlecenie, postaci kelter/<12 znaków hex>." }
+          "sprawdzenie": {
+            "type": "string",
+            "description": "Nazwa sprawdzenia z konfiguracji runnera, np. kelter-testy, kelter-clippy, aids-testy, glassbox-testy."
+          },
+          "galaz": {
+            "type": "string",
+            "description": "Gałąź zwrócona przez zlecenie, postaci kelter/<12 znaków hex>."
+          }
         },
-        "required": ["sprawdzenie", "galaz"]
+        "required": [
+          "sprawdzenie",
+          "galaz"
+        ]
+      }
+    },
+    {
+      "name": "recommend_path",
+      "path": "/v1/recommend",
+      "description": "Tryb cienia (KRW.2): pyta CLM, którą ścieżką wykonać zadanie — bez (bez Claude Code), haiku, sonnet albo opus — i zwraca rekomendację z prawdopodobieństwami. Wywołaj raz, przed wyborem ścieżki. Nie wybieraj na jej podstawie: decyduj według reguł skilla sciezka-kosztowa; rekomendacja trafia do dziennika do późniejszego porównania. Błąd tego narzędzia nie przeszkadza w zadaniu.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "zlecenie": {
+            "type": "string",
+            "description": "Opis zadania, tak jak go rozumiesz (bez briefu dla Claude Code)."
+          },
+          "repo": {
+            "type": "string",
+            "description": "Repozytorium, którego dotyczy zadanie, jeśli dotyczy."
+          }
+        },
+        "required": [
+          "zlecenie"
+        ]
       }
     }
   ]
