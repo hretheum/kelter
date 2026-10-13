@@ -107,11 +107,15 @@ for f in "$K12_DROPINS"/*.conf; do
   [ -e "$f" ] || continue
   n=$((n + 1))
   check_container_keys "$f"
-  # Only [Container] belongs in these drop-ins today; anything else would be a
+  # Only [Container] belongs in these drop-ins; anything else would be a
   # behaviour K12 has and the canonical unit does not — exactly the drift D19
-  # removes. Widen deliberately if a real deployment need appears.
-  awk '/^\[.*\]$/ && $0 != "[Container]" { exit 1 }' "$f" \
-    || fail "$(basename "$f"): only a [Container] section is expected in a K12 drop-in"
+  # removes. Widened deliberately once (2026-10-13): [Service] with
+  # OOMScoreAdjust= and nothing else, because an unprivileged process can only
+  # raise oom_score_adj and a user service starts at 200 — lowering it for a
+  # protected service has to happen on the unit (deploy/k12/README.md, Memory).
+  awk '/^\[.*\]$/ { s = $0; if (s != "[Container]" && s != "[Service]") exit 1; next }
+       s == "[Service]" && !/^[[:space:]]*(#|$)/ && !/^OOMScoreAdjust=/ { exit 1 }' "$f" \
+    || fail "$(basename "$f"): a K12 drop-in may hold [Container], and [Service] only for OOMScoreAdjust="
 done
 [ "$n" -gt 0 ] || fail "no *.conf drop-ins in $K12_DROPINS"
 img="$(cat "$K12_DROPINS"/*.conf | awk '/^\[.*\]$/ { s = $0; next } s == "[Container]" && /^Image=/ { v = substr($0, 7) } END { print v }')"
