@@ -1,0 +1,24 @@
+# claude-code — Claude Code as a headless executor, cost path chosen by Kelter
+# (roadmap KRW.1; deploy/claude-code/README.md).
+#
+# A subprocess MCP server: the static `claude-code-bridge` binary forwards
+# tool calls over HTTP to the Claude Code runner container on llm-net. The
+# bridge itself only does HTTP; the work (and the subscription token) lives
+# in the runner. Still a subprocess, so it needs the operator's opt-in:
+#   [trust] allow_unsandboxed_subprocess = ["claude-code"]
+#
+# Gate-relevant facts live in bridge.json: claude_code_run / claude_code_opus
+# declare `idempotency_key` (mutating → ADR 0038 approval applies; exactly
+# once on resume, ADR 0031), `sprawdz` does not (read-only, never gated).
+# Opus is a separate tool with the model fixed by the bridge, so
+#   [approval.actions] claude_code_opus = "ask"
+# pauses for a human on every Opus call.
+
+[extension]
+name = "claude-code"
+description = "Claude Code (Haiku/Sonnet/Opus) w worktree na K12 + sprawdzenia: ścieżka kosztowa zadań programistycznych"
+provides = ["tools"]
+trust = "subprocess-unsandboxed"
+
+[server]
+command = "./claude-code-bridge"

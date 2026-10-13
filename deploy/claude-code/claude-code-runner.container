@@ -1,0 +1,46 @@
+# Claude Code runner for Kelter — rootless Podman Quadlet unit for K12.
+# Install: ~/.config/containers/systemd/claude-code-runner.container
+# See deploy/claude-code/README.md.
+#
+# No UserNS=keep-id: the container's root is the host user (rootless
+# default), so the runner can read the 0600 secrets and what it writes to
+# /out is owned by the host user. The worker uid (1001) maps to a subuid
+# and can read neither.
+[Unit]
+Description=Claude Code runner for Kelter (deploy/claude-code)
+After=network-online.target
+
+[Container]
+Image=localhost/claude-code-runner:latest
+ContainerName=claude-code-runner
+# Same network as kelter: the extension dials http://claude-code-runner:8790.
+# No PublishPort — nothing outside llm-net reaches the runner.
+Network=llm-net
+# Secrets + config (runner-token, claude-oauth-token, config.json).
+Volume=%h/.config/claude-code-runner:/etc/claude-code-runner:ro,Z
+# Base repos: read-only. The Mac pushes `main` here; the container can never
+# write a hook or a ref the host would later execute or trust.
+Volume=%h/cc-runner/repos:/repos:ro,Z
+# Per-task clones, HOME and caches (model-writable, container-only).
+Volume=%h/cc-runner/work:/work:Z
+Volume=%h/cc-runner/state:/state:Z
+# Result bundles, written by the runner only; the Mac copies them out.
+Volume=%h/cc-runner/out:/out:Z
+# Reap whatever a session or a check leaves behind (node is not an init).
+PodmanArgs=--init
+# cargo test of the Kelter workspace is the heaviest check.
+Memory=12G
+LogDriver=journald
+HealthCmd=node -e "fetch('http://127.0.0.1:8790/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+HealthInterval=30s
+HealthStartPeriod=20s
+
+[Service]
+Restart=on-failure
+RestartSec=10
+# Stopping cuts off a running task; the runner reports it as interrupted
+# (never re-run) on its next start.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

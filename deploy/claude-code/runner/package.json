@@ -1,0 +1,11 @@
+{
+  "name": "claude-code-runner",
+  "private": true,
+  "type": "module",
+  "description": "Runs Claude Code headless in git worktrees for Kelter (deploy/claude-code). No dependencies.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}

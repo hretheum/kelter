@@ -1,0 +1,72 @@
+{
+  "repos_dir": "/repos",
+  "work_dir": "/work",
+  "state_dir": "/state",
+  "out_dir": "/out",
+  "default_time_s": 1800,
+  "max_time_s": 7200,
+  "budget_usd": {
+    "haiku": 1,
+    "sonnet": 3,
+    "opus": 10
+  },
+  "repos": {
+    "kelter": {
+      "base": "main"
+    },
+    "aids": {
+      "base": "main"
+    },
+    "glassbox": {
+      "base": "main"
+    }
+  },
+  "checks": {
+    "kelter-testy": {
+      "repo": "kelter",
+      "cmd": [
+        "sh",
+        "-c",
+        "pnpm --dir apps/web-ui install --frozen-lockfile && pnpm --dir apps/web-ui build && cargo test --workspace"
+      ],
+      "timeout_s": 3600
+    },
+    "kelter-clippy": {
+      "repo": "kelter",
+      "cmd": [
+        "sh",
+        "-c",
+        "pnpm --dir apps/web-ui install --frozen-lockfile && pnpm --dir apps/web-ui build && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all --check"
+      ],
+      "timeout_s": 3600
+    },
+    "aids-testy": {
+      "repo": "aids",
+      "cmd": [
+        "sh",
+        "-c",
+        "pnpm install --frozen-lockfile && pnpm test"
+      ],
+      "timeout_s": 1800
+    },
+    "glassbox-testy": {
+      "repo": "glassbox",
+      "cmd": [
+        "sh",
+        "-c",
+        "npm ci && npm test"
+      ],
+      "timeout_s": 1800
+    }
+  },
+  "worker": {
+    "uid": 1001,
+    "gid": 1001
+  },
+  "keep_caches": 10,
+  "model_ids": {
+    "haiku": "claude-haiku-5-5",
+    "sonnet": "claude-sonnet-5-5",
+    "opus": "claude-opus-5-5"
+  }
+}

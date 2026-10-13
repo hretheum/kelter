@@ -47,3 +47,11 @@ apps/web-ui/tsconfig.tsbuildinfo
 
 # built desktop bundles (scripts/build-dmg.sh)
 /dist/
+
+CLAUDE.local.md
+
+# claude-code extension (deploy/claude-code): build outputs and K12-only secrets
+/deploy/claude-code/bridge/target/
+/deploy/claude-code/bridge/target-musl/
+/deploy/extensions/claude-code/claude-code-bridge
+/deploy/extensions/claude-code/runner-token

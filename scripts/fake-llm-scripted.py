@@ -2,10 +2,11 @@
 # Scripted OpenAI-compatible /v1/chat/completions: replies from a queue,
 # then `finish` forever. Logs every reply it served to calls.log (cwd), and
 # every request it received (the prompt the model saw) to requests.log.
-# A queue entry may carry two stub-only keys, stripped before replying:
+# A queue entry may carry three stub-only keys, stripped before replying:
 #   "_usage": [prompt_tokens, completion_tokens]  — reported usage (default 10, 5)
 #   "_delay": seconds                             — sleep before answering
-import json, os, sys, time
+#   "_subst": {"PLACEHOLDER": "regex"}             — fill from the last regex match in the prompt
+import json, os, re, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 QUEUE = [
@@ -33,6 +34,11 @@ class H(BaseHTTPRequestHandler):
             f.write(json.dumps(body) + "\n")
         reply = dict(QUEUE.pop(0) if QUEUE else FINISH)
         prompt_tokens, completion_tokens = reply.pop("_usage", (10, 5))
+        # "_subst": {"PLACEHOLDER": "regex"} — fill a value only known at run
+        # time (e.g. an id a tool returned) from the last match in the prompt.
+        for placeholder, pattern in reply.pop("_subst", {}).items():
+            found = re.findall(pattern, json.dumps(body))
+            reply = json.loads(json.dumps(reply).replace(placeholder, found[-1] if found else placeholder))
         time.sleep(reply.pop("_delay", 0))
         with open("calls.log", "a") as f:
             f.write(json.dumps(reply) + "\n")

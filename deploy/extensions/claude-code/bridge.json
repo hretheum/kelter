@@ -1,0 +1,56 @@
+{
+  "base_url": "http://claude-code-runner:8790",
+  "token_file": "runner-token",
+  "max_wait_s": 21600,
+  "tools": [
+    {
+      "name": "claude_code_run",
+      "path": "/v1/run",
+      "description": "Zleca zadanie programistyczne Claude Code (Haiku albo Sonnet) w repozytorium na K12. Claude Code pracuje na nowej gałęzi kelter/<id>, commituje zmiany, nic nie wypycha. Zwraca gałąź, wynik, koszt i listę zmian. Zlecenie pisz jako precyzyjny brief: cel, pliki, kontekst, kryterium sukcesu. Poprawność sprawdzaj potem narzędziem sprawdz, nie słowami wyniku.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repo": { "type": "string", "description": "Nazwa repozytorium skonfigurowanego w runnerze, np. kelter, aids, glassbox." },
+          "zlecenie": { "type": "string", "description": "Pełny brief dla Claude Code." },
+          "model": { "type": "string", "enum": ["haiku", "sonnet"], "description": "haiku: drobne, mechaniczne zmiany; sonnet: typowe zadania." },
+          "effort": { "type": "string", "enum": ["low", "medium", "high"], "description": "Domyślnie medium." },
+          "limit_czasu_s": { "type": "integer", "minimum": 60, "maximum": 7200, "description": "Limit czasu zadania w sekundach (domyślnie 1800)." },
+          "baza": { "type": "string", "description": "Gałąź bazowa (domyślnie z konfiguracji repozytorium, zwykle main)." },
+          "idempotency_key": { "type": "string", "description": "Ustawia jądro Keltera; nie podawaj." }
+        },
+        "required": ["repo", "zlecenie", "model"]
+      }
+    },
+    {
+      "name": "claude_code_opus",
+      "path": "/v1/run",
+      "fixed": { "model": "opus" },
+      "description": "Jak claude_code_run, ale na modelu Opus — tylko dla zadań dużych, ryzykownych albo po nieudanej próbie na Sonnecie. Zawsze wymaga zgody człowieka przed uruchomieniem.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repo": { "type": "string", "description": "Nazwa repozytorium skonfigurowanego w runnerze." },
+          "zlecenie": { "type": "string", "description": "Pełny brief dla Claude Code; po nieudanej próbie dopisz, co poszło nie tak." },
+          "effort": { "type": "string", "enum": ["low", "medium", "high"], "description": "Domyślnie medium." },
+          "limit_czasu_s": { "type": "integer", "minimum": 60, "maximum": 7200, "description": "Limit czasu zadania w sekundach (domyślnie 1800)." },
+          "baza": { "type": "string", "description": "Gałąź bazowa (domyślnie main)." },
+          "idempotency_key": { "type": "string", "description": "Ustawia jądro Keltera; nie podawaj." }
+        },
+        "required": ["repo", "zlecenie"]
+      }
+    },
+    {
+      "name": "sprawdz",
+      "path": "/v1/check",
+      "description": "Uruchamia nazwane sprawdzenie (np. testy) na gałęzi zwróconej przez claude_code_run / claude_code_opus. To jest dowód, że zadanie się udało: wynik z ok=true oznacza, że sprawdzenie przeszło.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sprawdzenie": { "type": "string", "description": "Nazwa sprawdzenia z konfiguracji runnera, np. kelter-testy, kelter-clippy, aids-testy, glassbox-testy." },
+          "galaz": { "type": "string", "description": "Gałąź zwrócona przez zlecenie, postaci kelter/<12 znaków hex>." }
+        },
+        "required": ["sprawdzenie", "galaz"]
+      }
+    }
+  ]
+}
