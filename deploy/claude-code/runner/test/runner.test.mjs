@@ -315,3 +315,8 @@ test("recommend degrades: no CLM configured, CLM down, CLM error — all ok:fals
     clm.server.close();
   }
 });
+
+test("the training set asks exactly the production question (KRW.2b)", () => {
+  const exported = JSON.parse(readFileSync(join(here, "..", "..", "clm", "train", "path_question.json"), "utf8"));
+  assert.deepEqual(exported, PATH_QUESTION);
+});

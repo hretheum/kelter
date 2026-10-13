@@ -1,0 +1,61 @@
+{
+ "best_epoch": 11,
+ "val_acc": 0.8888888888888888,
+ "test": {
+  "acc": 0.8541666666666666,
+  "soft_ce": 0.5228464603424072,
+  "per_question": {
+   "sciezka": 0.8542
+  }
+ },
+ "init_test": {
+  "acc": 0.3541666666666667,
+  "soft_ce": 1.4919017155965169,
+  "per_question": {
+   "sciezka": 0.3542
+  }
+ },
+ "majority_val": 0.16666666666666666,
+ "majority_test": 0.25,
+ "train_questions": 102,
+ "minutes": 1.27,
+ "args": {
+  "task": "choice",
+  "out_dir": "/work/out/head",
+  "benchmark": null,
+  "emb_dir": null,
+  "hf_dataset": null,
+  "data": "/work/out/data",
+  "workflow": "path",
+  "hf_cache": null,
+  "hf_split": null,
+  "embed_model": "Qwen/Qwen3-8B",
+  "embed_url": "http://127.0.0.1:8090/v1/embeddings",
+  "served_model_name": "qwen3-8b",
+  "max_len": 2048,
+  "gpu_mem": 0.85,
+  "embed_cache": null,
+  "init_ckpt": "/cache/hf/hub/models--Contrastive-LM--CLM-v0.1-8B/snapshots/e939398d4556fcd9400c76fa8c5a513202f42b0a/CLM_v0.1-8B.pt",
+  "width": null,
+  "depth": null,
+  "proj": 512,
+  "epochs": 40,
+  "batch": 256,
+  "lr": null,
+  "weight_decay": 0.0,
+  "val_frac": 0.15,
+  "patience": 10,
+  "seed": 1234,
+  "gpu": 0,
+  "holdout_folds": null,
+  "holdout_tasks": null,
+  "folds": null,
+  "fold_index": null,
+  "fold_config": null,
+  "sampler": "random",
+  "tasks_per_batch": 4,
+  "clm_select_metric": "within_task_top1",
+  "targets": "hard",
+  "loss": "infonce"
+ }
+}

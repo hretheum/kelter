@@ -1,0 +1,7 @@
+reference: 17/48 = 35%  (0.66 s/question)
+want \ got     bez   haiku  sonnet    opus
+       bez       2       0       6       4
+     haiku       1       0      11       0
+    sonnet       0       0      12       0
+      opus       1       0       8       3
+{"head": "reference", "correct": 17, "total": 48, "accuracy": 0.3541666666666667, "confusion": {"bez": {"bez": 2, "haiku": 0, "sonnet": 6, "opus": 4}, "haiku": {"bez": 1, "haiku": 0, "sonnet": 11, "opus": 0}, "sonnet": {"bez": 0, "haiku": 0, "sonnet": 12, "opus": 0}, "opus": {"bez": 1, "haiku": 0, "sonnet": 8, "opus": 3}}}

@@ -1,0 +1,10 @@
+{
+  "type": "choice",
+  "instructions": "Which execution path should handle this task at the lowest cost that will still succeed?",
+  "criteria": {
+    "bez": "No coding agent is needed: the task is reading, summarizing, listing or writing notes, with no code change in a repository.",
+    "haiku": "A small, mechanical code change: a typo, a configuration entry, a version bump, or one clearly described function.",
+    "sonnet": "A typical coding task: fix a bug, add a test, or build a small feature across a few files.",
+    "opus": "A large or risky coding task: core runtime logic, concurrency or exactly-once semantics, migrations, security, or a task a smaller model already failed."
+  }
+}

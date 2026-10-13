@@ -6,6 +6,7 @@
 #   CLM_DEVICE       cuda | cpu   (set by the profile drop-in)
 #   CLM_GPU_UTIL     share of GPU memory for the encoder (GPU profile)
 #   CLM_API_KEY_FILE bearer key file for clm-serve (mounted secret)
+#   CLM_CKPT         optional fine-tuned head (KRW.2b); default = reference head
 set -eu
 DEVICE="${CLM_DEVICE:-cuda}"
 EXTRA=""
@@ -31,5 +32,6 @@ until python3 -c "import urllib.request,sys; urllib.request.urlopen('http://127.
 done
 CLM_API_KEY="$(cat "${CLM_API_KEY_FILE:-/etc/clm/api-key}")"
 export CLM_API_KEY
+# shellcheck disable=SC2086
 exec clm-serve --host 0.0.0.0 --port 8700 --emb-url http://127.0.0.1:8090/v1/embeddings \
-  --emb-model qwen3-8b --max-tokens 2048 --device "$DEVICE" --no-ui
+  --emb-model qwen3-8b --max-tokens 2048 --device "$DEVICE" --no-ui ${CLM_CKPT:+--ckpt "$CLM_CKPT"}
