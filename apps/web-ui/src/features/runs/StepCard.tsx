@@ -5,6 +5,7 @@
 import { useState } from "react";
 import { Spinner } from "@/components/ui/button";
 import { cn, focusRing } from "@/lib/cn";
+import { executorView } from "@/lib/executor";
 import { pretty } from "@/lib/format";
 import type { AxisStep } from "@/lib/events";
 
@@ -71,7 +72,11 @@ export function StepCard({
         ? "retrying"
         : "proposed";
   const remoteMs = step.executed ? remoteMsOf(step.executed.result) : null;
-  const errorMsg = state === "executed-failed" ? errorOf(step.executed?.result) : null;
+  // Claude Code executor steps (KRW.1) get a readable summary; their failure
+  // reason lives in `blad`, which the generic `error` lookup would miss.
+  const exec = step.executed ? executorView(step.action, step.executed.result) : null;
+  const errorMsg =
+    state === "executed-failed" ? (exec?.error ?? errorOf(step.executed?.result)) : null;
 
   return (
     <div className="animate-slide-in rounded-md border border-border bg-card px-3 py-2">
@@ -132,10 +137,27 @@ export function StepCard({
         </p>
       ))}
 
+      {exec && (
+        <p className="mt-1 font-mono text-caption2 text-muted-foreground">{exec.headline}</p>
+      )}
+
       {errorMsg && (
         <p className="mt-1 rounded-sm bg-danger/10 px-2 py-1 text-caption text-danger">
-          Ran, but failed: {errorMsg}
+          {exec?.violation ? "Policy violation: " : "Ran, but failed: "}
+          {errorMsg}
         </p>
+      )}
+
+      {exec?.outputTail && (
+        <pre className="mt-1 max-h-48 overflow-auto rounded-sm bg-danger/5 p-2 font-mono text-caption2 whitespace-pre-wrap break-words">
+          {exec.outputTail}
+        </pre>
+      )}
+
+      {exec?.kind === "run" && exec.ok && exec.changes && (
+        <pre className="mt-1 max-h-32 overflow-auto rounded-sm bg-input p-2 font-mono text-caption2 whitespace-pre-wrap break-words">
+          {exec.changes}
+        </pre>
       )}
 
       {/* Streamed remote-delegation progress (ADR 0027): an advisory trail of

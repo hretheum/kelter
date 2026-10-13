@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label, Textarea } from "@/components/ui/input";
+import { executorAvailable } from "@/lib/executor";
 import { submitRun } from "@/store/app";
 import { useAppState } from "@/store/hooks";
 
@@ -18,6 +19,11 @@ export function Composer() {
   const [task, setTask] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /* KRW.1: a coding task goes to Claude Code with the success contract, so
+   * "done" means a check passed — and the run can be learned from. */
+  const [coding, setCoding] = useState(false);
+  const [minutes, setMinutes] = useState("");
+  const canCode = executorAvailable(s.tools);
   const ref = useRef<HTMLTextAreaElement>(null);
   const disconnected = s.conn !== "connected";
   const firstRun = s.runsLoaded && s.runs.length === 0;
@@ -37,7 +43,7 @@ export function Composer() {
     setError(null);
     setBusy(true);
     try {
-      await submitRun(trimmed);
+      await submitRun(trimmed, { coding: canCode && coding, minutes: canCode && coding ? minutes : "" });
       setTask(""); // pane becomes the timeline in place (store selects the run)
     } catch (e) {
       setError(`Submit failed: ${(e as Error).message}`); // keep the text
@@ -98,6 +104,42 @@ export function Composer() {
             </kbd>
           </Button>
         </div>
+        {canCode && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-md border border-border bg-card px-3 py-2 text-caption">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={coding}
+                disabled={busy || disconnected}
+                onChange={(e) => setCoding(e.target.checked)}
+                aria-describedby="coding-hint"
+              />
+              Coding task (Claude Code)
+            </label>
+            {coding && (
+              <label className="flex items-center gap-1.5 text-muted-foreground">
+                time limit
+                <input
+                  type="number"
+                  min={1}
+                  inputMode="numeric"
+                  value={minutes}
+                  placeholder="default"
+                  disabled={busy || disconnected}
+                  onChange={(e) => setMinutes(e.target.value)}
+                  className="w-20 rounded-sm border border-border bg-input px-1.5 py-0.5 text-foreground"
+                  aria-label="Time limit in minutes"
+                />
+                min
+              </label>
+            )}
+            <p id="coding-hint" className="basis-full text-caption2 text-muted-foreground">
+              {coding
+                ? "Done only if a check (sprawdz) passes on the result branch. Opus always asks you first."
+                : "Kelter picks the path: itself, Haiku, Sonnet — or Opus, with your approval."}
+            </p>
+          </div>
+        )}
         {error && (
           <p id="task-error" role="alert" className="text-caption text-danger">
             {error}

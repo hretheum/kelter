@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { announce } from "@/lib/announcer";
 import { copyValue } from "@/lib/clipboard";
 import { axisSteps } from "@/lib/events";
+import { budgetStopText, executorCostUsd } from "@/lib/executor";
 import { formatCost, shortPolicy, STATUS_GLYPH } from "@/lib/format";
 import { episodeView, outputView, verificationView } from "@/lib/result";
 import { getRunEpisodes, setRunConfirmation } from "@/store/app";
@@ -134,6 +135,11 @@ export function Result({ run, onNewRun }: { run: Run; onNewRun: () => void }) {
   // Prose-first result rendering (ADR 0029): the summary as readable text,
   // the rest of the payload behind a disclosure — never a raw dump up front.
   const view = outputView(output);
+  // KRW.1: Claude Code's notional cost, beside Kelter's own (never summed —
+  // the kernel's budget does not see it yet, KRW.3). ADR 0039: a budget stop
+  // in words, not only as an error string.
+  const executorCost = executorCostUsd(run.steps);
+  const stopText = budgetStopText(run.budget_stop);
   // The artifact panel accompanies a settled successful run; a failed run's
   // face stays focused on the error.
   const showArtifacts = status === "completed";
@@ -159,6 +165,14 @@ export function Result({ run, onNewRun }: { run: Run; onNewRun: () => void }) {
           <span className="tnum" title={run.cost_usd == null ? "No price configured for this model." : undefined}>
             {formatCost(run.cost_usd)}
           </span>
+          {executorCost != null && (
+            <span
+              className="tnum"
+              title="Claude Code's notional cost (subscription: plan usage, not a bill). Not counted by Kelter's budget."
+            >
+              + Claude Code ~{formatCost(executorCost)}
+            </span>
+          )}
         </p>
 
         {status === "completed" && (
@@ -192,10 +206,11 @@ export function Result({ run, onNewRun }: { run: Run; onNewRun: () => void }) {
           <section className="mt-4" aria-label="Error">
             <div className="flex items-center justify-between">
               <h3 className="text-callout font-medium text-danger">
-                This run failed.
+                {stopText ? "Stopped by a budget." : "This run failed."}
               </h3>
               {error && <CopyButton value={error} label="Copy error" />}
             </div>
+            {stopText && <p className="mt-1 text-body">{stopText}</p>}
             <pre className="mt-1 max-h-96 overflow-auto rounded-md border border-danger/40 bg-danger/5 p-3 font-mono text-caption whitespace-pre-wrap break-words">
               {error ?? "failed"}
             </pre>

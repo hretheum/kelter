@@ -131,6 +131,16 @@ export interface PendingActionApprovalUi {
   expires_at: number | null;
 }
 
+/* GET /api/v1/approvals (ADR 0038): every run waiting on a human, whatever
+ * the pause kind. Only the fields the UI reads are typed. */
+export interface ApprovalItem {
+  run_id: string;
+  task: string;
+  status: string;
+  kind: string;
+  pending: { action?: string; skill?: string; agent?: string; expires_at?: number | null } | null;
+}
+
 export interface RunBudget {
   max_usd?: number;
   max_tokens?: number;

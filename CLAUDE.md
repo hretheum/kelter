@@ -55,7 +55,7 @@ those too: start a `pgvector/pgvector:pg16` container, export
 figure CI reports). CI does this via a `services:` block. Bare `cargo test`
 reports them as `14 ignored`, never as a green pass. `cargo clippy --workspace
 --all-targets -D warnings` and `cargo fmt --check` are the bar. web-ui:
-`pnpm --dir apps/web-ui test` (vitest — 2 files, 25 tests) + `pnpm build`;
+`pnpm --dir apps/web-ui test` (vitest — 3 files, 39 tests) + `pnpm build`;
 both run in CI since 2026-08-03.
 
 **The excluded-workspace hazard — read this before touching shared types.**
