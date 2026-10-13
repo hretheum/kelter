@@ -3586,3 +3586,26 @@ from `CLM_v0.1-8B.pt`, hard labels.
   lives in K12's CLM cache, not in git; profiles set `CLM_CKPT` to it.
   The shadow is still **off** on K12 — the RAM question (profile C ≈ 24–28 GB)
   is open.
+
+## 2026-10-13 — profile C on K12 attempted with `path-v1`: not sustainable, rolled back
+
+After the memory work (UMA 6 GiB → 512 MiB: 62.1 GB visible; embeddings
+14.3 → 7.5 GB; zram 8 GiB; OOM priorities) Eryk chose profile C. Deployed:
+CLM and runner images rebuilt from `main`, `cpu.conf` with KV cache 1 GiB and
+`CLM_CKPT=/cache/heads/path-v1.pt`. CLM healthy after 63 s, head loaded, oom
+score 1000, **20.7 GB** resident.
+
+But the host did not hold: zram filled (8/8 GB, 7.9 GB → 2.2 GB compressed —
+1.8 GB of embeddings and ~4.6 GB of exocortex-gate workers swapped out), free
+RAM 0.4–1.6 GB, and **memory PSI `full` ~10–12% sustained over a minute**:
+every task stalled a tenth of the time. Concurrent load at that moment, a few
+minutes after a reboot: llama-swap 3.9 → 7.7 GB (a model loading),
+exocortex-gate index/review/calibrate/simcheck/desk ≈ 9–10 GB, embeddings
+5.6 GB, the rest ≈ 5 GB. Stopping CLM: PSI `full` avg10 fell to 1.8% within
+45 s, available 17.5 → 36.7 GB — CLM was the difference.
+
+CLM stopped and out of autostart again (`~/kelter-deploy/disabled/`). The
+`cpu.conf` change (KV 1 GiB, `Memory=26G`) stays — right for any host. The
+conclusion for K12: ~21 GB permanently for an advice-only service does not
+fit next to the exocortex batch jobs and llama-swap's loads; not a tuning
+problem (the bf16 Qwen3-8B encoder alone is ~16 GB).
