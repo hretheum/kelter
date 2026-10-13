@@ -15,6 +15,7 @@ import {
   type AgentRegisterRequest,
   type AgentView,
   type ApiError,
+  type ApprovalItem,
   type DelegationDecision,
   type ModelConfigView,
   type Run,
@@ -29,6 +30,7 @@ import {
   type SkillView,
 } from "@/lib/api";
 import { ingestEnvelope, ingestReplay, type AxisState, axisFor } from "@/lib/events";
+import { runRequest } from "@/lib/executor";
 import type { JournalReplay, RunEpisodes } from "@/lib/api";
 
 export type ConnState = "disconnected" | "connecting" | "connected" | "auth-failed";
@@ -73,6 +75,10 @@ export interface AppState {
    * R-2): a lane renders without a badge rather than blocking on this. */
   agents: AgentView[];
   tools: { name: string; description: string }[];
+  /* Every run waiting on a human (GET /api/v1/approvals, ADR 0038) — so a
+   * request (e.g. an Opus run) is seen without opening each run. Fail-silent
+   * optional context; null = the daemon has no such route. */
+  approvals: ApprovalItem[] | null;
 }
 
 let state: AppState = {
@@ -93,6 +99,7 @@ let state: AppState = {
   runFilesSupported: true,
   agents: [],
   tools: [],
+  approvals: [],
 };
 
 const listeners = new Set<() => void>();
@@ -159,6 +166,10 @@ function connectWs() {
     if (refreshOn.includes(env.event.type)) {
       void refreshRuns();
     }
+    // Anything that opens or closes a human pause changes the waiting list.
+    if (/_(requested|decided|required|provided)$/.test(env.event.type) || refreshOn.includes(env.event.type)) {
+      void loadApprovals();
+    }
   };
   ws = socket;
 }
@@ -185,6 +196,8 @@ export async function connect(): Promise<void> {
   void routeByModelHealth();
   void loadTools();
   void loadAgents();
+  void loadApprovals();
+  startApprovalsPoll();
 }
 
 export function reconnectWith(base: string, token: string) {
@@ -196,6 +209,29 @@ export function reconnectWith(base: string, token: string) {
 
 export function openSheet(open: boolean) {
   set({ sheetOpen: open });
+}
+
+// ---- approvals (ADR 0038) -------------------------------------------------
+
+export async function loadApprovals(): Promise<void> {
+  if (state.approvals === null) return;
+  try {
+    const approvals = await api<ApprovalItem[]>("/api/v1/approvals");
+    set({ approvals });
+  } catch (e) {
+    const err = e as ApiError;
+    if (err.status === 404 || err.status === 405) set({ approvals: null }); // older daemon
+  }
+}
+
+/* WS events keep the list fresh; the poll covers a missed event or a pause
+ * that expired on the server (auto-deny after ask_timeout_secs). */
+let approvalsTimer: number | null = null;
+function startApprovalsPoll() {
+  if (approvalsTimer != null) return;
+  approvalsTimer = window.setInterval(() => {
+    if (state.conn === "connected") void loadApprovals();
+  }, 30_000);
 }
 
 // ---- runs -----------------------------------------------------------------
@@ -275,10 +311,13 @@ function upsertRun(run: Run) {
   set({ runs });
 }
 
-export async function submitRun(task: string): Promise<string> {
+/* `coding`: a task for the Claude Code executor — submitted with the success
+ * contract (a passing `sprawdz`), so "done" means checked, and the run can be
+ * learned from (ADR 0037). `minutes`: optional lower-only wall-clock budget. */
+export async function submitRun(task: string, opts: { coding?: boolean; minutes?: string } = {}): Promise<string> {
   const res = await api<{ run_id: string }>("/api/v1/runs", {
     method: "POST",
-    body: JSON.stringify({ task }),
+    body: JSON.stringify(runRequest(task, !!opts.coding, opts.minutes)),
   });
   set({ selectedRunId: res.run_id, view: "runs" });
   void refreshRuns();
@@ -382,6 +421,7 @@ export async function decideActionApproval(
     body: JSON.stringify({ action, decision }),
   });
   upsertRun(run);
+  void loadApprovals();
   return run;
 }
 
