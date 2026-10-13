@@ -18,6 +18,7 @@ copied onto a server as-is.
 | extension | what | mechanism | grants |
 |---|---|---|---|
 | [`zapisz-plik/`](zapisz-plik/) | `zapisz_plik(sciezka, tresc, nadpisz?)` — write a text file into the run workspace | WASM, in-process, sandboxed | `workspace_write` only |
+| [`claude-code/`](claude-code/) | `claude_code_run`, `claude_code_opus`, `sprawdz` — Claude Code as a headless executor + named checks, via the runner container | subprocess (stdio MCP bridge → HTTP) | operator `[trust]` entry; see [`../claude-code/README.md`](../claude-code/README.md) |
 
 ## `zapisz_plik`
 

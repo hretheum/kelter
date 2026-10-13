@@ -3377,3 +3377,95 @@ tree, `target/` after `cargo clippy --workspace --all-targets` + `cargo test
 --workspace --no-run` (Rust 1.99.0):
 **15 GB default → 7.5 GB line-tables-only**. Full suite under that profile with
 Postgres: 444 passed, 0 failed.
+
+## 2026-10-13 — Claude Code under Kelter: cost path, stage A (roadmap KRW.1)
+
+Eryk's decisions (2026-10-13): Claude Code runs on the Max subscription (so
+what is saved is plan limits, not dollars); **Opus always asks**. No kernel
+change — a runner service, an extension and an advisory skill
+(`deploy/claude-code/README.md`).
+
+- **Why an extension and not A2A delegation.** Delegation's `ask` is
+  trust-based: one `allow_always` makes an agent trusted for good. ADR 0038's
+  action gate has no such escape — an `ask` entry pauses on every proposal.
+  So Opus is its own tool (`claude_code_opus`, `model` fixed by the bridge and
+  absent from the model's schema) under `claude_code_opus = "ask"`, and the
+  run tools declare `idempotency_key` (mutating, keyed exactly-once by the
+  kernel, ADR 0031).
+- **Why a runner container.** The Kelter image carries no Node/Python and a
+  512 MiB limit; Claude Code and the checks (Rust at CI's pin, pnpm) live in
+  `claude-code-runner` on `llm-net`. The extension is a ~700 KB static Rust
+  stdio-MCP bridge forwarding to it over HTTP with a bearer token.
+- **Claude Code CLI 2.1.296 has no `--max-turns`.** Bounds are the runner's
+  wall clock (kills the process group), `--max-budget-usd` per model and
+  `--effort`. Probed the headless JSON once (`is_error`, `subtype`, `result`,
+  `total_cost_usd`, `num_turns`).
+- **Known gap (KRW.3):** Kelter's `[budget]` dollars do not see Claude Code's
+  cost; per-task limits do the bounding until then.
+
+**Independent review, same day — and what changed.** A review of the first
+cut found three high-severity gaps, all fixed before commit:
+- *H1, Opus from inside a Sonnet session* (subagents, a nested `claude`, or
+  the runner token): subagents and the `opus` alias are now pinned to the
+  run's model; any Opus in claude's `modelUsage` on a non-Opus run fails the
+  step (`naruszenie`); the runner token never reaches the worker. Residual
+  risk documented: a session calling the API directly with its own token is
+  detected, not prevented.
+- *H2, host escape via hooks in the bare repos* (the container could write
+  `/repos/*.git/hooks`, run by the host on the next `git push` from the
+  Mac): `/repos` is now read-only; each task works in a fresh clone; results
+  leave as a bundle file the runner writes to `/out` (regular files only).
+- *H3, the subscription token visible to checks* (which run model-written
+  `build.rs`/lifecycle scripts): claude and checks run as uid 1001 with an
+  explicit environment; checks get no token at all.
+- Medium: per-task HOME/`CARGO_HOME`/target/pnpm store (no cross-task
+  poisoning of a later check); `sprawdz` refuses tasks that failed or changed
+  nothing; the bridge waits for the runner's queue (`max_wait_s`), not just
+  the task limit; the prompt goes in on stdin (a brief starting with `-`);
+  `git` in the runner uses the explicit environment (CI has no git identity).
+- Low: no leading `-` in `baza`, `Object.hasOwn` for config lookups, a `null`
+  body is 400, `exec` resolves on exit (a leftover grandchild cannot hang the
+  lane), `PodmanArgs=--init`, cache retention (`keep_caches`).
+
+A second review pass on the fixes confirmed H2/H3/M4/M5 and found two new
+holes that only the uid-switched deployment would show (tests run with
+`worker: null`): **N1** the rust image's toolchain is world-writable (a
+session could replace `cargo` for every later check — now `chmod -R go-w`),
+and **N2** a `setsid` escapee survives the process-group kill (and could read
+the next session's environment — the runner now SIGKILLs every process of the
+worker uid after each worker command; the bundle is read through
+`O_NOFOLLOW` + `fstat`). Also: per-task `TMPDIR`; pnpm versions baked into
+`/opt/corepack` with downloads off; bare repos `--shared=0644` so the worker
+can read them under any host umask; a nested `claude` via Bash denied. Still
+open, documented: a session deliberately using its own token for Opus is
+neither prevented nor reliably detected; the worker uid paths are verified
+on K12, not by these tests.
+
+Verification (local):
+- runner: `node --test` — 16 tests (real git, fake `claude`): exactly once per
+  key incl. concurrent callers, a restart-interrupted task reported failed and
+  not re-run, leftover changes committed, bundle exported (sha256, branch
+  head) with the base repo untouched, a planted symlink at the bundle path
+  never written through, Opus-in-Sonnet → `ok:false`, subagent pinning and
+  no runner secret in the worker env, a check without secrets, `sprawdz`
+  refused after a failed / no-change run, a brief starting with `-`,
+  process-group kill and no hang on a leftover grandchild, bearer/400/200.
+  Green with an empty `HOME` (no global git identity), as on CI.
+- bridge: 7 tests on the shipped `bridge.json` (tools, which are mutating,
+  Opus fixed and not overridable, `ok:false`/HTTP error → `isError`, wait =
+  `max_wait_s` (queue included), protocol basics, fixed-and-exposed field refused);
+  clippy `-D warnings`, fmt.
+- `scripts/smoke-claude-code.sh` (real daemon + real bridge + real runner,
+  scripted model, fake `claude`): **PASS** — S: Sonnet run, `sprawdz` passes,
+  `completed` with `verification: contract`, the result branch arrives as a
+  bundle and the base repo is untouched, claude called once; F: Claude Code reports success but the check fails →
+  `incomplete` naming the unmet `sprawdz` condition; O: `claude_code_opus`
+  pauses `awaiting_action_approval` with the runner untouched, allow → runs
+  once with `--model opus`.
+- Stub change: `scripts/fake-llm-scripted.py` gained `_subst` (fill a value a
+  tool returned — here the branch — from the last regex match in the prompt).
+- On this Mac Homebrew's `python3` cannot accept localhost connections
+  (system `/usr/bin/python3` can); the smoke ran with `PATH=/usr/bin:$PATH`.
+  Environment, not code.
+- Not yet: deployment on K12 and a run with the real CLI (K12 unreachable
+  from this network on 2026-10-13).

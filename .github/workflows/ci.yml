@@ -72,6 +72,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # deploy/claude-code (KRW.1) lives outside the workspace — the bridge
+      # is its own crate, the runner plain Node — so nothing above builds it.
+      # Cheap (two deps / zero deps), and it carries the gate-relevant facts
+      # (which tools are mutating, that Opus is fixed by the bridge).
+      - name: claude-code bridge (fmt + clippy + test)
+        working-directory: deploy/claude-code/bridge
+        run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+      - name: claude-code runner (node --test)
+        run: node --test deploy/claude-code/runner/test/*.test.mjs
       # --include-ignored so the pgstore tests above actually run. There are no
       # other #[ignore]d tests in the workspace, so this widens nothing else.
       - run: cargo test --workspace -- --include-ignored

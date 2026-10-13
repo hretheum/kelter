@@ -162,6 +162,20 @@ they are. `GET /runs/{id}/episodes`, WS `episode_revised`.
 prompt). If you add a memory backend, honour the retrieve rule and test it
 with `kernel_core::testkit::episode_context_probe` (feature `testkit`).
 
+**2026-10-13: Claude Code under Kelter (roadmap KRW.1, no kernel change).**
+`deploy/claude-code/`: a runner container (Node, `claude -p` in git
+clones, exactly once per `idempotency_key`, never pushes; claude and checks
+run as a separate uid without the runner's secrets; repos read-only, results
+leave as bundles), the
+`claude-code` extension (static Rust stdio-MCP bridge → runner over HTTP;
+tools `claude_code_run` haiku/sonnet, `claude_code_opus` with the model
+fixed by the bridge, `sprawdz` = named checks) and the advisory skill
+`sciezka-kosztowa`. Opus always asks via `[approval.actions]
+claude_code_opus = "ask"`. The bridge is its own crate and the runner plain
+Node — CI runs both explicitly. `scripts/smoke-claude-code.sh` drives it end
+to end. If you add a tool to `bridge.json`, decide on purpose whether it
+carries `idempotency_key` — that alone decides whether the gate sees it.
+
 **Open items, in the order they'd bite.**
 1. **18 ADRs carry `human_validated: false`** — 0007–0023 plus 0032. Eryk's
    job, not an agent's; signing ADR 0031 honestly took a real verification

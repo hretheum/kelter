@@ -1,0 +1,40 @@
+# Claude Code runner for Kelter (deploy/claude-code). Built ON K12 (amd64):
+#   podman build -t localhost/claude-code-runner:latest deploy/claude-code/runner
+#
+# The image carries what the configured checks need (Rust at CI's pin, Node
+# 22 + pnpm) plus the claude CLI. It holds no credentials: the runner token,
+# the Claude Code OAuth token and the config are mounted at runtime.
+#
+# Two identities: the runner process is the container's root (rootless podman:
+# the host user, nothing more) and holds the secrets; claude and the checks
+# run as `worker` (uid 1001), which cannot read them (server.mjs, workerEnv).
+FROM node:22-bookworm-slim AS node
+
+FROM rust:1.99-bookworm
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+# The rust image makes its toolchain world-writable; the worker must not be
+# able to replace cargo for the next task's check (chmod go-w).
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
+    && rustup component add clippy rustfmt \
+    && chmod -R go-w /usr/local/rustup /usr/local/cargo
+
+# pnpm versions the checked repos pin (packageManager), baked read-only:
+# a task never downloads a package manager (COREPACK_ENABLE_NETWORK=0).
+ENV COREPACK_HOME=/opt/corepack
+RUN corepack enable --install-directory /usr/local/bin pnpm \
+    && corepack install -g pnpm@11.9.0 pnpm@10.28.0 \
+    && chmod -R a+rX,go-w /opt/corepack
+
+# Pinned: a CLI update must not change behaviour under a running deployment.
+ARG CLAUDE_CODE_VERSION=2.1.296
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" && npm cache clean --force
+
+RUN groupadd -g 1001 worker && useradd -M -d /nonexistent -u 1001 -g 1001 -s /usr/sbin/nologin worker
+WORKDIR /opt/runner
+COPY lib.mjs server.mjs ./
+ENV DISABLE_AUTOUPDATER=1
+EXPOSE 8790
+HEALTHCHECK --interval=30s --timeout=3s CMD node -e "fetch('http://127.0.0.1:8790/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+ENTRYPOINT ["node", "/opt/runner/server.mjs"]
