@@ -3557,3 +3557,32 @@ device cpu), weights 16 GB in `~/cc-runner/clm-cache`. Measured:
   1/6 correct under each of three option phrasings; a Polish brief drew
   `opus` (0.47). Shadow-mode data from these heads would be near-constant.
   Next: fine-tuned heads (KRW.2b) before turning the shadow on.
+
+## 2026-10-13 — CLM heads fine-tuned for the path question (roadmap KRW.2b)
+
+The zero-shot head could not tell the paths apart (KRW.2). Fine-tuned the two
+projection heads (encoder frozen, Qwen3-8B last-token pooling as served) with
+CLM's own `train/finetune.py --task choice` (code at `d5f9ef0`), warm start
+from `CLM_v0.1-8B.pt`, hard labels.
+
+- **Data** (`deploy/claude-code/clm/train/tasks.py`): 120 training tasks, 48
+  test tasks written separately (other subjects and phrasings), 4 balanced
+  classes, ~half Polish; rubric in the README. The state and question are
+  byte-for-byte what the runner sends (`path_question.json` exported from
+  `runner/lib.mjs`, a runner test fails on drift; `build_dataset.py` refuses
+  test/train overlap).
+- **Run** on K12 in a throwaway `clm:cpu` container (`run_in_container.sh`),
+  `--memory 24g`, KV cache 1 GiB, an external guard ready to kill it under
+  3 GB free — the host's minimum free memory during the run was 8 GB.
+  Training itself: 1.3 min on the CPU.
+- **Result on TEST: 17/48 (35%) → 41/48 (85%)**; majority baseline 25%;
+  acceptance (roadmap) ≥ 80% — met. Per class after: bez 8/12, haiku 12/12,
+  sonnet 12/12, opus 9/12. Remaining errors: no-code tasks read as coding
+  (4), opus read as sonnet (3). Raw output in `train/results/path-v1/`.
+- **Caveat:** one author wrote and labelled both sets; this measures
+  generalisation over phrasing and subject, not agreement between people.
+  The next head should come from the journal (contract-verified runs).
+- The head (`path-v1.pt`, sha256 `4d2b4e274990803bd931541ced8d3c6ac3b7af70e80f400d0952b4d9360a3dd9`)
+  lives in K12's CLM cache, not in git; profiles set `CLM_CKPT` to it.
+  The shadow is still **off** on K12 — the RAM question (profile C ≈ 24–28 GB)
+  is open.
