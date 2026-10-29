@@ -58,6 +58,19 @@ else
   say "model ready."
 fi
 
+# ---------- web UI (embedded into the daemon by the api crate) --------------
+
+if [ ! -d "$REPO_ROOT/apps/web-ui/dist" ]; then
+  command -v pnpm >/dev/null 2>&1 || fail "pnpm (with Node 22) is required to build the web UI,
+        which the daemon embeds (apps/web-ui/dist is missing).
+        Install Node 22 and pnpm (https://pnpm.io/installation), then re-run this script."
+  say "building the web UI (log: $STATE_DIR/ui-build.log)…"
+  { pnpm --dir "$REPO_ROOT/apps/web-ui" install --frozen-lockfile \
+      && pnpm --dir "$REPO_ROOT/apps/web-ui" build; } \
+    > "$STATE_DIR/ui-build.log" 2>&1 || fail \
+    "web UI build failed — see $STATE_DIR/ui-build.log (needs Node 22 and pnpm)"
+fi
+
 # ---------- build ----------------------------------------------------------
 
 say "building Kelter (first build takes a few minutes)…"
