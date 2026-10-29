@@ -5,13 +5,17 @@ Thanks for your interest in contributing to kelter.
 ## Prerequisites
 
 - A stable Rust toolchain (install via [rustup](https://rustup.rs/)). The project targets the
-  current stable release; nightly is not required.
+  current stable release; nightly is not required. Add the components CI uses:
+  `rustup component add clippy rustfmt`.
+- Node 22 and [pnpm](https://pnpm.io/): the `api` crate embeds the web UI
+  (`apps/web-ui/dist`), so `cargo build` fails on a fresh clone until the UI is built.
 
 ## Building and testing
 
 From the workspace root:
 
 ```sh
+pnpm --dir apps/web-ui install --frozen-lockfile && pnpm --dir apps/web-ui build   # once, and after UI changes
 cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace -- -D warnings

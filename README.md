@@ -137,12 +137,13 @@ A weak engine degrades decision *quality*. It cannot degrade flow
 ## Quickstart
 
 One command from clone to a first completed agent run (macOS/Linux; needs
-Rust + [llama.cpp](https://github.com/ggml-org/llama.cpp)):
+Rust, Node 22 + pnpm, and [llama.cpp](https://github.com/ggml-org/llama.cpp)):
 
 ```sh
 scripts/bootstrap.sh
 # pulls a small model, starts the sidecar + daemon, runs the demo task,
-# opens the UI. First run takes a few minutes (model download + build).
+# opens the UI. First run: expect several minutes for the build (a clean
+# machine needed about 7 for build + full test run) plus the model download.
 ```
 
 **Choose your model in the UI.** Open the UI, click ⚙ Model, pick a local
@@ -159,6 +160,8 @@ API keys are stored server-side in a `0600` file or read from
 ```sh
 llama-server -hf Qwen/Qwen2.5-0.5B-Instruct-GGUF:q4_k_m --port 8080 -c 4096
 cp config.example.toml config.toml
+# the daemon embeds the web UI, so build it first (once):
+pnpm --dir apps/web-ui install --frozen-lockfile && pnpm --dir apps/web-ui build
 cargo run -p daemon -- --config config.toml
 # ui:  http://127.0.0.1:7466/   ·   api: /api/v1 (Bearer token)
 ```
@@ -181,6 +184,10 @@ First run asks: **standalone** (kernel embedded) or **remote** (thin client
 at your daemon's URL). Clients are stateless; the kernel owns all state.
 
 </details>
+
+No model needed for two of the proofs: `scripts/smoke-human-gate-budgets.sh`
+and `scripts/smoke-success-contract.sh` drive the real daemon with a scripted
+model stub (about 2 minutes and 10 seconds respectively on a warm build).
 
 ## Using it with Claude Code
 
