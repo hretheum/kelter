@@ -31,6 +31,18 @@ Kelter moves all three into a kernel you can read:
 - **You extend the runtime, not the source.** Every tool is an MCP server or
   a sandboxed WASM module registered through a manifest at startup.
 
+## Install
+
+Prebuilt binaries (macOS arm64/x86_64, Linux x86_64/arm64) are attached to each
+[GitHub Release](https://github.com/hretheum/kelter/releases), or build from git:
+
+```sh
+cargo install --git https://github.com/hretheum/kelter daemon   # installs `kelter`
+```
+
+Details, checksums and requirements: [docs/INSTALL.md](docs/INSTALL.md). Kelter
+is not published on crates.io.
+
 ## Four proofs you can run
 
 **1 · The engine is one line of config.** The same multi-step task runs
