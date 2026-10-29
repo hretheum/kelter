@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
+description = "Optional shared Postgres and pgvector memory backend for the Kelter agent runtime."
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 # A shared, concurrent-safe memory + learned-fact backend on Postgres +
 # pgvector, behind the SAME `MemoryProvider`/`LearnedStore` seams the SQLite

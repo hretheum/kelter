@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
+description = "Runtime-mutable model configuration for the Kelter agent runtime."
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 # Runtime-mutable model configuration (ADR 0015). Extracted from the daemon so
 # BOTH the daemon and the desktop standalone topology can build the controller
