@@ -1,0 +1,119 @@
+# Binaria `kelter` do GitHub Release.
+#
+# Wyzwalacz: tag `v*`. Wynik: DRAFT release z archiwami .tar.gz i SHA256SUMS.txt.
+# Draft jest celowy — wydanie publikuje człowiek, ręcznie, po obejrzeniu
+# plików (tak samo jak publish-image.yml: publikacja to świadoma decyzja).
+#
+# `workflow_dispatch` buduje to samo, ale tylko wrzuca artefakty do przebiegu
+# (bez release) — do próby bez tagowania.
+#
+# Dlaczego nie cargo-dist: pakiet z binarką `kelter` nazywa się `daemon`,
+# a cargo-dist chce przemianować pakiet (albo rozległej konfiguracji
+# [workspace.metadata.dist]) i sam przepisuje workflow. Tu jest jedna macierz
+# i ~80 linii; łatwiej ją przeczytać niż wygenerowany plik.
+#
+# Windows: pominięty. Kod używa API unixowych (uprawnienia plików 0600
+# w model-config, std::os::unix w mcp/wasmhost/api), więc to osobne zadanie
+# portowania, nie wpis w macierzy.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS: oba cele z runnera arm64 (x86_64 przez cross-compile,
+          # bez zależności od wygasających runnerów Intel).
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: macos-14, target: x86_64-apple-darwin }
+          # Linux: 22.04, żeby binarka wymagała starszego glibc (szersza
+          # kompatybilność). Runner arm64 jest darmowy dla publicznych repo.
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
+    steps:
+      - uses: actions/checkout@v4
+      # UI musi powstać przed cargo: crates/api osadza apps/web-ui/dist
+      # (rust-embed). dist/ jest w .gitignore.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/web-ui/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/web-ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile && pnpm build
+        working-directory: apps/web-ui
+      # Ta sama wersja co w ci.yml.
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - run: cargo build --release --locked -p daemon --target ${{ matrix.target }}
+      - name: Pakowanie
+        env:
+          TARGET: ${{ matrix.target }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          bin="target/$TARGET/release/kelter"
+          # Kontrola: UI naprawdę siedzi w binarce (pusty dist/ nie przeszedłby
+          # kompilacji, ale to tani pas bezpieczeństwa).
+          grep -aq 'assets/index-' "$bin" || { echo "brak osadzonego UI w $bin" >&2; exit 1; }
+          # Na tagu: nazwa tagu. Przy dispatchu ref_name to gałąź (może mieć "/").
+          version="$REF_NAME"
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then version="dev-${GITHUB_SHA::7}"; fi
+          name="kelter-${version}-${TARGET}"
+          mkdir -p "dist/$name"
+          cp "$bin" LICENSE-APACHE LICENSE-MIT README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kelter-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: draft release
+    needs: build
+    # Tylko na tagu; dispatch kończy się na artefaktach.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: kelter-*
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: dist
+        run: sha256sum *.tar.gz | tee SHA256SUMS.txt
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Ponowny przebieg: podmień pliki, nie zmieniaj statusu release.
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --draft --verify-tag \
+              --title "$TAG" --generate-notes
+          fi
