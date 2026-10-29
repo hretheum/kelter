@@ -23,21 +23,27 @@ exclude = ["apps/desktop/src-tauri", "examples/wasm-tools/wordcount", "examples/
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = ""
+repository = "https://github.com/hretheum/kelter"
+homepage = "https://github.com/hretheum/kelter"
+readme = "README.md"
+keywords = ["ai-agents", "agent-runtime", "llm", "mcp", "orchestration"]
+categories = ["development-tools", "web-programming::http-server"]
+# Nothing is published yet: every crate also sets `publish = false` itself.
+# See the crates.io publication plan in the PR that introduced this metadata.
 publish = false
 
 [workspace.dependencies]
-kernel-core = { path = "crates/kernel-core" }
-policy = { path = "crates/policy" }
-mcp = { path = "crates/mcp" }
-memory = { path = "crates/memory" }
-api = { path = "crates/api" }
-model-config = { path = "crates/model-config" }
-skills = { path = "crates/skills" }
-storage = { path = "crates/storage" }
-a2a = { path = "crates/a2a" }
-wasmhost = { path = "crates/wasmhost" }
-pgstore = { path = "crates/pgstore" }
+kernel-core = { path = "crates/kernel-core", version = "0.1.0" }
+policy = { path = "crates/policy", version = "0.1.0" }
+mcp = { path = "crates/mcp", version = "0.1.0" }
+memory = { path = "crates/memory", version = "0.1.0" }
+api = { path = "crates/api", version = "0.1.0" }
+model-config = { path = "crates/model-config", version = "0.1.0" }
+skills = { path = "crates/skills", version = "0.1.0" }
+storage = { path = "crates/storage", version = "0.1.0" }
+a2a = { path = "crates/a2a", version = "0.1.0" }
+wasmhost = { path = "crates/wasmhost", version = "0.1.0" }
+pgstore = { path = "crates/pgstore", version = "0.1.0" }
 
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
