@@ -1,1 +1,55 @@
-²ø/‰ì£
+<svg xmlns="http://www.w3.org/2000/svg" width="1270" height="760" viewBox="0 0 1270 760" role="img" aria-labelledby="t d">
+  <title id="t">Kelter</title>
+  <desc id="d">Two engines, a local chip and a cloud, feed one kernel ring. Beneath it a config line: engine equals an ellipsis.</desc>
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#3ddc97" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#3ddc97" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- background is part of the image so it reads the same in dark and light previews -->
+  <rect width="1270" height="760" fill="#101418"/>
+  <rect x="1" y="1" width="1268" height="758" fill="none" stroke="#2a323b" stroke-width="2"/>
+
+  <!-- wordmark -->
+  <text x="635" y="96" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="52" font-weight="700" fill="#f2f5f8" letter-spacing="1">Kelter</text>
+  <text x="635" y="136" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="24" fill="#9fb0c0">The model proposes. The kernel decides.</text>
+
+  <!-- kernel ring -->
+  <circle cx="635" cy="385" r="150" fill="url(#glow)"/>
+  <circle cx="635" cy="385" r="92" fill="none" stroke="#3ddc97" stroke-width="14"/>
+  <circle cx="635" cy="385" r="48" fill="#17202a" stroke="#2a323b" stroke-width="2"/>
+  <circle cx="635" cy="385" r="10" fill="#3ddc97"/>
+
+  <!-- feeds into the ring -->
+  <path d="M 270 385 H 520" stroke="#6aa9ff" stroke-width="4" fill="none" stroke-linecap="round" stroke-dasharray="2 12"/>
+  <path d="M 1000 385 H 750" stroke="#3ddc97" stroke-width="4" fill="none" stroke-linecap="round" stroke-dasharray="2 12"/>
+  <path d="M 532 385 l -14 -10 v 20 z" fill="#6aa9ff"/>
+  <path d="M 738 385 l 14 -10 v 20 z" fill="#3ddc97"/>
+
+  <!-- left glyph: chip = local engine -->
+  <g transform="translate(180 385)">
+    <rect x="-62" y="-62" width="124" height="124" rx="16" fill="#17202a" stroke="#6aa9ff" stroke-width="4"/>
+    <rect x="-28" y="-28" width="56" height="56" rx="6" fill="none" stroke="#6aa9ff" stroke-width="4"/>
+    <g stroke="#6aa9ff" stroke-width="4" stroke-linecap="round">
+      <path d="M -32 -62 v -18 M 0 -62 v -18 M 32 -62 v -18"/>
+      <path d="M -32 62 v 18 M 0 62 v 18 M 32 62 v 18"/>
+      <path d="M -62 -32 h -18 M -62 0 h -18 M -62 32 h -18"/>
+      <path d="M 62 -32 h 18 M 62 0 h 18 M 62 32 h 18"/>
+    </g>
+  </g>
+  <text x="180" y="525" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" fill="#cfd8e2">local Â· 0.5B</text>
+
+  <!-- right glyph: cloud = frontier engine -->
+  <g transform="translate(1090 385)">
+    <path d="M -58 34 a 30 30 0 0 1 4 -59 a 42 42 0 0 1 80 -8 a 34 34 0 0 1 14 67 z" fill="#17202a" stroke="#3ddc97" stroke-width="4" stroke-linejoin="round"/>
+  </g>
+  <text x="1090" y="525" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" fill="#cfd8e2">frontier</text>
+
+  <!-- config line -->
+  <rect x="285" y="590" width="700" height="84" rx="14" fill="#0b0e11" stroke="#2a323b" stroke-width="2"/>
+  <text x="635" y="643" text-anchor="middle" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="34" fill="#3ddc97">engine = <tspan fill="#f2f5f8">"â€¦"</tspan></text>
+
+  <text x="635" y="722" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="20" fill="#7d8d9c">human gate Â· cost budgets Â· success contract Â· resume after kill</text>
+</svg>
